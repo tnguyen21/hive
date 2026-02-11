@@ -10,9 +10,16 @@ from .config import Config
 from .db import Database
 from .git import create_worktree, get_commit_hash, remove_worktree
 from .ids import generate_id
-from .models import AgentIdentity, CompletionResult
+from .models import AgentIdentity, CompletionResult, WorkPlan
 from .opencode import OpenCodeClient
-from .prompts import assess_completion, build_system_prompt, build_worker_prompt
+from .prompts import (
+    assess_completion,
+    build_mayor_prompt,
+    build_mayor_state_summary,
+    build_system_prompt,
+    build_worker_prompt,
+    parse_work_plan,
+)
 from .sse import SSEClient
 
 
@@ -42,6 +49,9 @@ class Orchestrator:
 
         # Track active agents
         self.active_agents: Dict[str, AgentIdentity] = {}
+
+        # Mayor session
+        self.mayor_session_id: Optional[str] = None
 
         # SSE client for event monitoring
         self.sse_client = SSEClient(
@@ -73,6 +83,9 @@ class Orchestrator:
         """Start the orchestrator."""
         self.running = True
         self._setup_sse_handlers()
+
+        # Create Mayor session
+        await self.create_mayor_session()
 
         # Start SSE event consumer in background
         sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
@@ -111,6 +124,237 @@ class Orchestrator:
             except Exception as e:
                 print(f"Error in main loop: {e}")
                 await asyncio.sleep(Config.POLL_INTERVAL)
+
+    async def create_mayor_session(self) -> str:
+        """
+        Create the Mayor's persistent OpenCode session.
+
+        Returns:
+            Session ID
+        """
+        session = await self.opencode.create_session(
+            directory=str(self.project_path),
+            title="mayor",
+            permissions=[
+                # Mayor can read files to understand the codebase
+                {"permission": "read", "pattern": "*", "action": "allow"},
+                # Mayor can run non-destructive commands
+                {"permission": "bash", "pattern": "git *", "action": "allow"},
+                {"permission": "bash", "pattern": "ls *", "action": "allow"},
+                {"permission": "bash", "pattern": "find *", "action": "allow"},
+                # Mayor should NOT edit files or run tests
+                {"permission": "edit", "pattern": "*", "action": "deny"},
+                {"permission": "write", "pattern": "*", "action": "deny"},
+                # No interactive questions
+                {"permission": "question", "pattern": "*", "action": "deny"},
+                {"permission": "plan_enter", "pattern": "*", "action": "deny"},
+            ],
+        )
+
+        self.mayor_session_id = session["id"]
+        self.db.log_event(None, None, "mayor_session_created", {"session_id": self.mayor_session_id})
+        return self.mayor_session_id
+
+    async def send_to_mayor(self, message: str) -> Optional[WorkPlan]:
+        """
+        Send a message to the Mayor session and wait for response.
+
+        Args:
+            message: Message to send to Mayor
+
+        Returns:
+            Parsed WorkPlan, or None if no work plan in response
+        """
+        if not self.mayor_session_id:
+            raise RuntimeError("Mayor session not created")
+
+        # Build Mayor's context with current state
+        active_workers = list(self.active_agents.values())
+        active_workers_info = [
+            {
+                "name": agent.name,
+                "current_issue_title": self.db.get_issue(agent.issue_id).get("title", "unknown"),
+            }
+            for agent in active_workers
+        ]
+
+        open_issues = self.db.get_ready_queue(limit=50)
+        recent_completions = self.db.conn.execute(
+            """
+            SELECT * FROM issues
+            WHERE status = 'done'
+            ORDER BY updated_at DESC
+            LIMIT 5
+            """
+        ).fetchall()
+        recent_completions = [dict(row) for row in recent_completions]
+
+        escalations = []  # TODO: track escalated issues
+
+        # Build Mayor prompt with current state
+        mayor_prompt = build_mayor_prompt(
+            project=self.project_name,
+            active_workers=active_workers_info,
+            open_issues=open_issues,
+            recent_completions=recent_completions,
+            escalations=escalations,
+        )
+
+        # Create event for waiting on completion
+        self.session_status_events[self.mayor_session_id] = asyncio.Event()
+
+        # Send message asynchronously
+        await self.opencode.send_message_async(
+            self.mayor_session_id,
+            parts=[{"type": "text", "text": f"{mayor_prompt}\n\n{message}"}],
+            directory=str(self.project_path),
+        )
+
+        # Wait for Mayor to finish
+        try:
+            await asyncio.wait_for(
+                self.session_status_events[self.mayor_session_id].wait(), timeout=300
+            )
+        except asyncio.TimeoutError:
+            self.db.log_event(None, None, "mayor_timeout", {"message": message})
+            return None
+        finally:
+            if self.mayor_session_id in self.session_status_events:
+                del self.session_status_events[self.mayor_session_id]
+
+        # Get messages and parse work plan
+        messages = await self.opencode.get_messages(
+            self.mayor_session_id, directory=str(self.project_path)
+        )
+
+        work_plan = parse_work_plan(messages)
+        return work_plan
+
+    async def handle_user_request(self, user_input: str):
+        """
+        Handle a user request by routing to Mayor.
+
+        Args:
+            user_input: User's natural language request
+        """
+        message = f"""New request from user:
+
+{user_input}
+
+Analyze this request and create a work plan. Output a :::WORK_PLAN::: block."""
+
+        work_plan = await self.send_to_mayor(message)
+
+        if work_plan and work_plan.issues:
+            await self.create_issues_from_plan(work_plan)
+            self.db.log_event(
+                None,
+                None,
+                "work_plan_created",
+                {"user_input": user_input, "issues_count": len(work_plan.issues)},
+            )
+
+    async def create_issues_from_plan(self, work_plan: WorkPlan):
+        """
+        Create issues and dependencies from Mayor's work plan.
+
+        Args:
+            work_plan: WorkPlan with issues list
+        """
+        # Map of plan IDs to database IDs
+        id_map = {}
+
+        # Create all issues first
+        for issue_spec in work_plan.issues:
+            issue_id = self.db.create_issue(
+                title=issue_spec.get("title", "Untitled"),
+                description=issue_spec.get("description", ""),
+                priority=issue_spec.get("priority", 2),
+                issue_type=issue_spec.get("type", "task"),
+                project=issue_spec.get("project", self.project_name),
+            )
+            plan_id = issue_spec.get("id", issue_id)
+            id_map[plan_id] = issue_id
+
+        # Wire up dependencies
+        for issue_spec in work_plan.issues:
+            plan_id = issue_spec.get("id")
+            if plan_id and plan_id in id_map:
+                issue_id = id_map[plan_id]
+                needs = issue_spec.get("needs", [])
+                for dep_plan_id in needs:
+                    if dep_plan_id in id_map:
+                        dep_issue_id = id_map[dep_plan_id]
+                        self.db.add_dependency(issue_id, dep_issue_id, dep_type="blocks")
+
+    async def maybe_cycle_mayor(self):
+        """Cycle Mayor session if context is getting full."""
+        if not self.mayor_session_id:
+            return
+
+        # Get messages and check token count
+        messages = await self.opencode.get_messages(
+            self.mayor_session_id, directory=str(self.project_path)
+        )
+
+        total_tokens = sum(
+            msg.get("info", {}).get("tokens", {}).get("input", 0)
+            + msg.get("info", {}).get("tokens", {}).get("output", 0)
+            for msg in messages
+        )
+
+        if total_tokens > Config.MAYOR_TOKEN_THRESHOLD:
+            # Build state summary from DB
+            active_workers = list(self.active_agents.values())
+            active_workers_info = [
+                {
+                    "name": agent.name,
+                    "current_issue_title": self.db.get_issue(agent.issue_id).get("title", "unknown"),
+                }
+                for agent in active_workers
+            ]
+
+            open_issues = self.db.get_ready_queue(limit=50)
+            recent_completions = self.db.conn.execute(
+                """
+                SELECT * FROM issues
+                WHERE status = 'done'
+                ORDER BY updated_at DESC
+                LIMIT 5
+                """
+            ).fetchall()
+            recent_completions = [dict(row) for row in recent_completions]
+
+            state_summary = build_mayor_state_summary(
+                active_workers=active_workers_info,
+                open_issues=open_issues,
+                recent_completions=recent_completions,
+            )
+
+            # Delete old session
+            old_session = self.mayor_session_id
+            await self.opencode.delete_session(old_session, directory=str(self.project_path))
+
+            # Create new session
+            await self.create_mayor_session()
+
+            # Prime with state summary
+            await self.opencode.send_message_async(
+                self.mayor_session_id,
+                parts=[
+                    {
+                        "type": "text",
+                        "text": f"""You are the Mayor resuming after a context cycle. Current system state:
+
+{state_summary}
+
+Ready for the next request.""",
+                    }
+                ],
+                directory=str(self.project_path),
+            )
+
+            self.db.log_event(None, None, "mayor_cycled", {"old_session": old_session})
 
     async def spawn_worker(self, issue: Dict[str, str]):
         """

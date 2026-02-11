@@ -6,10 +6,13 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .models import CompletionResult
+from .models import CompletionResult, WorkPlan
 
 # Regex for parsing structured completion signal
 COMPLETION_RE = re.compile(r":::COMPLETION\s*\n(.*?):::", re.DOTALL)
+
+# Regex for parsing Mayor's work plan
+WORK_PLAN_RE = re.compile(r":::WORK_PLAN\s*\n(.*?):::", re.DOTALL)
 
 
 def build_worker_prompt(
@@ -277,3 +280,210 @@ def assess_completion(messages: List[Dict[str, Any]]) -> CompletionResult:
         reason="",
         summary="Task appears complete (no explicit completion signal)",
     )
+
+
+def build_mayor_prompt(
+    project: str,
+    active_workers: List[Dict[str, Any]],
+    open_issues: List[Dict[str, Any]],
+    recent_completions: List[Dict[str, Any]],
+    escalations: List[Dict[str, Any]],
+) -> str:
+    """
+    Build the Mayor's system context prompt.
+
+    Args:
+        project: Project name
+        active_workers: List of currently active worker dicts
+        open_issues: List of open issue dicts
+        recent_completions: List of recently completed issue dicts
+        escalations: List of escalated issue dicts
+
+    Returns:
+        Mayor system prompt string
+    """
+    # Summarize active workers
+    if active_workers:
+        workers_summary = "\n".join(
+            f"- {w['name']}: working on '{w.get('current_issue_title', 'unknown')}'"
+            for w in active_workers
+        )
+    else:
+        workers_summary = "None"
+
+    # Summarize open issues
+    if open_issues:
+        issues_summary = "\n".join(
+            f"- {i['id']}: {i['title']} (priority {i['priority']})" for i in open_issues[:10]
+        )
+        if len(open_issues) > 10:
+            issues_summary += f"\n... and {len(open_issues) - 10} more"
+    else:
+        issues_summary = "None"
+
+    # Summarize recent completions
+    if recent_completions:
+        completions_summary = "\n".join(
+            f"- {i['id']}: {i['title']}" for i in recent_completions[:5]
+        )
+    else:
+        completions_summary = "None"
+
+    # Summarize escalations
+    if escalations:
+        escalations_summary = "\n".join(
+            f"- {i['id']}: {i['title']} - {i.get('escalation_reason', 'unknown')}"
+            for i in escalations
+        )
+    else:
+        escalations_summary = "None"
+
+    prompt = f"""You are the Mayor — the strategic coordinator of a multi-agent coding system.
+
+## YOUR ROLE
+
+You receive requests from a human and decompose them into concrete work items.
+You do NOT write code yourself. You plan, decompose, prioritize, and coordinate.
+
+## HOW TO CREATE WORK
+
+When you receive a request, analyze it and output a structured work plan:
+
+:::WORK_PLAN
+issues:
+  - id: "design"
+    title: "Design the auth middleware architecture"
+    description: "Create a design doc covering JWT validation, token refresh, ..."
+    type: "task"
+    priority: 1
+    project: "{project}"
+
+  - id: "implement"
+    title: "Implement JWT validation middleware"
+    description: "Based on the design doc, implement ..."
+    type: "task"
+    priority: 2
+    project: "{project}"
+    needs: ["design"]
+
+  - id: "tests"
+    title: "Write integration tests for auth flow"
+    description: "Cover happy path, expired tokens, malformed tokens, ..."
+    type: "task"
+    priority: 2
+    project: "{project}"
+    needs: ["implement"]
+:::
+
+The orchestrator will parse this block and create the issues + dependencies in the DB.
+
+## CURRENT STATE
+
+Active workers:
+{workers_summary}
+
+Open issues:
+{issues_summary}
+
+Recently completed:
+{completions_summary}
+
+Escalations pending:
+{escalations_summary}
+
+## GUIDELINES
+
+- Decompose work into issues that a single agent can complete in one session
+- Each issue should be self-contained: include enough context in the description
+  that a worker can implement it without asking questions
+- Wire up dependencies — don't create issues that will fail because a prerequisite
+  isn't done yet
+- When handling escalations, read the failure details and decide:
+  - Can the issue be rephrased to be clearer? → Update description, re-queue
+  - Is it genuinely ambiguous? → Ask the human for clarification
+  - Is it a systemic problem? → File a bug, inform the human
+- Be honest about what you don't know. Ask the human rather than guessing.
+"""
+
+    return prompt
+
+
+def parse_work_plan(messages: List[Dict[str, Any]]) -> Optional[WorkPlan]:
+    """
+    Parse work plan from Mayor's response.
+
+    Args:
+        messages: List of message dicts from OpenCode session
+
+    Returns:
+        WorkPlan with issues list, or None if no work plan found
+    """
+    if not messages:
+        return None
+
+    # Get the last message
+    last = messages[-1]
+    parts = last.get("parts", [])
+
+    # Extract all text from the last message
+    text_parts = [p.get("text", "") for p in parts if p.get("type") == "text"]
+    text = " ".join(text_parts)
+
+    # Try to parse work plan
+    match = WORK_PLAN_RE.search(text)
+    if not match:
+        return None
+
+    try:
+        payload = yaml.safe_load(match.group(1))
+        issues = payload.get("issues", [])
+
+        if not isinstance(issues, list):
+            return None
+
+        return WorkPlan(
+            issues=issues,
+            summary=payload.get("summary"),
+        )
+    except (yaml.YAMLError, KeyError, TypeError):
+        return None
+
+
+def build_mayor_state_summary(
+    active_workers: List[Dict[str, Any]],
+    open_issues: List[Dict[str, Any]],
+    recent_completions: List[Dict[str, Any]],
+) -> str:
+    """
+    Build a state summary for Mayor context cycling.
+
+    Args:
+        active_workers: List of currently active worker dicts
+        open_issues: List of open issue dicts
+        recent_completions: List of recently completed issue dicts
+
+    Returns:
+        State summary string
+    """
+    summary_parts = []
+
+    summary_parts.append(f"Active workers: {len(active_workers)}")
+    if active_workers:
+        summary_parts.append(
+            "Currently working on:\n"
+            + "\n".join(f"  - {w['name']}: {w.get('current_issue_title', 'unknown')}" for w in active_workers)
+        )
+
+    summary_parts.append(f"\nOpen issues: {len(open_issues)}")
+    if open_issues:
+        summary_parts.append(
+            "Queued:\n" + "\n".join(f"  - {i['id']}: {i['title']}" for i in open_issues[:10])
+        )
+
+    if recent_completions:
+        summary_parts.append(
+            f"\nRecently completed ({len(recent_completions)}):\n"
+            + "\n".join(f"  - {i['id']}: {i['title']}" for i in recent_completions[:5])
+        )
+
+    return "\n".join(summary_parts)
