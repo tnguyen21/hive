@@ -373,38 +373,14 @@ class HiveCLI:
     # ── Mayor TUI ────────────────────────────────────────────────────
 
     def mayor(self):
-        """Launch Mayor TUI attached to the opencode server.
-
-        Creates or resumes a Mayor session and opens the OpenCode TUI.
-        """
-
-        async def get_or_create_session():
-            async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as oc:
-                # Look for an existing mayor session
-                sessions = await oc.list_sessions(directory=str(self.project_path), limit=50)
-                for s in sessions:
-                    if s.get("title") == "mayor":
-                        try:
-                            await oc.get_session(s["id"], directory=str(self.project_path))
-                            return s["id"]
-                        except Exception:
-                            continue
-
-                # Create a new mayor session
-                session = await oc.create_session(
-                    directory=str(self.project_path),
-                    title="mayor",
-                )
-                return session["id"]
-
-        session_id = asyncio.run(get_or_create_session())
-
+        """Launch Mayor TUI attached to the opencode server."""
         opencode_cmd = os.environ.get("OPENCODE_CMD", "opencode")
-        cmd = [opencode_cmd, "attach", Config.OPENCODE_URL, "--session", session_id]
+        cmd = [
+            opencode_cmd, "attach", Config.OPENCODE_URL,
+            "--dir", str(self.project_path),
+        ]
 
-        print(f"Mayor session: {session_id}")
         print("Launching Mayor TUI...\n")
-
         os.execvp(cmd[0], cmd)
 
     def execute_tool(self, tool_name: str, params: dict) -> dict:
