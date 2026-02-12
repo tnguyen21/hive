@@ -2,7 +2,9 @@
 
 import argparse
 import asyncio
+import json
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -167,6 +169,56 @@ class HiveCLI:
         self.db.update_issue_status(issue_id, "canceled")
         print(f"Closed issue: {issue_id}")
 
+    def _format_event(self, event: dict) -> str:
+        """Format a single event as a log line."""
+        ts = event["created_at"]
+        etype = event["event_type"]
+        issue = event["issue_id"] or "-"
+        agent = event["agent_id"] or "-"
+
+        line = f"{ts}  {etype:<24s}  issue={issue:<10s}  agent={agent:<10s}"
+
+        if event["detail"]:
+            try:
+                detail = json.loads(event["detail"])
+                parts = [f"{k}={v}" for k, v in detail.items()]
+                line += "  " + " ".join(parts)
+            except (json.JSONDecodeError, TypeError):
+                line += f"  {event['detail']}"
+
+        return line
+
+    def logs(self, follow: bool = False, n: int = 20, issue_id: Optional[str] = None, agent_id: Optional[str] = None):
+        """
+        Show event log, optionally tailing for new events.
+
+        Args:
+            follow: If True, keep polling for new events (like tail -f)
+            n: Number of recent events to show initially
+            issue_id: Filter by issue ID
+            agent_id: Filter by agent ID
+        """
+        recent = self.db.get_recent_events(n=n, issue_id=issue_id, agent_id=agent_id)
+
+        for event in recent:
+            print(self._format_event(event))
+
+        if not follow:
+            return
+
+        # Track the last id we've seen
+        cursor = recent[-1]["id"] if recent else self.db.get_max_event_id()
+
+        try:
+            while True:
+                time.sleep(0.5)
+                new_events = self.db.get_events_since(after_id=cursor, issue_id=issue_id, agent_id=agent_id)
+                for event in new_events:
+                    print(self._format_event(event))
+                    cursor = event["id"]
+        except KeyboardInterrupt:
+            pass
+
     def status(self):
         """Show orchestrator status."""
         # Count issues by status
@@ -262,6 +314,13 @@ def main():
     close_parser = subparsers.add_parser("close", help="Close an issue")
     close_parser.add_argument("issue_id", help="Issue ID")
 
+    # logs command
+    logs_parser = subparsers.add_parser("logs", help="Show event log (tail -f style)")
+    logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow new events in real time")
+    logs_parser.add_argument("-n", "--lines", type=int, default=20, help="Number of recent events to show (default: 20)")
+    logs_parser.add_argument("--issue", help="Filter by issue ID")
+    logs_parser.add_argument("--agent", help="Filter by agent ID")
+
     # status command
     subparsers.add_parser("status", help="Show orchestrator status")
 
@@ -292,6 +351,9 @@ def main():
 
         elif args.command == "close":
             cli.close(args.issue_id)
+
+        elif args.command == "logs":
+            cli.logs(follow=args.follow, n=args.lines, issue_id=args.issue, agent_id=args.agent)
 
         elif args.command == "status":
             cli.status()

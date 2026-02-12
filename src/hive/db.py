@@ -390,6 +390,61 @@ class Database:
 
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_events_since(
+        self,
+        after_id: int = 0,
+        issue_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get events with id > after_id, ordered ascending (oldest first)."""
+        if issue_id:
+            cursor = self.conn.execute(
+                "SELECT * FROM events WHERE id > ? AND issue_id = ? ORDER BY id ASC",
+                (after_id, issue_id),
+            )
+        elif agent_id:
+            cursor = self.conn.execute(
+                "SELECT * FROM events WHERE id > ? AND agent_id = ? ORDER BY id ASC",
+                (after_id, agent_id),
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT * FROM events WHERE id > ? ORDER BY id ASC",
+                (after_id,),
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_max_event_id(self) -> int:
+        """Return the current maximum event id, or 0 if no events."""
+        cursor = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM events")
+        return cursor.fetchone()[0]
+
+    def get_recent_events(
+        self,
+        n: int = 20,
+        issue_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get the most recent n events, returned oldest-first."""
+        if issue_id:
+            cursor = self.conn.execute(
+                "SELECT * FROM events WHERE issue_id = ? ORDER BY id DESC LIMIT ?",
+                (issue_id, n),
+            )
+        elif agent_id:
+            cursor = self.conn.execute(
+                "SELECT * FROM events WHERE agent_id = ? ORDER BY id DESC LIMIT ?",
+                (agent_id, n),
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT * FROM events ORDER BY id DESC LIMIT ?",
+                (n,),
+            )
+        rows = [dict(row) for row in cursor.fetchall()]
+        rows.reverse()
+        return rows
+
     def get_next_ready_step(self, parent_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the next ready step within a molecule.
