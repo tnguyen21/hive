@@ -373,34 +373,37 @@ class HiveCLI:
     # ── Mayor TUI ────────────────────────────────────────────────────
 
     def mayor(self):
-        """Launch Mayor TUI attached to the opencode server."""
+        """Launch Mayor TUI attached to the opencode server.
 
-        async def find_session():
+        Creates or resumes a Mayor session and opens the OpenCode TUI.
+        """
+
+        async def get_or_create_session():
             async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as oc:
+                # Look for an existing mayor session
                 sessions = await oc.list_sessions(directory=str(self.project_path), limit=50)
                 for s in sessions:
                     if s.get("title") == "mayor":
-                        return s["id"]
-                return None
+                        try:
+                            await oc.get_session(s["id"], directory=str(self.project_path))
+                            return s["id"]
+                        except Exception:
+                            continue
 
-        session_id = asyncio.run(find_session())
-        if session_id:
-            print(f"Attaching to existing Mayor session: {session_id}")
-        else:
-            print("Starting new Mayor session")
-        self._launch_opencode_tui(session_id)
+                # Create a new mayor session
+                session = await oc.create_session(
+                    directory=str(self.project_path),
+                    title="mayor",
+                )
+                return session["id"]
 
-    def _launch_opencode_tui(self, session_id: Optional[str] = None):
-        """Launch the OpenCode TUI attached to the server."""
+        session_id = asyncio.run(get_or_create_session())
+
         opencode_cmd = os.environ.get("OPENCODE_CMD", "opencode")
-        cmd = [opencode_cmd, "attach", Config.OPENCODE_URL]
-        if session_id:
-            cmd.extend(["--session", session_id])
+        cmd = [opencode_cmd, "attach", Config.OPENCODE_URL, "--session", session_id]
 
-        print("\nLaunching Mayor TUI...")
-        if session_id:
-            print(f"Session: {session_id}")
-        print("Chat with the Mayor to manage your project.\n")
+        print(f"Mayor session: {session_id}")
+        print("Launching Mayor TUI...\n")
 
         os.execvp(cmd[0], cmd)
 

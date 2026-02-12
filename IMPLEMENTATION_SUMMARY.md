@@ -3,13 +3,74 @@
 ## What We Built
 
 A fully functional lightweight multi-agent orchestration system with:
-- Strategic brain (Mayor) for decomposing user requests
-- Multi-worker pool for concurrent execution
-- Autonomous operation with permission unblocker
-- Human CLI for monitoring and control
-- Event-driven architecture with SSE
-- Git worktree sandboxing for isolation
-- Molecule support for multi-step workflows
+- **Strategic brain (Mayor)** with TUI interface and tool access for managing the orchestrator
+- **Multi-worker pool** for concurrent execution
+- **Autonomous operation** with permission unblocker
+- **Daemon mode** for background orchestrator execution
+- **Event-driven architecture** with SSE
+- **Git worktree sandboxing** for isolation
+- **Molecule support** for multi-step workflows
+
+## New: Mayor-as-TUI Interface
+
+The Mayor is now the primary user interface, running as a long-lived OpenCode TUI session:
+
+### Usage
+
+```bash
+# Terminal 1: Start the orchestrator daemon
+hive daemon start
+
+# Terminal 2: Launch Mayor TUI (attaches to existing session or creates new)
+hive mayor
+
+# Inside TUI - User chats with Mayor:
+User: "Add user authentication to the API"
+Mayor: [Uses tools to create work plan]
+Mayor: "Created workflow with 3 steps: design → implement → test"
+
+User: "What's the status?"
+Mayor: [Calls hive_get_status]
+Mayor: "1 in progress, 1 ready, 0 blocked"
+```
+
+### Mayor Tools (16 total)
+
+The Mayor has access to these tools via the `hive` CLI:
+
+**Issue Management:**
+- `hive_create_issue` - Create new work items
+- `hive_list_issues` - Query with filters
+- `hive_get_issue` - Full details + events
+- `hive_update_issue` - Modify fields
+- `hive_cancel_issue` - Cancel with reason
+- `hive_retry_issue` - Reset failed/blocked
+- `hive_escalate_issue` - Mark for human attention
+- `hive_close_issue` - Mark as finalized
+
+**Workflow:**
+- `hive_create_molecule` - Multi-step workflows
+- `hive_add_dependency` - Wire up dependencies
+- `hive_remove_dependency` - Remove dependencies
+
+**Monitoring:**
+- `hive_get_status` - System overview
+- `hive_list_agents` - Show active workers
+- `hive_get_agent` - Detailed agent info
+- `hive_show_ready` - Ready queue
+- `hive_get_events` - Event log
+
+### Daemon Commands
+
+```bash
+hive daemon start          # Start background daemon
+hive daemon start -f       # Run in foreground
+hive daemon stop           # Stop daemon
+hive daemon restart        # Restart daemon
+hive daemon status         # Check status
+hive daemon logs           # View logs
+hive daemon logs -f        # Follow logs
+```
 
 ## Implementation Statistics
 
@@ -28,16 +89,18 @@ A fully functional lightweight multi-agent orchestration system with:
 ```
 src/hive/
   __init__.py         - Package initialization
-  cli.py             - Human CLI interface (294 lines)
+  cli.py             - Human CLI interface (550+ lines)
   config.py          - Configuration management (45 lines)
-  db.py              - SQLite database layer (442 lines)
+  daemon.py          - Daemon management with PID files (200+ lines)
+  db.py              - SQLite database layer (450+ lines)
   git.py             - Git worktree management (171 lines)
   ids.py             - Hash-based ID generation (31 lines)
   models.py          - Data models (41 lines)
   opencode.py        - OpenCode HTTP client (339 lines)
-  orchestrator.py    - Main orchestration engine (821 lines)
-  prompts.py         - Prompt templates (417 lines)
+  orchestrator.py    - Main orchestration engine (600+ lines)
+  prompts.py         - Prompt templates (550+ lines)
   sse.py             - SSE event consumer (109 lines)
+  tools.py           - Tool definitions for Mayor (850+ lines)
 
 tests/
   conftest.py        - Pytest fixtures
@@ -209,9 +272,27 @@ tests/
 ### ⏳ Phase 4: Escalation + Resilience (Planned)
 - Retry logic with thresholds
 - Agent switching on failure
-- Mayor escalation handling
 - Crash recovery on restart
 - Degraded mode handling
+
+## Architecture Changes
+
+### Mayor-as-TUI (Completed)
+- **Before**: Orchestrator created Mayor session internally, passive role
+- **After**: Mayor is the primary TUI interface with tool access
+  - User runs `hive mayor` to launch TUI
+  - Mayor has access to 16 tools via `hive` CLI
+  - Tools executed through CLI bridge, not direct DB access
+  - Orchestrator runs headless as background daemon
+
+### Orchestrator Daemon (Completed)
+- **Before**: `hive start` ran orchestrator in foreground
+- **After**: 
+  - `hive daemon start` runs as proper background daemon
+  - PID file management in `~/.hive/pids/`
+  - Log files in `~/.hive/logs/`
+  - Signal handling for graceful shutdown
+  - Can also run in foreground with `-f` flag
 
 ## Performance Characteristics
 

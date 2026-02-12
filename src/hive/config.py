@@ -38,4 +38,4 @@ class Config:
     MAX_AGENT_SWITCHES = int(os.environ.get("HIVE_MAX_AGENT_SWITCHES", "2"))
 
     # Model
-    DEFAULT_MODEL = os.environ.get("HIVE_DEFAULT_MODEL", "claude-sonnet-4-5-20250929")
+    DEFAULT_MODEL = os.environ.get("HIVE_DEFAULT_MODEL", "claude-opus-4-6")
