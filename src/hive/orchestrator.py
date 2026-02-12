@@ -11,7 +11,7 @@ from .db import Database
 from .git import create_worktree, get_commit_hash, remove_worktree
 from .ids import generate_id
 from .models import AgentIdentity, CompletionResult, WorkPlan
-from .opencode import OpenCodeClient
+from .opencode import OpenCodeClient, make_model_config
 from .prompts import (
     assess_completion,
     build_mayor_prompt,
@@ -211,6 +211,7 @@ class Orchestrator:
         await self.opencode.send_message_async(
             self.mayor_session_id,
             parts=[{"type": "text", "text": f"{mayor_prompt}\n\n{message}"}],
+            model=make_model_config(Config.DEFAULT_MODEL),
             directory=str(self.project_path),
         )
 
@@ -355,6 +356,7 @@ Analyze this request and create a work plan. Output a :::WORK_PLAN::: block."""
 Ready for the next request.""",
                     }
                 ],
+                model=make_model_config(Config.DEFAULT_MODEL),
                 directory=str(self.project_path),
             )
 
@@ -460,6 +462,7 @@ Ready for the next request.""",
             await self.opencode.send_message_async(
                 session_id,
                 parts=[{"type": "text", "text": prompt}],
+                model=make_model_config(Config.DEFAULT_MODEL),
                 directory=worktree_path,
             )
 
@@ -686,6 +689,7 @@ Ready for the next request.""",
             await self.opencode.send_message_async(
                 new_session_id,
                 parts=[{"type": "text", "text": prompt}],
+                model=make_model_config(Config.DEFAULT_MODEL),
                 directory=agent.worktree,
             )
 

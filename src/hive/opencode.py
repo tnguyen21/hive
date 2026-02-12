@@ -8,6 +8,11 @@ from urllib.parse import urlencode
 import aiohttp
 
 
+def make_model_config(model_id: str, provider_id: str = "anthropic") -> Dict[str, str]:
+    """Build a model config dict from a model ID string."""
+    return {"providerID": provider_id, "modelID": model_id}
+
+
 class OpenCodeClient:
     """HTTP client for OpenCode server API."""
 
@@ -138,6 +143,7 @@ class OpenCodeClient:
         session_id: str,
         parts: List[Dict[str, Any]],
         agent: str = "build",
+        model: Optional[Dict[str, str]] = None,
         directory: Optional[str] = None,
     ):
         """
@@ -149,6 +155,7 @@ class OpenCodeClient:
             session_id: Session ID
             parts: Message parts
             agent: Agent type (default: "build")
+            model: Model config dict with providerID and modelID
             directory: Directory context for this request
         """
         if not self.session:
@@ -161,6 +168,8 @@ class OpenCodeClient:
         }
 
         payload = {"parts": parts, "agent": agent}
+        if model:
+            payload["model"] = model
 
         url = f"{self.base_url}/session/{session_id}/prompt_async"
         async with self.session.post(url, json=payload, headers=headers) as resp:
