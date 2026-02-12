@@ -265,6 +265,40 @@ class HiveCLI:
         if not json_mode and result:
             print(result.get("message", "Removed dependency"))
 
+    def merges(self, status: Optional[str] = None, *, json_mode: bool = False):
+        """List merge queue entries."""
+        query = "SELECT mq.*, i.title as issue_title, a.name as agent_name FROM merge_queue mq JOIN issues i ON mq.issue_id = i.id LEFT JOIN agents a ON mq.agent_id = a.id"
+        params = []
+        if status:
+            query += " WHERE mq.status = ?"
+            params.append(status)
+        query += " ORDER BY mq.enqueued_at DESC LIMIT 50"
+
+        cursor = self.db.conn.execute(query, params)
+        entries = [dict(row) for row in cursor.fetchall()]
+
+        if json_mode:
+            print(
+                json.dumps(
+                    {"count": len(entries), "merges": entries}, indent=2, default=str
+                )
+            )
+        else:
+            if not entries:
+                print("No merge queue entries found.")
+                return
+            print(
+                f"\n{'ID':<6} {'Status':<10} {'Issue':<14} {'Title':<30} {'Branch':<25} {'Enqueued'}"
+            )
+            print("-" * 100)
+            for e in entries:
+                title = (e.get("issue_title") or "")[:30]
+                branch = (e.get("branch_name") or "")[:25]
+                print(
+                    f"{e['id']:<6} {e['status']:<10} {e['issue_id']:<14} {title:<30} {branch:<25} {e.get('enqueued_at', '')}"
+                )
+            print(f"\nTotal: {len(entries)} entries")
+
     def status(self, *, json_mode: bool = False):
         """Show orchestrator status."""
         result = self._run_tool("hive_get_status", {}, json_mode=json_mode)
@@ -288,7 +322,16 @@ class HiveCLI:
                 f"\nActive workers: {result.get('active_agents', 0)}/{Config.MAX_AGENTS}"
             )
             print(f"Ready queue: {result.get('ready_queue', 0)} issues")
-            print(f"Merge queue: {result.get('merge_queue', 0)} pending")
+            mq = result.get("merge_queue", {})
+            if isinstance(mq, dict):
+                parts = []
+                for k in ["queued", "running", "merged", "failed"]:
+                    v = mq.get(k, 0)
+                    if v > 0:
+                        parts.append(f"{v} {k}")
+                print(f"Merge queue: {', '.join(parts) if parts else 'empty'}")
+            else:
+                print(f"Merge queue: {mq} pending")
 
     def list_agents(self, status: Optional[str] = None, *, json_mode: bool = False):
         """List agents."""
@@ -648,6 +691,12 @@ def main():
     logs_parser.add_argument("--issue", help="Filter by issue ID")
     logs_parser.add_argument("--agent", help="Filter by agent ID")
 
+    # merges command
+    merges_parser = subparsers.add_parser("merges", help="List merge queue entries")
+    merges_parser.add_argument(
+        "--status", help="Filter by status (queued|running|merged|failed)"
+    )
+
     # status command
     subparsers.add_parser("status", help="Show orchestrator status")
 
@@ -792,6 +841,9 @@ def main():
                 issue_id=args.issue,
                 agent_id=args.agent,
             )
+
+        elif args.command == "merges":
+            cli.merges(status=args.status, json_mode=json_mode)
 
         elif args.command == "status":
             cli.status(json_mode=json_mode)

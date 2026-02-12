@@ -370,11 +370,8 @@ class ToolExecutor:
         # Get ready queue
         ready = self.db.get_ready_queue(limit=10)
 
-        # Get merge queue count
-        cursor = self.db.conn.execute(
-            "SELECT COUNT(*) FROM merge_queue WHERE status = 'queued'"
-        )
-        merge_count = cursor.fetchone()[0]
+        # Get merge queue stats
+        merge_stats = self.db.get_merge_queue_stats()
 
         return {
             "project": self.project_name,
@@ -382,7 +379,7 @@ class ToolExecutor:
             "total_issues": sum(status_counts.values()),
             "active_agents": len(active_agents),
             "ready_queue": len(ready),
-            "merge_queue": merge_count,
+            "merge_queue": merge_stats,
             "ready_issues": [{"id": i["id"], "title": i["title"]} for i in ready[:5]],
         }
 
