@@ -23,9 +23,14 @@ def test_build_worker_prompt_basic():
     assert "/tmp/worktree" in prompt
     assert "agent/test-agent" in prompt
     assert "BEHAVIORAL CONTRACT" in prompt
-    assert "No Approval Step" in prompt
+    assert "No Approval Fallacy" in prompt
     assert "Directory Discipline" in prompt
     assert "COMPLETION SIGNAL" in prompt
+    # GT behavioral principles
+    assert "Propulsion Principle" in prompt
+    assert "Idle Worker Heresy" in prompt
+    assert "Escalate and Move On" in prompt
+    assert "Capability Ledger" in prompt
 
 
 def test_build_worker_prompt_with_molecule():
@@ -60,6 +65,8 @@ def test_build_system_prompt():
     assert "test-project" in prompt
     assert "autonomously" in prompt
     assert "without human interaction" in prompt
+    assert "piston" in prompt
+    assert "approval" in prompt.lower()
 
 
 def test_assess_completion_structured_success():

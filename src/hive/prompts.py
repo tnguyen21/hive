@@ -47,7 +47,9 @@ def build_worker_prompt(
     ]
 
     if step_number and total_steps and molecule_title:
-        context_parts.append(f'- This is step {step_number} of {total_steps} in the workflow "{molecule_title}"')
+        context_parts.append(
+            f'- This is step {step_number} of {total_steps} in the workflow "{molecule_title}"'
+        )
 
     context = "\n".join(context_parts)
 
@@ -72,13 +74,31 @@ def build_worker_prompt(
 
 ## BEHAVIORAL CONTRACT
 
-### No Approval Step
-There is NO approval step. There is NO confirmation. When your implementation is
-complete and tests pass, you commit and signal completion. Do NOT:
+### The Propulsion Principle
+You are a piston in a machine. The system's throughput depends on pistons firing.
+When you have work, EXECUTE. No confirmation seeking, no clarifying questions,
+no waiting for approval. Read the task, understand it, implement it, verify it,
+commit it, signal completion. That is the entire cycle.
+
+### No Approval Fallacy
+There is NO approval step. There is NO confirmation. There is NO human reviewing
+your work before you finish. Here is the failure mode you must avoid:
+
+> You complete the work. You write a nice summary. Then you WAIT for approval
+> that will never come. The orchestrator is async. Nobody is watching your
+> terminal. You will sit there FOREVER.
+
+THIS IS THE FAILURE MODE. When your implementation is complete and tests pass,
+you commit and signal completion IMMEDIATELY. Do NOT:
 - Output a summary and wait for "looks good"
 - Ask "should I commit this?"
-- Sit idle at the prompt after finishing work
+- Pause after finishing to see if there's feedback
 - Wait for a human to press enter
+
+### The Idle Worker Heresy
+An idle worker is a system failure. The instant your implementation is done and
+committed, output the COMPLETION signal. Do not review your work a third time.
+Do not write a long retrospective. Do not sit idle. Complete, commit, signal. Go.
 
 ### Directory Discipline
 **Stay in your worktree: {worktree_path}**
@@ -87,16 +107,19 @@ complete and tests pass, you commit and signal completion. Do NOT:
 - If your worktree lacks dependencies, install them here
 - Verify with `pwd` if uncertain
 
-### Escalation Protocol
-If you are blocked for more than 2-3 attempts at the same problem:
-1. Describe the blocker clearly in your final message
+### Escalate and Move On
+If you are blocked for more than 2-3 attempts at the same problem, STOP.
+The system is async — no human is going to unblock you interactively.
+1. Describe the blocker clearly and specifically
 2. Include what you tried and what failed
-3. Do NOT wait for human input — signal the blocker and stop
+3. Signal completion with status "blocked"
+4. Do NOT spin. Do NOT wait for human input. Escalate and stop.
 
-### Quality Contract
+### Capability Ledger
 Your work is recorded in a permanent capability ledger. Every completion builds
-your track record. Execute with care — but execute. Do not over-engineer or
-gold-plate. Implement what was asked, verify it works, commit, and stop.
+your track record. Every failure is recorded too. Execute with care — but execute.
+Do not over-engineer. Do not gold-plate. Implement what was asked, verify it works,
+commit, and stop. Quality comes from disciplined execution, not from endless polish.
 
 ## INSTRUCTIONS
 
@@ -135,7 +158,9 @@ artifacts:
     return prompt
 
 
-def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[str] = None) -> str:
+def build_system_prompt(
+    project: str, agent_name: str, worktree_path: Optional[str] = None
+) -> str:
     """
     Build the system prompt for an agent session.
 
@@ -149,7 +174,10 @@ def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[s
     """
     parts = [
         f"You are agent '{agent_name}' working autonomously on the '{project}' project.",
-        "You execute tasks to completion without human interaction.",
+        "You are a piston in a machine. When you have work, EXECUTE. No confirmation, "
+        "no questions, no waiting. Read, implement, verify, commit, signal. "
+        "You execute tasks to completion without human interaction. "
+        "Nobody is watching your terminal — do not wait for approval that will never come.",
         "When you finish, ensure all changes are committed with clean git status.",
     ]
 
@@ -237,9 +265,15 @@ def assess_completion(messages: List[Dict[str, Any]]) -> CompletionResult:
         )
 
     # Check for tool errors in the last message
-    tool_errors = [p for p in parts if p.get("type") == "tool" and p.get("state", {}).get("status") == "error"]
+    tool_errors = [
+        p
+        for p in parts
+        if p.get("type") == "tool" and p.get("state", {}).get("status") == "error"
+    ]
     if tool_errors:
-        error_details = "; ".join(p.get("state", {}).get("output", "Unknown error")[:100] for p in tool_errors)
+        error_details = "; ".join(
+            p.get("state", {}).get("output", "Unknown error")[:100] for p in tool_errors
+        )
         return CompletionResult(
             success=False,
             reason=f"Tool errors: {error_details}",
