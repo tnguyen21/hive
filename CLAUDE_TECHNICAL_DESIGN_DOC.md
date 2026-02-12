@@ -6,27 +6,24 @@ _A simplified multi-agent orchestration system inspired by Gas Town, using OpenC
 
 ## 🎯 Implementation Status
 
-**Last Updated**: 2026-02-11
+**Last Updated**: 2026-02-12
 
-### ✅ Completed (Phases 1-2)
+### ✅ Completed (Phases 1-4)
 
-- ✅ **Phase 1a**: Database foundation with SQLite schema and ready queue
-- ✅ **Phase 1b**: OpenCode HTTP client and SSE consumer
-- ✅ **Phase 1c**: Single worker loop with lease-based staleness
-- ✅ **Phase 2a**: Mayor session for strategic decomposition
-- ✅ **Phase 2b**: Multi-worker pool with session cycling and auto-advance
-- ✅ **Phase 2c**: Permission unblocker and human CLI
+- ✅ **Phase 1**: Database foundation, OpenCode client, SSE consumer, single worker loop
+- ✅ **Phase 2**: Multi-worker pool, Queen Bee TUI, session cycling, permission unblocker, daemon mode
+- ✅ **Phase 3**: Queen Bee as user-facing interface with 20+ CLI commands
+- ✅ **Phase 4**: Merge queue processor with two-tier approach (mechanical + Refinery LLM)
 
-**Status**: Fully functional multi-agent orchestrator with 78 passing tests
+**Status**: Fully functional multi-agent orchestrator with 116 passing unit tests
 
 See `hive/` directory for implementation.
 
-### ⏳ Planned (Phases 3-4)
+### ⏳ Planned (Phase 5)
 
-- ⏳ **Phase 3a**: Merge queue processor (Refinery with two-tier approach)
-- ⏳ **Phase 3b**: Enhanced molecules with metadata
-- ⏳ **Phase 4a**: Escalation chain (retry → agent switch → Mayor → human)
-- ⏳ **Phase 4b**: Crash recovery and degraded mode
+- ⏳ **Phase 5a**: Escalation chain (retry → agent switch → Queen → human)
+- ⏳ **Phase 5b**: Crash recovery and degraded mode
+- ⏳ **Phase 5c**: Context cycling for long-running sessions
 
 ---
 
@@ -1699,11 +1696,11 @@ No special infrastructure. The CV is an emergent property of the event log.
 
 ## 15. Implementation Results
 
-### What Was Built (Phases 1-2d)
+### What Was Built (Phases 1-4)
 
 **Implementation completed**: 2026-02-12
 **Code location**: `hive/` directory
-**Status**: Fully functional with 79 passing tests
+**Status**: Fully functional with 116 passing unit tests
 
 #### Delivered Features
 
@@ -1713,60 +1710,58 @@ No special infrastructure. The CV is an emergent property of the event log.
 - Ready queue with dependency resolution
 - OpenCode HTTP client (full API coverage)
 - SSE event stream consumer
-- Git worktree management
+- Git worktree management + merge/rebase operations
 - Hash-based ID generation
 
 **Orchestration Engine** ✅
 
 - Main event loop with worker pool
 - Atomic issue claiming (CAS)
-- Lease-based staleness (5min default)
+- Lease-based staleness (15min default)
 - Permission unblocker (500ms polling)
 - Session lifecycle management
+- Merge queue processor (background task)
 
-**Agent Types** ✅/⏳
+**Agent Types** ✅
 
-- ✅ Mayor: Strategic decomposition
-- ✅ Workers: Autonomous execution
+- ✅ Queen Bee: Strategic decomposition (user-facing TUI)
+- ✅ Workers: Autonomous execution in git worktrees
 - ✅ Session cycling for molecules
-- ⏳ Refinery: Designed but not implemented
+- ✅ Refinery: LLM merge processor for conflicts and test failures
+
+**Merge Pipeline** ✅
+
+- Two-tier done→finalized pipeline
+- Tier 1: Mechanical rebase + test + ff-merge (no LLM)
+- Tier 2: Refinery LLM for conflict resolution and test failure diagnosis
+- `:::MERGE_RESULT:::` structured signal parsing
+- Post-finalization worktree + branch teardown
+- Configurable test gate (`HIVE_TEST_COMMAND`)
+- Feature flag (`HIVE_MERGE_QUEUE_ENABLED`)
 
 **Human Interface** ✅
 
-- CLI: 8 commands (create, list, ready, show, close, status, logs, start)
+- CLI: 20+ commands (create, list, ready, show, update, cancel, finalize, retry, escalate, molecule, dep, agents, agent, events, close, logs, status, merges, start, daemon, queen)
 - `hive logs -f` for live event tailing
+- `hive merges` for merge queue visibility
+- `hive status` with merge queue stats
 - Real-time status monitoring
-- Event history visualization
 
 **Quality** ✅
 
-- 79 unit tests (100% passing)
-- 17 integration tests
-- Comprehensive documentation
-
-#### Code Statistics
-
-- **11 modules** (2,800+ lines)
-- **11 test files** (1,500+ lines)
-- **8 commits** with [YAY] tags
-- **README** + Implementation Summary
-
-#### Bugfixes & Observability (Phase 2d, 2026-02-12)
-
-- Fixed SSE payload envelope parsing (`sse.py`) — OpenCode wraps events in `{"payload": {...}}` but dispatch was reading top-level fields, silently dropping all events
-- Fixed stalled agent infinite loop (`orchestrator.py`) — `handle_stalled_agent` never updated agent status to `failed`, so `check_stalled_agents` re-detected them every poll cycle
-- Fixed model passthrough (`opencode.py`, `orchestrator.py`) — `HIVE_DEFAULT_MODEL` was stored in DB but never sent to OpenCode; added `make_model_config()` and `model` param to `send_message_async`
-- Added `hive logs` command (`cli.py`, `db.py`) — live event tailing with `-f`, filtering by `--issue`/`--agent`
+- 116 unit tests (100% passing)
+- 14 integration tests (require OpenCode server)
+- 14 modules, ~4,800 lines production code
+- 12 test files, ~3,000 lines test code
 
 #### Not Yet Implemented
 
-- ⏳ Mayor-as-interface (Phase 3)
-- ⏳ Merge queue processor / Refinery (Phase 4)
 - ⏳ Resilience / crash recovery (Phase 5)
+- ⏳ Retry escalation chain (MAX_RETRIES enforcement, agent switching)
 - ⏳ Degraded mode
 - ⏳ Context cycling (runtime)
 
-See `hive/README.md` for usage guide.
+See `IMPLEMENTATION_SUMMARY.md` for overview.
 
 ---
 
@@ -1835,35 +1830,31 @@ See `hive/README.md` for usage guide.
 
 **Note**: Phase 2 originally included an orchestrator-driven Mayor with `:::WORK_PLAN:::` parsing. This is now **deprecated** in favor of the Mayor-as-interface design (Phase 3). The orchestrator-side Mayor code (`create_mayor_session`, `send_to_mayor`, `handle_user_request`, `maybe_cycle_mayor`) still exists but will be removed in Phase 3.
 
-### ⏳ Phase 3: Mayor-as-Interface (NEXT)
+### ✅ Phase 3: Queen Bee as Interface (COMPLETED)
 
-The Mayor becomes the **user-facing** interface. The human chats with the Mayor in an OpenCode TUI/web session. The Mayor uses `hive` CLI tools to manage the system. The orchestrator becomes a purely headless worker pool manager.
+The Queen Bee (formerly Mayor) is the user-facing interface via OpenCode custom agent. Completed as part of Phase 2 refactor.
 
-- [ ] Create Mayor CLAUDE.md / system prompt with `hive` CLI tool documentation
-- [ ] Remove orchestrator's Mayor session management:
-  - `create_mayor_session()`, `send_to_mayor()`, `handle_user_request()`
-  - `maybe_cycle_mayor()`, `build_mayor_prompt()`, `build_mayor_state_summary()`
-  - Mayor-related SSE event handling
-- [ ] Remove `:::WORK_PLAN:::` parsing from orchestrator and prompts
-- [ ] Enhance `hive` CLI for Mayor usage:
-  - `hive create --depends-on <id>` for dependency management
-  - Richer output from `hive show` (worker session status, recent messages)
-- [ ] Verify Mayor can drive full workflow end-to-end:
-  - Create issues → orchestrator picks them up → workers execute → Mayor monitors via `hive logs/status`
+- [x] Queen Bee agent definition (`.opencode/agents/queen.md`) with full CLI reference
+- [x] `hive queen` launcher command
+- [x] 20+ CLI commands for Queen Bee to use
+- [x] Orchestrator is purely headless — Queen Bee drives via CLI tools
 
-**Key insight**: No new infrastructure needed. The Mayor is just an OpenCode session with bash access to the existing `hive` CLI. The DB is the shared contract.
+### ✅ Phase 4: Merge Queue / Refinery (COMPLETED)
 
-### ⏳ Phase 4: Merge Queue / Refinery
+The merge queue processor closes the loop from `done` → `finalized` → worktree cleanup.
 
-The merge queue consumer closes the loop from `done` → `finalized` → worktree cleanup.
-
-- [ ] Merge queue consumer loop (background task in orchestrator)
-- [ ] Tier 1 — mechanical fast-path: `git rebase main`, run tests, `git merge --ff-only`
-- [ ] Tier 2 — Refinery LLM session for conflict resolution and test failure diagnosis
-- [ ] `:::MERGE_RESULT:::` parsing
-- [ ] `done` → `finalized` status transition on successful merge
-- [ ] Worktree + branch teardown after finalization (not after `done`)
-- [ ] Sequential processing — one merge at a time, each rebased on latest main
+- [x] Merge queue consumer loop (background task in orchestrator, `MERGE_POLL_INTERVAL` configurable)
+- [x] Tier 1 — mechanical fast-path: `git rebase main`, run tests (`HIVE_TEST_COMMAND`), `git merge --ff-only`
+- [x] Tier 2 — Refinery LLM session for conflict resolution and test failure diagnosis
+- [x] `:::MERGE_RESULT:::` parsing with heuristic fallback
+- [x] Refinery prompt template with behavioral contract
+- [x] `done` → `finalized` status transition on successful merge
+- [x] Worktree + branch teardown after finalization (not after `done`)
+- [x] Sequential processing — one merge at a time, each rebased on latest main
+- [x] `hive merges` CLI command to view merge queue
+- [x] `hive status` enriched with merge queue stats
+- [x] `HIVE_MERGE_QUEUE_ENABLED` feature flag
+- [x] Lazy refinery session creation (only when needed)
 
 ### ⏳ Phase 5: Resilience
 
