@@ -1,5 +1,6 @@
 """Prompt templates for Hive agents."""
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,9 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from .models import CompletionResult
+
+# Filename for file-based completion signal
+RESULT_FILE_NAME = ".hive-result.jsonl"
 
 # Regex for parsing structured completion signal
 COMPLETION_RE = re.compile(r":::COMPLETION\s*\n(.*?):::", re.DOTALL)
@@ -147,6 +151,31 @@ commit, and stop. Quality comes from disciplined execution, not from endless pol
 5. Do NOT push — the orchestrator handles that
 6. Do NOT create pull requests — the orchestrator handles that
 
+## FILE-BASED COMPLETION SIGNAL
+
+BEFORE emitting the :::COMPLETION signal below, you MUST write a file called
+`.hive-result.jsonl` to the root of your worktree ({worktree_path}/.hive-result.jsonl).
+
+The file must contain a single JSON line (no pretty-printing, no trailing newline needed):
+
+```json
+{{"status": "success|failure|blocked", "summary": "one-line summary", "files_changed": ["list", "of", "files"], "tests_run": true|false, "blockers": [], "artifacts": []}}
+```
+
+Field details:
+- **status**: "success", "failure", or "blocked"
+- **summary**: A concise one-line summary of what was done
+- **files_changed**: Array of file paths that were modified (relative to worktree root)
+- **tests_run**: Boolean — whether you ran tests
+- **blockers**: Array of strings describing blockers (empty if none)
+- **artifacts**: Array of objects like {{"type": "git_commit", "value": "<sha>"}}
+
+Write this file using your file-writing tool. Example:
+
+```json
+{{"status": "success", "summary": "Added retry logic to API client", "files_changed": ["src/client.py", "tests/test_client.py"], "tests_run": true, "blockers": [], "artifacts": [{{"type": "git_commit", "value": "abc1234"}}]}}
+```
+
 ## COMPLETION SIGNAL
 
 When you are finished, output a completion signal as the LAST thing in your response:
@@ -207,16 +236,54 @@ def build_system_prompt(
     return "\n\n".join(parts)
 
 
-def assess_completion(messages: List[Dict[str, Any]]) -> CompletionResult:
+def assess_completion(
+    messages: List[Dict[str, Any]],
+    file_result: Optional[Dict[str, Any]] = None,
+) -> CompletionResult:
     """
-    Assess completion based on structured signal or heuristics.
+    Assess completion based on file-based result, structured signal, or heuristics.
 
     Args:
         messages: List of message dicts from OpenCode session
+        file_result: Optional parsed result from .hive-result.jsonl file.
+            If provided, used directly to construct CompletionResult (skips
+            message parsing and heuristics).
 
     Returns:
         CompletionResult with success status, reason, and artifacts
     """
+    # If we have a file-based result, use it directly
+    if file_result is not None:
+        status = file_result.get("status", "unknown")
+        summary = file_result.get("summary", "")
+        blockers = file_result.get("blockers", [])
+        artifacts_list = file_result.get("artifacts", [])
+
+        # Convert artifacts list to dict
+        artifacts = {}
+        if isinstance(artifacts_list, list):
+            for artifact in artifacts_list:
+                if isinstance(artifact, dict):
+                    art_type = artifact.get("type")
+                    art_value = artifact.get("value")
+                    if art_type:
+                        artifacts[art_type] = art_value
+
+        reason = ""
+        if status != "success" and blockers:
+            reason = (
+                "; ".join(blockers) if isinstance(blockers, list) else str(blockers)
+            )
+        elif status != "success":
+            reason = f"Worker reported status: {status}"
+
+        return CompletionResult(
+            success=(status == "success"),
+            reason=reason,
+            summary=summary,
+            artifacts=artifacts,
+        )
+
     if not messages:
         return CompletionResult(
             success=False,
@@ -320,6 +387,51 @@ def assess_completion(messages: List[Dict[str, Any]]) -> CompletionResult:
         reason="",
         summary="Task appears complete (no explicit completion signal)",
     )
+
+
+def read_result_file(worktree_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Read and parse a .hive-result.jsonl file from a worktree.
+
+    Args:
+        worktree_path: Path to the git worktree
+
+    Returns:
+        Parsed dict from the JSON line, or None if file doesn't exist or is invalid.
+    """
+    result_path = Path(worktree_path) / RESULT_FILE_NAME
+    if not result_path.exists():
+        return None
+
+    try:
+        text = result_path.read_text().strip()
+        if not text:
+            return None
+        # Read the first non-empty line (JSONL format)
+        first_line = text.split("\n")[0].strip()
+        return json.loads(first_line)
+    except (json.JSONDecodeError, OSError, IndexError):
+        return None
+
+
+def remove_result_file(worktree_path: str) -> bool:
+    """
+    Remove the .hive-result.jsonl file from a worktree.
+
+    Args:
+        worktree_path: Path to the git worktree
+
+    Returns:
+        True if file was removed, False if it didn't exist.
+    """
+    result_path = Path(worktree_path) / RESULT_FILE_NAME
+    try:
+        if result_path.exists():
+            result_path.unlink()
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def build_refinery_prompt(
