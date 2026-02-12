@@ -508,9 +508,7 @@ class Database:
         Returns:
             Number of agents with status 'working'
         """
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) FROM agents WHERE status = 'working'"
-        )
+        cursor = self.conn.execute("SELECT COUNT(*) FROM agents WHERE status = 'working'")
         return cursor.fetchone()[0]
 
     def get_active_agents(self) -> List[Dict[str, Any]]:
@@ -555,9 +553,7 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def update_merge_queue_status(
-        self, queue_id: int, status: str, completed_at: Optional[str] = None
-    ):
+    def update_merge_queue_status(self, queue_id: int, status: str, completed_at: Optional[str] = None):
         """
         Update merge queue entry status.
 
@@ -586,9 +582,7 @@ class Database:
         Returns:
             Merge queue entry dict, or None if not found
         """
-        cursor = self.conn.execute(
-            "SELECT * FROM merge_queue WHERE id = ?", (queue_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM merge_queue WHERE id = ?", (queue_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 

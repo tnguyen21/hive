@@ -95,9 +95,7 @@ class MergeProcessor:
         # Step 1: Rebase onto main
         rebase_ok = rebase_onto_main(worktree)
         if not rebase_ok:
-            self.db.log_event(
-                issue_id, agent_id, "rebase_conflict", {"branch": branch_name}
-            )
+            self.db.log_event(issue_id, agent_id, "rebase_conflict", {"branch": branch_name})
             abort_rebase(worktree)
             return (False, None)
 
@@ -106,9 +104,7 @@ class MergeProcessor:
         # Step 2: Run tests (if configured)
         test_output = None
         if Config.TEST_COMMAND:
-            test_ok, test_output = run_command_in_worktree(
-                worktree, Config.TEST_COMMAND
-            )
+            test_ok, test_output = run_command_in_worktree(worktree, Config.TEST_COMMAND)
             if not test_ok:
                 self.db.log_event(
                     issue_id,
@@ -118,9 +114,7 @@ class MergeProcessor:
                 )
                 return (False, test_output)
 
-            self.db.log_event(
-                issue_id, agent_id, "tests_passed", {"command": Config.TEST_COMMAND}
-            )
+            self.db.log_event(issue_id, agent_id, "tests_passed", {"command": Config.TEST_COMMAND})
 
         # Step 3: Merge to main (ff-only)
         try:
@@ -137,9 +131,7 @@ class MergeProcessor:
         self.db.log_event(issue_id, agent_id, "merged", {"branch": branch_name})
         return (True, None)
 
-    async def _send_to_refinery(
-        self, entry: Dict[str, Any], test_output: Optional[str] = None
-    ):
+    async def _send_to_refinery(self, entry: Dict[str, Any], test_output: Optional[str] = None):
         """
         Hand a merge to the Refinery LLM for processing.
 
@@ -227,9 +219,7 @@ class MergeProcessor:
                 {"error": str(e)},
             )
 
-    async def _wait_for_refinery(
-        self, session_id: str, timeout: int = None
-    ) -> Dict[str, Any]:
+    async def _wait_for_refinery(self, session_id: str, timeout: int = None) -> Dict[str, Any]:
         """
         Wait for the refinery session to become idle, then parse the result.
 
@@ -251,14 +241,10 @@ class MergeProcessor:
             elapsed += poll_interval
 
             try:
-                status = await self.opencode.get_session_status(
-                    session_id, directory=self.project_path
-                )
+                status = await self.opencode.get_session_status(session_id, directory=self.project_path)
                 if status and status.get("type") == "idle":
                     # Session finished — get messages and parse result
-                    messages = await self.opencode.get_messages(
-                        session_id, directory=self.project_path
-                    )
+                    messages = await self.opencode.get_messages(session_id, directory=self.project_path)
                     return parse_merge_result(messages)
             except Exception:
                 continue
@@ -343,9 +329,7 @@ class MergeProcessor:
         # Check if existing session is still alive
         if self.refinery_session_id:
             try:
-                status = await self.opencode.get_session_status(
-                    self.refinery_session_id, directory=self.project_path
-                )
+                status = await self.opencode.get_session_status(self.refinery_session_id, directory=self.project_path)
                 if status is not None:
                     return self.refinery_session_id
             except Exception:

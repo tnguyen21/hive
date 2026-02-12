@@ -11,9 +11,7 @@ class GitWorktreeError(Exception):
     pass
 
 
-def create_worktree(
-    project_path: str, agent_name: str, base_branch: str = "main"
-) -> str:
+def create_worktree(project_path: str, agent_name: str, base_branch: str = "main") -> str:
     """
     Create a git worktree for an agent.
 
@@ -110,8 +108,7 @@ def remove_worktree(worktree_path: str, force: bool = False):
 
         # If we couldn't find main repo, try to remove directly
         subprocess.run(
-            ["git", "worktree", "remove", str(worktree_path)]
-            + (["--force"] if force else []),
+            ["git", "worktree", "remove", str(worktree_path)] + (["--force"] if force else []),
             check=True,
             capture_output=True,
             text=True,
@@ -208,11 +205,7 @@ def rebase_onto_main(worktree_path: str, main_branch: str = "main") -> bool:
         return True
     except subprocess.CalledProcessError as e:
         # Conflict detection: rebase exits non-zero on conflicts
-        if (
-            "CONFLICT" in e.stdout
-            or "conflict" in e.stderr.lower()
-            or "could not apply" in e.stderr.lower()
-        ):
+        if "CONFLICT" in e.stdout or "conflict" in e.stderr.lower() or "could not apply" in e.stderr.lower():
             return False
         # Also treat merge failures as conflicts (rebase couldn't apply)
         if e.returncode in (1, 128):
@@ -281,9 +274,7 @@ def merge_to_main(project_path: str, branch_name: str, main_branch: str = "main"
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        raise GitWorktreeError(
-            f"Failed to merge {branch_name} to {main_branch}: {e.stderr}"
-        ) from e
+        raise GitWorktreeError(f"Failed to merge {branch_name} to {main_branch}: {e.stderr}") from e
 
 
 def run_command_in_worktree(worktree_path: str, cmd: str, timeout: int = 300) -> tuple:

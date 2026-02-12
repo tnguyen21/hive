@@ -63,9 +63,7 @@ def test_build_worker_prompt_with_molecule():
 
 def test_build_system_prompt():
     """Test building system prompt."""
-    prompt = build_system_prompt(
-        project="test-project", agent_name="test-agent", worktree_path=None
-    )
+    prompt = build_system_prompt(project="test-project", agent_name="test-agent", worktree_path=None)
 
     assert "test-agent" in prompt
     assert "test-project" in prompt

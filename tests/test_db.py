@@ -15,9 +15,7 @@ def test_database_connection(temp_db):
     assert isinstance(temp_db.conn, sqlite3.Connection)
 
     # Check that tables were created
-    cursor = temp_db.conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    )
+    cursor = temp_db.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     tables = [row[0] for row in cursor.fetchall()]
 
     expected_tables = [

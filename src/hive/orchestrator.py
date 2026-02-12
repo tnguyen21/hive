@@ -77,10 +77,7 @@ class Orchestrator:
             status = properties.get("status", {})
 
             # If session becomes idle, signal completion
-            if (
-                status.get("type") == "idle"
-                and session_id in self.session_status_events
-            ):
+            if status.get("type") == "idle" and session_id in self.session_status_events:
                 self.session_status_events[session_id].set()
 
         self.sse_client.on("session.status", handle_session_status)
@@ -306,9 +303,7 @@ class Orchestrator:
         """
         # Get messages from session
         try:
-            messages = await self.opencode.get_messages(
-                agent.session_id, directory=agent.worktree
-            )
+            messages = await self.opencode.get_messages(agent.session_id, directory=agent.worktree)
 
             # Assess completion
             result = assess_completion(messages)
@@ -389,9 +384,7 @@ class Orchestrator:
             if agent.agent_id in self.active_agents:
                 del self.active_agents[agent.agent_id]
 
-    async def cycle_agent_to_next_step(
-        self, agent: AgentIdentity, next_step: Dict[str, Any]
-    ):
+    async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
         """
         Cycle an agent to the next step in a molecule.
 
@@ -673,9 +666,7 @@ async def main():
     db = Database(Config.DB_PATH)
     db.connect()
 
-    async with OpenCodeClient(
-        Config.OPENCODE_URL, Config.OPENCODE_PASSWORD
-    ) as opencode:
+    async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as opencode:
         # Get project path from command line or env
         import sys
 

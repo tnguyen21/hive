@@ -238,9 +238,7 @@ class ToolExecutor:
             "message": f"Created molecule {parent_id} with {len(steps)} steps",
         }
 
-    def handle_hive_add_dependency(
-        self, issue_id: str, depends_on: str, type: str = "blocks"
-    ) -> Dict[str, Any]:
+    def handle_hive_add_dependency(self, issue_id: str, depends_on: str, type: str = "blocks") -> Dict[str, Any]:
         """Add a dependency between issues."""
         # Verify both issues exist
         if not self.db.get_issue(issue_id):
@@ -256,9 +254,7 @@ class ToolExecutor:
             "message": f"Added {type} dependency: {issue_id} depends on {depends_on}",
         }
 
-    def handle_hive_remove_dependency(
-        self, issue_id: str, depends_on: str
-    ) -> Dict[str, Any]:
+    def handle_hive_remove_dependency(self, issue_id: str, depends_on: str) -> Dict[str, Any]:
         """Remove a dependency."""
         self.db.conn.execute(
             "DELETE FROM dependencies WHERE issue_id = ? AND depends_on = ?",
@@ -272,9 +268,7 @@ class ToolExecutor:
             "message": f"Removed dependency: {issue_id} no longer depends on {depends_on}",
         }
 
-    def handle_hive_cancel_issue(
-        self, issue_id: str, reason: str = ""
-    ) -> Dict[str, Any]:
+    def handle_hive_cancel_issue(self, issue_id: str, reason: str = "") -> Dict[str, Any]:
         """Cancel an issue."""
         issue = self.db.get_issue(issue_id)
         if not issue:
@@ -332,9 +326,7 @@ class ToolExecutor:
             "message": f"Escalated issue {issue_id}: {reason}",
         }
 
-    def handle_hive_close_issue(
-        self, issue_id: str, resolution: str = ""
-    ) -> Dict[str, Any]:
+    def handle_hive_close_issue(self, issue_id: str, resolution: str = "") -> Dict[str, Any]:
         """Close/finalize an issue."""
         issue = self.db.get_issue(issue_id)
         if not issue:
@@ -450,8 +442,6 @@ class ToolExecutor:
         limit: int = 20,
     ) -> Dict[str, Any]:
         """Get events."""
-        events = self.db.get_events(
-            issue_id=issue_id, agent_id=agent_id, event_type=event_type, limit=limit
-        )
+        events = self.db.get_events(issue_id=issue_id, agent_id=agent_id, event_type=event_type, limit=limit)
 
         return {"count": len(events), "events": events}

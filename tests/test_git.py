@@ -51,9 +51,7 @@ def git_repo(tmp_path):
     )
 
     # Create main branch (in case default is master)
-    subprocess.run(
-        ["git", "branch", "-M", "main"], cwd=repo_path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo_path, check=True, capture_output=True)
 
     return repo_path
 
@@ -152,9 +150,7 @@ def git_repo_with_worktree(git_repo):
 
     # Make a commit on the worktree branch
     (Path(worktree_path) / "feature.py").write_text("# new feature\n")
-    subprocess.run(
-        ["git", "add", "."], cwd=worktree_path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "add", "."], cwd=worktree_path, check=True, capture_output=True)
     subprocess.run(
         ["git", "commit", "-m", "Add feature"],
         cwd=worktree_path,
