@@ -440,15 +440,61 @@ class HiveCLI:
 
         return line
 
+    @staticmethod
+    def _event_to_json(event: dict) -> dict:
+        """Prepare an event dict for JSON serialisation.
+
+        Parses the ``detail`` field from a JSON string into a real object
+        so the output is a proper nested structure rather than an escaped
+        string.
+        """
+        out = dict(event)
+        if out.get("detail"):
+            try:
+                out["detail"] = (
+                    json.loads(out["detail"])
+                    if isinstance(out["detail"], str)
+                    else out["detail"]
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass  # keep as-is
+        return out
+
     def logs(
         self,
         follow: bool = False,
         n: int = 20,
         issue_id: Optional[str] = None,
         agent_id: Optional[str] = None,
+        *,
+        json_mode: bool = False,
     ):
         """Show event log, optionally tailing for new events."""
         recent = self.db.get_recent_events(n=n, issue_id=issue_id, agent_id=agent_id)
+
+        if json_mode:
+            if follow:
+                # Streaming JSON: one object per line (JSONL) so callers
+                # can consume incrementally.
+                for event in recent:
+                    print(json.dumps(self._event_to_json(event), default=str))
+
+                cursor = recent[-1]["id"] if recent else self.db.get_max_event_id()
+                try:
+                    while True:
+                        time.sleep(0.5)
+                        new_events = self.db.get_events_since(
+                            after_id=cursor, issue_id=issue_id, agent_id=agent_id
+                        )
+                        for event in new_events:
+                            print(json.dumps(self._event_to_json(event), default=str))
+                            cursor = event["id"]
+                except KeyboardInterrupt:
+                    pass
+            else:
+                events = [self._event_to_json(e) for e in recent]
+                print(json.dumps(events, default=str))
+            return
 
         for event in recent:
             print(self._format_event(event))
@@ -884,6 +930,7 @@ def main():
                 n=args.lines,
                 issue_id=args.issue,
                 agent_id=args.agent,
+                json_mode=json_mode,
             )
 
         elif args.command == "merges":
