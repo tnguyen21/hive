@@ -7,7 +7,7 @@ class Config:
     """Global configuration for Hive orchestrator."""
 
     # Concurrency
-    MAX_AGENTS = int(os.environ.get("HIVE_MAX_AGENTS", "3"))
+    MAX_AGENTS = int(os.environ.get("HIVE_MAX_AGENTS", "10"))
 
     # Timing
     POLL_INTERVAL = int(os.environ.get("HIVE_POLL_INTERVAL", "5"))  # seconds

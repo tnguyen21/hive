@@ -3,9 +3,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .ids import generate_id
 
@@ -223,6 +221,7 @@ class Database:
             FROM issues i
             WHERE i.status = 'open'
               AND i.assignee IS NULL
+              AND i.type != 'molecule'
               AND NOT EXISTS (
                 SELECT 1 FROM dependencies d
                 JOIN issues blocker ON d.depends_on = blocker.id
@@ -508,7 +507,9 @@ class Database:
         Returns:
             Number of agents with status 'working'
         """
-        cursor = self.conn.execute("SELECT COUNT(*) FROM agents WHERE status = 'working'")
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM agents WHERE status = 'working'"
+        )
         return cursor.fetchone()[0]
 
     def get_active_agents(self) -> List[Dict[str, Any]]:
@@ -553,7 +554,9 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def update_merge_queue_status(self, queue_id: int, status: str, completed_at: Optional[str] = None):
+    def update_merge_queue_status(
+        self, queue_id: int, status: str, completed_at: Optional[str] = None
+    ):
         """
         Update merge queue entry status.
 
@@ -582,7 +585,9 @@ class Database:
         Returns:
             Merge queue entry dict, or None if not found
         """
-        cursor = self.conn.execute("SELECT * FROM merge_queue WHERE id = ?", (queue_id,))
+        cursor = self.conn.execute(
+            "SELECT * FROM merge_queue WHERE id = ?", (queue_id,)
+        )
         row = cursor.fetchone()
         return dict(row) if row else None
 

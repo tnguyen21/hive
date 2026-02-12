@@ -1,12 +1,16 @@
 """Daemon management for Hive orchestrator.
 
-This module provides proper daemon functionality for running the orchestrator
+This module provides daemon functionality for running the orchestrator
 as a background service with PID file management, signal handling, and logging.
+
+Uses subprocess to spawn a detached child process running the orchestrator
+in "foreground" mode with stdout/stderr redirected to a log file. The parent
+process (the CLI) survives and can report status back to the user.
 """
 
-import atexit
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -71,105 +75,63 @@ class HiveDaemon:
         except (OSError, ProcessLookupError):
             return False
 
-    def _daemonize(self):
-        """
-        Daemonize the current process using the double-fork method.
-
-        This detaches the process from the terminal and runs it in the background.
-        """
-        # First fork
-        try:
-            pid = os.fork()
-            if pid > 0:
-                # Parent exits
-                sys.exit(0)
-        except OSError as e:
-            raise RuntimeError(f"First fork failed: {e}")
-
-        # Decouple from parent environment
-        os.chdir(str(self.project_path))
-        os.setsid()
-        os.umask(0)
-
-        # Second fork
-        try:
-            pid = os.fork()
-            if pid > 0:
-                # Parent exits
-                sys.exit(0)
-        except OSError as e:
-            raise RuntimeError(f"Second fork failed: {e}")
-
-        # Now running as daemon
-        # Redirect standard file descriptors to log file
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-        # Open log file for writing
-        log_fd = os.open(str(self.log_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND)
-
-        # Duplicate to stdout and stderr
-        os.dup2(log_fd, sys.stdout.fileno())
-        os.dup2(log_fd, sys.stderr.fileno())
-        os.close(log_fd)
-
-        # Redirect stdin to /dev/null
-        with open(os.devnull, "r") as devnull:
-            os.dup2(devnull.fileno(), sys.stdin.fileno())
-
-    def start(self) -> bool:
+    def start(self, db_path: str = "hive.db") -> bool:
         """
         Start the daemon if not already running.
 
-        Returns:
-            True if started successfully, False if already running
+        Spawns a detached subprocess that runs the orchestrator in
+        "foreground" mode with stdout/stderr redirected to the log file.
+        The parent process returns immediately so the CLI can report status.
 
-        Raises:
-            RuntimeError: If daemonization fails
+        Args:
+            db_path: Path to the SQLite database file.
+
+        Returns:
+            True if started successfully, False if already running.
         """
         self._ensure_dirs()
 
         # Check if already running
         existing_pid = self._read_pid()
         if existing_pid and self._is_running(existing_pid):
-            print(f"Hive daemon already running (PID {existing_pid})")
             return False
 
         # Clean up stale PID file
         if existing_pid:
             self._remove_pid()
 
-        print(f"Starting Hive daemon for project: {self.project_name}")
-        print(f"Log file: {self.log_file}")
+        # Spawn a detached subprocess running `hive start --foreground`
+        log_fd = open(self.log_file, "a")  # noqa: SIM115
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "hive.cli",
+                "--db",
+                str(db_path),
+                "--project",
+                str(self.project_path),
+                "start",
+                "--foreground",
+            ],
+            stdout=log_fd,
+            stderr=log_fd,
+            stdin=subprocess.DEVNULL,
+            cwd=str(self.project_path),
+            start_new_session=True,  # detach from parent's session
+        )
+        log_fd.close()
 
-        # Daemonize
-        self._daemonize()
+        # Write child PID
+        self._write_pid(proc.pid)
 
-        # Write PID file
-        self._write_pid(os.getpid())
-
-        # Register cleanup on exit
-        atexit.register(self._remove_pid)
-
-        # Set up signal handlers
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGHUP, self._signal_handler)
-
-        print(f"Daemon started (PID {os.getpid()})")
-        return True
-
-    def _signal_handler(self, signum, frame):
-        """Handle signals for graceful shutdown."""
-        if signum == signal.SIGHUP:
-            # Reload configuration
-            print("Received SIGHUP, reloading configuration...")
-            # TODO: Reload config if needed
-        else:
-            # SIGTERM or SIGINT - graceful shutdown
-            print(f"Received signal {signum}, shutting down...")
+        # Give it a moment to start and verify it's alive
+        time.sleep(0.3)
+        if not self._is_running(proc.pid):
             self._remove_pid()
-            sys.exit(0)
+            return False
+
+        return True
 
     def stop(self) -> bool:
         """
@@ -181,33 +143,26 @@ class HiveDaemon:
         pid = self._read_pid()
 
         if not pid:
-            print("Hive daemon not running (no PID file)")
             return False
 
         if not self._is_running(pid):
-            print(f"Hive daemon not running (stale PID file for {pid})")
             self._remove_pid()
             return False
-
-        print(f"Stopping Hive daemon (PID {pid})...")
 
         # Send SIGTERM
         try:
             os.kill(pid, signal.SIGTERM)
-        except OSError as e:
-            print(f"Failed to stop daemon: {e}")
+        except OSError:
             return False
 
         # Wait for process to exit
         for _ in range(30):  # Wait up to 3 seconds
             if not self._is_running(pid):
-                print("Daemon stopped")
                 self._remove_pid()
                 return True
             time.sleep(0.1)
 
         # Force kill if still running
-        print("Daemon not responding, force killing...")
         try:
             os.kill(pid, signal.SIGKILL)
             time.sleep(0.5)
@@ -217,7 +172,7 @@ class HiveDaemon:
         self._remove_pid()
         return True
 
-    def restart(self) -> bool:
+    def restart(self, db_path: str = "hive.db") -> bool:
         """
         Restart the daemon.
 
@@ -226,7 +181,7 @@ class HiveDaemon:
         """
         self.stop()
         time.sleep(0.5)
-        return self.start()
+        return self.start(db_path=db_path)
 
     def status(self) -> dict:
         """
@@ -245,6 +200,7 @@ class HiveDaemon:
             }
 
         if not self._is_running(pid):
+            self._remove_pid()
             return {
                 "running": False,
                 "pid": pid,
@@ -271,8 +227,6 @@ class HiveDaemon:
             return
 
         try:
-            import subprocess
-
             cmd = ["tail"]
             if follow:
                 cmd.append("-f")
@@ -281,7 +235,7 @@ class HiveDaemon:
             subprocess.run(cmd)
         except KeyboardInterrupt:
             pass
-        except Exception as e:
+        except Exception:
             # Fallback: read file directly
             try:
                 content = self.log_file.read_text()
@@ -293,10 +247,10 @@ class HiveDaemon:
 
 def run_daemon_foreground(db, project_path: str, project_name: str):
     """
-    Run the orchestrator in the foreground (for debugging).
+    Run the orchestrator in the foreground (for debugging or as daemon child).
 
     Args:
-        db: Database instance
+        db: Database instance (must be connected)
         project_path: Path to project
         project_name: Project name
     """

@@ -1,17 +1,16 @@
 """Main orchestrator for Hive multi-agent system."""
 
 import asyncio
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .config import Config
 from .db import Database
 from .git import create_worktree, get_commit_hash, remove_worktree
 from .merge import MergeProcessor
 from .ids import generate_id
-from .models import AgentIdentity, CompletionResult
+from .models import AgentIdentity
 from .opencode import OpenCodeClient, make_model_config
 from .prompts import (
     assess_completion,
@@ -66,6 +65,9 @@ class Orchestrator:
         # Event handlers
         self.session_status_events: Dict[str, asyncio.Event] = {}
 
+        # Track last SSE activity per session for lease renewal
+        self._session_last_activity: Dict[str, datetime] = {}
+
         # Running flag
         self.running = False
 
@@ -76,16 +78,111 @@ class Orchestrator:
             session_id = properties.get("sessionID")
             status = properties.get("status", {})
 
+            # Any session activity = renew the lease for the associated agent
+            self._renew_lease_for_session(session_id)
+
             # If session becomes idle, signal completion
-            if status.get("type") == "idle" and session_id in self.session_status_events:
+            if (
+                status.get("type") == "idle"
+                and session_id in self.session_status_events
+            ):
                 self.session_status_events[session_id].set()
 
         self.sse_client.on("session.status", handle_session_status)
+
+    def _renew_lease_for_session(self, session_id: str):
+        """Renew the lease for the agent associated with a session.
+
+        Called on any SSE activity from the session, proving the worker
+        is still alive and making progress.
+        """
+        now = datetime.now()
+        self._session_last_activity[session_id] = now
+
+        # Find agent for this session and extend its DB lease
+        for agent in self.active_agents.values():
+            if agent.session_id == session_id:
+                try:
+                    self.db.conn.execute(
+                        """
+                        UPDATE agents
+                        SET lease_expires_at = datetime('now', '+{} seconds'),
+                            last_progress_at = datetime('now')
+                        WHERE id = ?
+                        """.format(Config.LEASE_DURATION),
+                        (agent.agent_id,),
+                    )
+                    self.db.conn.commit()
+                except Exception:
+                    pass  # Non-critical, best-effort
+                break
+
+    def _reconcile_stale_agents(self):
+        """Clean up stale agents from previous daemon runs.
+
+        On startup, any agents still marked 'working' in the DB are leftovers
+        from a crashed/stopped daemon. Mark them failed and release their issues
+        back to the ready queue (if still in_progress).
+        """
+        cursor = self.db.conn.execute(
+            """
+            SELECT id, current_issue, worktree, name
+            FROM agents
+            WHERE status = 'working'
+            """
+        )
+        stale = cursor.fetchall()
+
+        if not stale:
+            return
+
+        print(f"Reconciling {len(stale)} stale agent(s) from previous run...")
+
+        for row in stale:
+            agent_dict = dict(row)
+            agent_id = agent_dict["id"]
+            issue_id = agent_dict["current_issue"]
+            worktree = agent_dict["worktree"]
+
+            # Mark agent failed
+            self.db.conn.execute(
+                "UPDATE agents SET status = 'failed', current_issue = NULL WHERE id = ?",
+                (agent_id,),
+            )
+
+            # Release the issue if still in_progress
+            if issue_id:
+                self.db.conn.execute(
+                    """
+                    UPDATE issues
+                    SET assignee = NULL, status = 'open'
+                    WHERE id = ? AND status = 'in_progress'
+                    """,
+                    (issue_id,),
+                )
+
+                self.db.log_event(
+                    issue_id,
+                    agent_id,
+                    "reconciled",
+                    {"reason": "stale agent from previous daemon run"},
+                )
+
+            # Clean up worktree
+            if worktree:
+                try:
+                    remove_worktree(worktree)
+                except Exception:
+                    pass
+
+        self.db.conn.commit()
+        print(f"Reconciled {len(stale)} stale agent(s)")
 
     async def start(self):
         """Start the orchestrator."""
         self.running = True
         self._setup_sse_handlers()
+        self._reconcile_stale_agents()
 
         # Start SSE event consumer in background
         sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
@@ -264,20 +361,41 @@ class Orchestrator:
         """
         Monitor an agent until completion.
 
+        Uses a renewable timeout: the agent gets LEASE_DURATION to show
+        activity. Each SSE event resets the clock via _renew_lease_for_session.
+        The agent is only declared stalled if there's been NO activity for
+        the full lease duration.
+
         Args:
             agent: Agent identity
         """
         try:
-            # Wait for session to become idle
             event = self.session_status_events.get(agent.session_id)
-            if event:
-                # Wait with timeout
+            if not event:
+                return
+
+            # Record initial activity
+            self._session_last_activity[agent.session_id] = datetime.now()
+
+            # Poll loop: check for completion or inactivity
+            check_interval = min(30, Config.LEASE_DURATION // 4)
+            while True:
                 try:
-                    await asyncio.wait_for(event.wait(), timeout=Config.LEASE_DURATION)
+                    await asyncio.wait_for(event.wait(), timeout=check_interval)
+                    # Event was set — session went idle, agent is done
+                    break
                 except asyncio.TimeoutError:
-                    # Lease expired without completion
-                    await self.handle_stalled_agent(agent)
-                    return
+                    # Check if there's been recent activity
+                    last_activity = self._session_last_activity.get(
+                        agent.session_id, datetime.now()
+                    )
+                    elapsed = (datetime.now() - last_activity).total_seconds()
+
+                    if elapsed > Config.LEASE_DURATION:
+                        # No activity for full lease duration — truly stalled
+                        await self.handle_stalled_agent(agent)
+                        return
+                    # Otherwise, keep waiting — worker is active
 
             # Agent finished, assess completion
             await self.handle_agent_complete(agent)
@@ -293,6 +411,7 @@ class Orchestrator:
             # Clean up
             if agent.session_id in self.session_status_events:
                 del self.session_status_events[agent.session_id]
+            self._session_last_activity.pop(agent.session_id, None)
 
     async def handle_agent_complete(self, agent: AgentIdentity):
         """
@@ -303,7 +422,9 @@ class Orchestrator:
         """
         # Get messages from session
         try:
-            messages = await self.opencode.get_messages(agent.session_id, directory=agent.worktree)
+            messages = await self.opencode.get_messages(
+                agent.session_id, directory=agent.worktree
+            )
 
             # Assess completion
             result = assess_completion(messages)
@@ -384,7 +505,9 @@ class Orchestrator:
             if agent.agent_id in self.active_agents:
                 del self.active_agents[agent.agent_id]
 
-    async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
+    async def cycle_agent_to_next_step(
+        self, agent: AgentIdentity, next_step: Dict[str, Any]
+    ):
         """
         Cycle an agent to the next step in a molecule.
 
@@ -502,7 +625,12 @@ class Orchestrator:
         )
 
         # Abort the session
-        await self.opencode.abort_session(agent.session_id, directory=agent.worktree)
+        try:
+            await self.opencode.abort_session(
+                agent.session_id, directory=agent.worktree
+            )
+        except Exception:
+            pass  # Best-effort, session may already be dead
 
         # Mark agent as failed so it's not picked up again
         self.db.conn.execute(
@@ -515,13 +643,16 @@ class Orchestrator:
             (agent.agent_id,),
         )
 
-        # Unassign issue so it can be retried
+        # Only reset issue to open if it's still in_progress.
+        # If the issue was already finalized/canceled/done by someone else
+        # (e.g. queen manually finalized it), don't touch it.
         self.db.conn.execute(
             """
             UPDATE issues
             SET assignee = NULL,
                 status = 'open'
             WHERE id = ?
+              AND status = 'in_progress'
             """,
             (agent.issue_id,),
         )
@@ -539,30 +670,35 @@ class Orchestrator:
             del self.active_agents[agent.agent_id]
 
     async def check_stalled_agents(self):
-        """Check for stalled agents and handle them."""
-        now = datetime.now()
+        """Check for stalled agents owned by THIS daemon and handle them.
 
-        # Query agents with expired leases
-        cursor = self.db.conn.execute(
-            """
-            SELECT id, session_id, worktree, current_issue, name
-            FROM agents
-            WHERE status = 'working'
-              AND lease_expires_at < datetime('now')
-            """
-        )
+        Only checks agents in self.active_agents (in-memory). This prevents
+        a newly restarted daemon from interfering with stale DB rows left
+        by a previous daemon instance.
+        """
+        if not self.active_agents:
+            return
 
-        for row in cursor.fetchall():
-            agent_dict = dict(row)
-            agent = AgentIdentity(
-                agent_id=agent_dict["id"],
-                name=agent_dict["name"],
-                issue_id=agent_dict["current_issue"],
-                worktree=agent_dict["worktree"],
-                session_id=agent_dict["session_id"],
-                project=self.project_name,
-            )
+        # Check each active agent against the DB lease
+        stalled = []
+        for agent_id, agent in list(self.active_agents.items()):
+            try:
+                cursor = self.db.conn.execute(
+                    """
+                    SELECT lease_expires_at
+                    FROM agents
+                    WHERE id = ? AND status = 'working'
+                      AND lease_expires_at < datetime('now')
+                    """,
+                    (agent_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    stalled.append(agent)
+            except Exception:
+                pass
 
+        for agent in stalled:
             await self.handle_stalled_agent(agent)
 
     async def merge_processor_loop(self):
@@ -666,7 +802,9 @@ async def main():
     db = Database(Config.DB_PATH)
     db.connect()
 
-    async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as opencode:
+    async with OpenCodeClient(
+        Config.OPENCODE_URL, Config.OPENCODE_PASSWORD
+    ) as opencode:
         # Get project path from command line or env
         import sys
 
