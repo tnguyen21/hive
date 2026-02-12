@@ -425,12 +425,15 @@ class Database:
             conditions.append("event_type = ?")
             params.append(event_type)
 
+        # Optimization: Sort by ID (primary key) instead of created_at.
+        # 1. Performance: Uses the PK index to avoid a full table scan/sort.
+        # 2. Correctness: Ensures strict ordering for events within the same second.
         if conditions:
             where_clause = " AND ".join(conditions)
-            query = f"SELECT * FROM events WHERE {where_clause} ORDER BY created_at DESC LIMIT ?"
+            query = f"SELECT * FROM events WHERE {where_clause} ORDER BY id DESC LIMIT ?"
             params.append(limit)
         else:
-            query = "SELECT * FROM events ORDER BY created_at DESC LIMIT ?"
+            query = "SELECT * FROM events ORDER BY id DESC LIMIT ?"
             params.append(limit)
 
         cursor = self.conn.execute(query, params)
