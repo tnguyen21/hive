@@ -53,73 +53,68 @@ The result is a system that preserves Gas Town's best abstractions — the ready
 ## 2. Architecture Overview
 
 ```
-                      ┌──────────┐
-                      │  Human   │
-                      │  (CLI)   │
-                      └────┬─────┘
-                           │ natural language requests
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│                     Orchestrator                          │
-│                                                           │
-│  ┌──────────┐   ┌──────────────┐   ┌────────────────┐    │
-│  │ Work     │   │ Agent        │   │ Event          │    │
-│  │ Scheduler│   │ Manager      │   │ Loop           │    │
-│  │          │   │              │   │ (SSE consumer) │    │
-│  └────┬─────┘   └──────┬───────┘   └───────┬────────┘    │
-│       │                │                    │             │
-│       └────────┬───────┴────────────────────┘             │
-│                │                                          │
-│         ┌──────┴──────┐                                   │
-│         │  SQLite DB  │                                   │
-│         │  (WAL mode) │                                   │
-│         └─────────────┘                                   │
-└──────────────────┬────────────────────────────────────────┘
-                   │ HTTP (localhost)
-        ┌──────────┴──────────┐
-        │   OpenCode Server   │
-        │   (headless mode)   │
-        ├─────────────────────┤
-        │ Mayor session       │  ← persistent, strategic brain
-        │ Refinery session    │  ← persistent, merge processor
-        │ Worker session A    │  ← ephemeral, per-issue
-        │ Worker session B    │  ← ephemeral, per-issue
-        │ ...                 │
-        └─────────────────────┘
-             │         │
-        git worktree  git worktree
-        (project A)   (project B)
+        ┌───────────────────────────────────────────────┐
+        │              OpenCode Server                   │
+        │                                                │
+        │  ┌─────────────────────────────────────────┐   │
+        │  │ Mayor session (user-facing TUI/web)     │   │
+        │  │   ← human chats here                    │   │
+        │  │   ← has tool access to `hive` CLI       │   │
+        │  └────────────┬────────────────────────────┘   │
+        │               │ hive create / hive status / …  │
+        │               ▼                                │
+        │  ┌─────────────────────────────────────────┐   │
+        │  │         SQLite DB (WAL mode)            │   │
+        │  └────────────┬────────────────────────────┘   │
+        │               │                                │
+        │  ┌────────────┴────────────────────────────┐   │
+        │  │         Orchestrator (headless)          │   │
+        │  │  Work Scheduler · Agent Manager · SSE    │   │
+        │  │  Permission Unblocker · Merge Queue      │   │
+        │  └────────────┬────────────────────────────┘   │
+        │               │ spawns/monitors                │
+        │  ┌────────────┴────────────────────────────┐   │
+        │  │ Worker session A   (ephemeral, per-issue)│  │
+        │  │ Worker session B   (ephemeral, per-issue)│  │
+        │  │ Refinery session   (persistent, merges)  │  │
+        │  │ ...                                      │  │
+        │  └──────────────────────────────────────────┘  │
+        └────────────────────────────────────────────────┘
+                    │              │
+               git worktree   git worktree
+               (worker A)     (worker B)
 ```
 
 ### Component Responsibilities
 
-| Component           | Responsibility                                                                   |
-| ------------------- | -------------------------------------------------------------------------------- |
-| **Orchestrator**    | Owns the DB, schedules work, manages agent lifecycles, consumes OpenCode events. Handles the _deterministic_ parts: ready queue, CAS claims, health checks, session lifecycle. |
-| **Mayor (LLM)**     | The strategic brain. Interprets ambiguous user requests, decomposes them into issues/molecules, makes prioritization decisions, handles escalations. A persistent OpenCode session. |
-| **Refinery (LLM)**  | The merge processor. Easy rebases go through mechanically. Complex merges, conflicts, and integration failures get reasoned about by the Refinery agent. A persistent OpenCode session. |
-| **Workers (LLM)**   | Ephemeral coding agents. One per issue. Implement, test, commit. Spawned on demand, destroyed on completion. |
-| **SQLite DB**       | Single source of truth for all work items, dependencies, agent state, and events |
-| **OpenCode Server** | Headless agent runtime — creates sessions, executes prompts, streams events      |
-| **Git Worktrees**   | Per-agent sandboxes, scoped via OpenCode's `?directory=` parameter               |
+| Component           | Responsibility                                                                                                                                                                                                                                                                                                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mayor (LLM)**     | The **user-facing** strategic brain. The human chats with the Mayor in an OpenCode TUI/web session. The Mayor interprets requests, decomposes them into issues/molecules, monitors worker progress, handles escalations, and answers questions — all via tool calls to the `hive` CLI. The Mayor is the primary interface to the system. |
+| **Orchestrator**    | The **headless** worker pool manager. Polls the ready queue, spawns workers in git worktrees, monitors completion via SSE, handles permissions, processes the merge queue. Handles the _deterministic_ parts: ready queue, CAS claims, health checks, session lifecycle. The orchestrator does NOT interact with the user.               |
+| **Refinery (LLM)**  | The merge processor. Easy rebases go through mechanically. Complex merges, conflicts, and integration failures get reasoned about by the Refinery agent. A persistent OpenCode session.                                                                                                                                                  |
+| **Workers (LLM)**   | Ephemeral coding agents. One per issue. Implement, test, commit. Spawned on demand, destroyed on completion.                                                                                                                                                                                                                             |
+| **SQLite DB**       | Single source of truth for all work items, dependencies, agent state, and events. Shared by the Mayor (via CLI tools) and the orchestrator.                                                                                                                                                                                              |
+| **OpenCode Server** | Agent runtime — hosts the Mayor session (user-facing), worker sessions (headless), and refinery session.                                                                                                                                                                                                                                 |
+| **Git Worktrees**   | Per-agent sandboxes, scoped via OpenCode's `X-OpenCode-Directory` header                                                                                                                                                                                                                                                                 |
 
 ### The Key Split: Deterministic vs. Ambiguous
 
 The system has a clear separation of concerns:
 
-| Concern | Who Handles It | Why |
-|---------|---------------|-----|
-| Ready queue computation | Orchestrator (SQL) | Deterministic graph query — no judgment needed |
-| Atomic task claiming | Orchestrator (SQL CAS) | Database operation — no judgment needed |
-| Session lifecycle (create, abort, teardown) | Orchestrator (HTTP) | Mechanical — no judgment needed |
-| Health checks, staleness detection | Orchestrator (timer + SSE) | Threshold-based — no judgment needed |
-| SSE event dispatch | Orchestrator (event loop) | Routing — no judgment needed |
-| "Build me an auth system" → concrete issues | **Mayor** (LLM) | Requires understanding intent, architecture, tradeoffs |
-| Prioritizing competing work items | **Mayor** (LLM) | Requires understanding urgency, dependencies, context |
-| Handling escalations from stuck workers | **Mayor** (LLM) | Requires reading the failure, deciding next steps |
-| Resolving merge conflicts | **Refinery** (LLM) | Requires understanding code semantics |
-| Deciding if a test failure is pre-existing vs. introduced | **Refinery** (LLM) | Requires reading test output and understanding context |
-| Implementing a feature / fixing a bug | **Worker** (LLM) | The actual coding work |
+| Concern                                                   | Who Handles It                          | Why                                                          |
+| --------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------ |
+| Ready queue computation                                   | Orchestrator (SQL)                      | Deterministic graph query — no judgment needed               |
+| Atomic task claiming                                      | Orchestrator (SQL CAS)                  | Database operation — no judgment needed                      |
+| Session lifecycle (create, abort, teardown)               | Orchestrator (HTTP)                     | Mechanical — no judgment needed                              |
+| Health checks, staleness detection                        | Orchestrator (timer + SSE)              | Threshold-based — no judgment needed                         |
+| SSE event dispatch                                        | Orchestrator (event loop)               | Routing — no judgment needed                                 |
+| "Build me an auth system" → concrete issues               | **Mayor** (LLM, via `hive create`)      | User chats with Mayor; Mayor uses CLI tools to create issues |
+| Monitoring system state and progress                      | **Mayor** (LLM, via `hive status/logs`) | Mayor proactively checks on workers, reports back to user    |
+| Prioritizing competing work items                         | **Mayor** (LLM)                         | Requires understanding urgency, dependencies, context        |
+| Handling escalations from stuck workers                   | **Mayor** (LLM, via `hive` tools)       | Reads failure details, decides to retry/rephrase/ask user    |
+| Resolving merge conflicts                                 | **Refinery** (LLM)                      | Requires understanding code semantics                        |
+| Deciding if a test failure is pre-existing vs. introduced | **Refinery** (LLM)                      | Requires reading test output and understanding context       |
+| Implementing a feature / fixing a bug                     | **Worker** (LLM)                        | The actual coding work                                       |
 
 This is Gas Town's **ZFC principle** (Zero decisions in code, all judgment calls go to models) applied selectively. The orchestrator handles what SQL and HTTP can handle. Everything that requires _reasoning about ambiguity_ goes to an LLM agent.
 
@@ -190,18 +185,18 @@ Every issue an agent closes is an event in the `events` table. Over time this ac
 
 ## 4. What We Drop (and Why)
 
-| Gas Town Feature                                    | Why We Drop It                                                           |
-| --------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Distributed beads (JSONL + Dolt + Git sync)**     | Single SQLite DB; no offline or multi-writer sync needed                 |
-| **3-way merge with field-specific strategies**      | Single writer (the orchestrator); no merge conflicts possible            |
-| **Prefix-based routing across multiple DBs**        | One database; IDs are just rows                                          |
-| **Two-level data architecture (Town/Rig)**          | Single-level; projects are a column, not a namespace                     |
-| **Dolt SQL server with branch-per-agent**           | SQLite WAL mode handles concurrent reads; orchestrator serializes writes |
-| **Beads redirect files and worktree beads routing** | Agents don't touch the DB directly; orchestrator mediates                |
-| **Tmux session management**                         | OpenCode HTTP API manages sessions                                       |
+| Gas Town Feature                                    | Why We Drop It                                                                                                                                                                                                     |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Distributed beads (JSONL + Dolt + Git sync)**     | Single SQLite DB; no offline or multi-writer sync needed                                                                                                                                                           |
+| **3-way merge with field-specific strategies**      | Single writer (the orchestrator); no merge conflicts possible                                                                                                                                                      |
+| **Prefix-based routing across multiple DBs**        | One database; IDs are just rows                                                                                                                                                                                    |
+| **Two-level data architecture (Town/Rig)**          | Single-level; projects are a column, not a namespace                                                                                                                                                               |
+| **Dolt SQL server with branch-per-agent**           | SQLite WAL mode handles concurrent reads; orchestrator serializes writes                                                                                                                                           |
+| **Beads redirect files and worktree beads routing** | Agents don't touch the DB directly; orchestrator mediates                                                                                                                                                          |
+| **Tmux session management**                         | OpenCode HTTP API manages sessions                                                                                                                                                                                 |
 | **Witness/Deacon/Boot/Dog agent roles**             | Functions absorbed into orchestrator code (liveness → lease-based staleness, watchdog → health checks, cleanup → teardown after finalization). The roles aren't dropped — the work persists in deterministic form. |
-| **Mail protocol between agents**                    | Orchestrator mediates; Mayor/Refinery communicate via DB, not mail       |
-| **Convoy cross-rig tracking**                       | Single DB makes cross-project queries trivial                            |
+| **Mail protocol between agents**                    | Orchestrator mediates; Mayor/Refinery communicate via DB, not mail                                                                                                                                                 |
+| **Convoy cross-rig tracking**                       | Single DB makes cross-project queries trivial                                                                                                                                                                      |
 
 ### What Gets Simpler
 
@@ -461,10 +456,10 @@ The `prompt_async` endpoint returns immediately. The orchestrator monitors progr
 
 OpenCode exposes two SSE event endpoints:
 
-| Endpoint | Scope | Use Case |
-|----------|-------|----------|
-| `GET /event?directory=<worktree>` | **Instance-scoped** — only events from that specific worktree/directory | Per-agent monitoring, scoped dashboards |
-| `GET /global/event` | **Global** — all events from all sessions across all directories. Each event includes a `directory` field identifying its source. | Orchestrator main loop, cross-agent monitoring |
+| Endpoint                          | Scope                                                                                                                             | Use Case                                       |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `GET /event?directory=<worktree>` | **Instance-scoped** — only events from that specific worktree/directory                                                           | Per-agent monitoring, scoped dashboards        |
+| `GET /global/event`               | **Global** — all events from all sessions across all directories. Each event includes a `directory` field identifying its source. | Orchestrator main loop, cross-agent monitoring |
 
 The orchestrator connects to **`/global/event`** — a single SSE stream that carries events from every agent session. Events are dispatched internally by `sessionID` and `directory`:
 
@@ -475,12 +470,12 @@ Accept: text/event-stream
 
 Key events the orchestrator reacts to:
 
-| Event                                   | Orchestrator Action                                        |
-| --------------------------------------- | ---------------------------------------------------------- |
+| Event                                   | Orchestrator Action                                                     |
+| --------------------------------------- | ----------------------------------------------------------------------- |
 | `session.status { type: "idle" }`       | Agent finished. Check work result, mark `done`, enqueue to merge_queue. |
-| `session.status { type: "retry" }`      | Transient failure. Log it, wait for auto-retry.            |
-| `session.error`                         | Permanent failure. Mark agent as stalled, reassign work.   |
-| `message.part.updated { tool: "bash" }` | Optional: log tool usage for audit trail.                  |
+| `session.status { type: "retry" }`      | Transient failure. Log it, wait for auto-retry.                         |
+| `session.error`                         | Permanent failure. Mark agent as stalled, reassign work.                |
+| `message.part.updated { tool: "bash" }` | Optional: log tool usage for audit trail.                               |
 
 This replaces Gas Town's Witness patrol cycle. Instead of polling tmux sessions for liveness, the orchestrator receives real-time status updates. The per-directory `/event` endpoint exists for narrower use cases (e.g., a UI focused on one agent), but the orchestrator doesn't need it.
 
@@ -511,7 +506,7 @@ Each session gets its own isolated LSP server, file watcher, and tool permission
 
 ## 7. Orchestrator Design
 
-The orchestrator is a single long-running process. It owns the main loop.
+The orchestrator is a **headless** long-running daemon. It does NOT interact with the user — that's the Mayor's job. The orchestrator polls the DB for ready work (created by the Mayor via `hive create`), spawns workers, monitors them via SSE, and processes the merge queue.
 
 ### 7.1 Main Loop
 
@@ -632,12 +627,12 @@ Replaces Gas Town's Witness + Deacon + Boot watchdog chain with a **lease-based*
 
 **Progress signals** (ranked by reliability):
 
-| Signal | Source | Reliability |
-|--------|--------|-------------|
-| Session status transitions (`busy` → `idle`) | `GET /session/:id/status` or SSE | High — definitive state change |
-| New assistant tokens | `GET /session/:id/message` growth | Medium — proves the model is generating |
-| Tool completions (bash, edit results) | Message parts inspection | Medium — proves tools are executing |
-| Diff size growth | `GET /session/:id/diff` | Low — only indicates file changes |
+| Signal                                       | Source                            | Reliability                             |
+| -------------------------------------------- | --------------------------------- | --------------------------------------- |
+| Session status transitions (`busy` → `idle`) | `GET /session/:id/status` or SSE  | High — definitive state change          |
+| New assistant tokens                         | `GET /session/:id/message` growth | Medium — proves the model is generating |
+| Tool completions (bash, edit results)        | Message parts inspection          | Medium — proves tools are executing     |
+| Diff size growth                             | `GET /session/:id/diff`           | Low — only indicates file changes       |
 
 ```python
 LEASE_DURATION = timedelta(minutes=15)     # initial lease
@@ -849,15 +844,15 @@ Gas Town's role prompts reveal that effective agent prompts need much more than 
 
 Gas Town's polecat prompt is ~540 lines. Most of that isn't task description — it's behavioral conditioning. The key patterns:
 
-| Pattern | What It Does | Why It Matters |
-|---------|-------------|----------------|
-| **The Idle Heresy** | Hammers home that agents must NEVER wait for approval | LLMs naturally want to pause and confirm. Without strong anti-idle conditioning, agents stall after completing work. |
-| **The Approval Fallacy** | "There is no approval step. When work is done, you act." | Same root cause — LLMs seek confirmation. The prompt explicitly forbids it. |
-| **Directory Discipline** | "Stay in YOUR worktree. NEVER edit files in the rig root." | Agents drift out of their sandbox, edit in shared directories, and lose work. |
-| **Propulsion Principle** | "If you find something on your hook, YOU RUN IT." | Prevents the agent from announcing itself and waiting for instructions. |
-| **Escalation Protocol** | "When blocked, escalate. Do NOT wait for human input." | Without this, agents hang indefinitely on ambiguous requirements. |
-| **Capability Ledger Motivation** | "Your work is visible. Your CV grows with every completion." | Gives the agent a reason to care about quality — appeal to self-interest in reputation. |
-| **ZFC Principle** | "Zero decisions in code. All judgment calls go to models." | The orchestrator is dumb transport; the agent reasons about edge cases. |
+| Pattern                          | What It Does                                                 | Why It Matters                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| **The Idle Heresy**              | Hammers home that agents must NEVER wait for approval        | LLMs naturally want to pause and confirm. Without strong anti-idle conditioning, agents stall after completing work. |
+| **The Approval Fallacy**         | "There is no approval step. When work is done, you act."     | Same root cause — LLMs seek confirmation. The prompt explicitly forbids it.                                          |
+| **Directory Discipline**         | "Stay in YOUR worktree. NEVER edit files in the rig root."   | Agents drift out of their sandbox, edit in shared directories, and lose work.                                        |
+| **Propulsion Principle**         | "If you find something on your hook, YOU RUN IT."            | Prevents the agent from announcing itself and waiting for instructions.                                              |
+| **Escalation Protocol**          | "When blocked, escalate. Do NOT wait for human input."       | Without this, agents hang indefinitely on ambiguous requirements.                                                    |
+| **Capability Ledger Motivation** | "Your work is visible. Your CV grows with every completion." | Gives the agent a reason to care about quality — appeal to self-interest in reputation.                              |
+| **ZFC Principle**                | "Zero decisions in code. All judgment calls go to models."   | The orchestrator is dumb transport; the agent reasons about edge cases.                                              |
 
 ### 9.2 Work Prompt Template
 
@@ -1020,30 +1015,33 @@ The system has three kinds of LLM agent, each with a distinct lifecycle and purp
 
 ### 10.1 Agent Taxonomy
 
-| Agent | Lifecycle | Purpose | Gas Town Equivalent |
-|-------|-----------|---------|-------------------|
-| **Mayor** | Persistent session, cycles on context fill | Interpret user intent, decompose into work, handle escalations, make strategic decisions | Mayor |
-| **Refinery** | Persistent session, cycles on context fill | Process merge queue, resolve conflicts, verify integration, reason about test failures | Refinery |
-| **Workers** | Ephemeral, one per issue | Implement features, fix bugs, write tests — the actual coding | Polecats |
+| Agent        | Lifecycle                                | User-Facing?               | Purpose                                                                                                | Gas Town Equivalent |
+| ------------ | ---------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------- |
+| **Mayor**    | Persistent, user-managed session         | **Yes** — human chats here | Interpret user intent, decompose into issues via `hive` CLI tools, monitor workers, handle escalations | Mayor               |
+| **Refinery** | Persistent session, orchestrator-managed | No                         | Process merge queue, resolve conflicts, verify integration, reason about test failures                 | Refinery            |
+| **Workers**  | Ephemeral, one per issue                 | No                         | Implement features, fix bugs, write tests — the actual coding                                          | Polecats            |
 
 ```
-Human
-  │ "build me an auth system with JWT and rate limiting"
-  ▼
-Mayor (LLM session)
-  │ Reasons about the request, decomposes into issues:
-  │   w-a3f8: "Design auth middleware architecture"
-  │   w-c7e2: "Implement JWT validation middleware"
-  │   w-d9b1: "Add rate limiting to auth endpoints"
-  │   w-e4f6: "Write integration tests for auth flow"
-  │ Wires up dependencies (design blocks implement, implement blocks tests)
-  │ Writes issues + deps to DB
-  ▼
-Orchestrator (deterministic code)
+Human ←→ Mayor (interactive OpenCode TUI/web session)
+            │
+            │ "build me an auth system with JWT and rate limiting"
+            │
+            │ Mayor explores codebase, asks clarifying questions, then:
+            │   $ hive create "Design auth middleware architecture" "..." --priority 1
+            │   $ hive create "Implement JWT validation middleware" "..." --priority 2
+            │   $ hive create "Add rate limiting to auth endpoints" "..." --priority 2
+            │   $ hive create "Write integration tests for auth flow" "..." --priority 2
+            │
+            │ Mayor confirms to human: "Created 4 issues, workers will pick them up."
+            │
+         SQLite DB (issues table)
+            │
+            ▼
+Orchestrator (headless daemon)
   │ Queries ready queue → w-a3f8 is ready
   │ Creates worktree, spawns worker session, claims issue
   ▼
-Worker "toast" (LLM session)
+Worker "toast" (headless LLM session)
   │ Implements the design doc
   │ Commits, signals completion
   ▼
@@ -1054,10 +1052,14 @@ Orchestrator
   │ Spawns next worker (or reuses toast on next step)
   ... cycle continues ...
   ▼
+            │ Meanwhile, human asks Mayor: "how's it going?"
+            │ Mayor runs: $ hive status / $ hive logs -n 10
+            │ Mayor: "2 of 4 issues done, 1 in progress, 1 queued."
+            │
 Orchestrator
   │ All issues done → merge_queue entries queued
   ▼
-Refinery (LLM session)
+Refinery (headless LLM session)
   │ Picks up merge_queue entries
   │ Clean rebase? Push through mechanically.
   │ Conflict? Reason about the code, resolve it.
@@ -1067,196 +1069,174 @@ Refinery (LLM session)
 main branch updated
 ```
 
-### 10.2 The Mayor: Strategic Brain
+### 10.2 The Mayor: User-Facing Strategic Brain
 
-The Mayor is a persistent OpenCode session that the orchestrator keeps alive. It's the only agent that talks to the human.
+The Mayor is a **user-facing** OpenCode session. The human interacts with hive by chatting with the Mayor in an OpenCode TUI or web session. The Mayor has tool access to the `hive` CLI, which it uses to create issues, monitor workers, check status, and manage the system.
+
+This is a fundamental architectural choice: **the Mayor is the interface, not the orchestrator CLI.** The orchestrator is a headless daemon. The Mayor is where the human sits.
 
 **What the Mayor does:**
-- Receives ambiguous natural language requests from the user
-- Decomposes them into concrete issues with titles, descriptions, priorities, and dependencies
-- Creates molecules (multi-step workflows) when work has ordered steps
-- Handles escalations from failed workers (decides whether to retry, rephrase, or give up)
-- Makes prioritization decisions when work items compete
-- Answers the human's questions about system state ("what's in flight?", "why did that fail?")
+
+- Chats directly with the human in a conversational OpenCode session
+- Explores the codebase to understand requests (read files, git log, etc.)
+- Decomposes requests into concrete issues via `hive create`
+- Monitors worker progress via `hive status`, `hive logs`, `hive show`
+- Handles escalations — reads failure events, decides to retry/rephrase/ask human
+- Answers questions about system state by querying the DB through CLI tools
+- Closes/cancels issues via `hive close`
 
 **What the Mayor does NOT do:**
+
 - Write application code (workers do that)
+- BUT if the change is trivial enough (<5 minutes, then the Mayor can go ahead and make the change)
 - Merge branches (refinery does that)
-- Manage sessions or health checks (orchestrator does that)
+- Manage sessions, health checks, or worker spawning (orchestrator does that)
+
+**Why tools instead of structured output?**
+
+The previous design had the Mayor emit `:::WORK_PLAN:::` blocks that the orchestrator parsed. This created a rigid, fragile interface — the Mayor had to format output perfectly, and the orchestrator had to parse it. With tool access to the CLI, the Mayor can:
+
+- Create issues one at a time, with full control over titles and descriptions
+- Check the result of each operation (`hive show <id>`)
+- Correct mistakes immediately (`hive close <id>`, then re-create)
+- Query system state naturally as part of the conversation
+- Handle complex workflows (molecules, dependencies) incrementally
+
+The `hive` CLI is the Mayor's API. The DB is the shared contract between Mayor and orchestrator.
 
 **Mayor Session Setup:**
 
+The Mayor session is created by the user via `opencode attach` or the web UI, **not** by the orchestrator. The orchestrator no longer owns the Mayor.
+
+```bash
+# User starts/attaches to the Mayor session
+opencode attach http://localhost:4096 --dir /path/to/project
+```
+
+The session's CLAUDE.md (or system prompt) should contain the Mayor prompt. Permissions are permissive — the Mayor is user-supervised:
+
 ```python
-def create_mayor_session(project_dir: str) -> str:
-    """Create the Mayor's persistent OpenCode session."""
-    session = opencode.create_session(
-        directory=project_dir,
-        title="mayor",
-        permission=[
-            # Mayor can read files to understand the codebase
-            {"permission": "read", "pattern": "*", "action": "allow"},
-            # Mayor can run non-destructive commands (ls, git log, etc.)
-            {"permission": "bash", "pattern": "git *", "action": "allow"},
-            {"permission": "bash", "pattern": "ls *", "action": "allow"},
-            {"permission": "bash", "pattern": "find *", "action": "allow"},
-            # Mayor should NOT edit files or run tests
-            {"permission": "edit", "pattern": "*", "action": "deny"},
-            {"permission": "write", "pattern": "*", "action": "deny"},
-            # No interactive questions — Mayor decides on its own
-            {"permission": "question", "pattern": "*", "action": "deny"},
-            {"permission": "plan_enter", "pattern": "*", "action": "deny"},
-        ],
-    )
-    return session["id"]
+# Mayor session permissions (set at session creation or via CLAUDE.md)
+MAYOR_PERMISSIONS = [
+    # Mayor can read the codebase
+    {"permission": "read", "pattern": "*", "action": "allow"},
+    # Mayor can run hive CLI, git, and other read-only commands
+    {"permission": "bash", "pattern": "*", "action": "allow"},
+    # Mayor can edit files if the diff is trivial (but the happy path is to defer to workers)
+    {"permission": "edit", "pattern": "*", "action": "allow"},
+    {"permission": "write", "pattern": "*", "action": "allow"},
+    # Mayor CAN ask the human questions (it's user-facing!)
+    # (no deny rule for "question")
+    # Mayor should stay in the project directory
+    {"permission": "external_directory", "pattern": "*", "action": "deny"},
+]
 ```
 
-**Mayor Prompt Template:**
+**Mayor Prompt Template (CLAUDE.md or system prompt):**
 
 ```
-You are the Mayor — the strategic coordinator of a multi-agent coding system.
+You are the Mayor — the strategic coordinator of a multi-agent coding system called Hive.
 
 ## YOUR ROLE
 
-You receive requests from a human and decompose them into concrete work items.
-You do NOT write code yourself. You plan, decompose, prioritize, and coordinate.
+You are the human's interface to the system. They chat with you to request work,
+ask questions, and monitor progress. You decompose their requests into concrete
+issues that worker agents will implement.
 
-## HOW TO CREATE WORK
+You do NOT write application code yourself. You plan, decompose, coordinate, and
+monitor. Workers do the coding.
 
-When you receive a request, analyze it and output a structured work plan:
+## YOUR TOOLS
 
-:::WORK_PLAN
-issues:
-  - id: "design"
-    title: "Design the auth middleware architecture"
-    description: "Create a design doc covering JWT validation, token refresh, ..."
-    type: "task"
-    priority: 1
-    project: "{project}"
+You have access to the `hive` CLI to manage the system:
 
-  - id: "implement"
-    title: "Implement JWT validation middleware"
-    description: "Based on the design doc, implement ..."
-    type: "task"
-    priority: 2
-    project: "{project}"
-    needs: ["design"]
+### Creating work
+  hive create "Issue title" "Detailed description of what to implement" --priority 1
+  # Priority: 0=critical, 1=high, 2=normal(default), 3=low, 4=backlog
 
-  - id: "tests"
-    title: "Write integration tests for auth flow"
-    description: "Cover happy path, expired tokens, malformed tokens, ..."
-    type: "task"
-    priority: 2
-    project: "{project}"
-    needs: ["implement"]
-:::
+### Monitoring
+  hive status                    # Overview: issue counts, active workers, queues
+  hive list                      # All issues
+  hive list --status in_progress # Filter by status
+  hive show <issue-id>           # Issue details + events
+  hive logs -f                   # Live event stream (like tail -f)
+  hive logs -n 50                # Last 50 events
+  hive logs --issue <id>         # Events for specific issue
+  hive logs --agent <id>         # Events for specific agent
 
-The orchestrator will parse this block and create the issues + dependencies in the DB.
+### Managing work
+  hive close <issue-id>          # Cancel an issue
+  hive ready                     # Show the ready queue (unblocked issues)
 
-## CURRENT STATE
+## WORKFLOW
 
-Active workers: {active_workers_summary}
-Open issues: {open_issues_summary}
-Recently completed: {recent_completions}
-Escalations pending: {escalations}
+When the human makes a request:
+
+1. **Understand**: Ask clarifying questions if the request is ambiguous
+2. **Explore**: Read relevant code/docs to understand the current state
+3. **Decompose**: Break the request into issues, each completable by one worker
+4. **Create**: Use `hive create` for each issue. Include enough context in the
+   description that a worker can implement it without asking questions.
+5. **Confirm**: Tell the human what you've queued and what to expect
+6. **Monitor**: Proactively check `hive status` and `hive logs` to report progress
+
+For multi-step workflows, create issues with clear ordering in descriptions.
+The orchestrator handles dependency resolution and worker scheduling.
 
 ## GUIDELINES
 
-- Decompose work into issues that a single agent can complete in one session
-- Each issue should be self-contained: include enough context in the description
-  that a worker can implement it without asking questions
-- Wire up dependencies — don't create issues that will fail because a prerequisite
-  isn't done yet
-- When handling escalations, read the failure details and decide:
-  - Can the issue be rephrased to be clearer? → Update description, re-queue
-  - Is it genuinely ambiguous? → Ask the human for clarification
-  - Is it a systemic problem? → File a bug, inform the human
+- Each issue should be self-contained. Workers don't see other issues.
+- Include relevant file paths, function names, and expected behavior in descriptions.
+- Don't over-decompose: a single coherent change is better as one issue.
+- Don't under-decompose: if a task touches 5+ files across different domains, split it.
+- When workers fail, check `hive show <id>` and `hive logs --issue <id>` to diagnose.
+  Then decide: rephrase and re-create the issue, or ask the human for guidance.
 - Be honest about what you don't know. Ask the human rather than guessing.
+- When the human asks "what's happening?", run `hive status` and `hive logs -n 10`.
 ```
 
-**The Orchestrator-Mayor Interface:**
+**The Orchestrator-Mayor Relationship:**
 
-The orchestrator sends messages to the Mayor session when:
-1. The human submits a new request
-2. A worker escalates (blocked/failed after retries)
-3. The human asks a status question
+The orchestrator and Mayor are **decoupled**. They share the SQLite DB but never communicate directly:
 
-```python
-async def send_to_mayor(message: str):
-    """Send a message to the Mayor session and wait for response."""
-    opencode.prompt_async(mayor_session_id, message)
-    # Wait for session.status → idle
-    await wait_for_idle(mayor_session_id)
-    # Parse the Mayor's response for :::WORK_PLAN::: blocks
-    messages = opencode.get_messages(mayor_session_id)
-    last = messages[-1]
-    work_plan = parse_work_plan(last)
-    if work_plan:
-        create_issues_from_plan(work_plan)
-
-
-async def handle_user_request(user_input: str):
-    """Human submits a request → route to Mayor."""
-    await send_to_mayor(f"""
-New request from user:
-
-{user_input}
-
-Analyze this request and create a work plan. Output a :::WORK_PLAN::: block.
-""")
-
-
-async def handle_escalation(issue, failure_details: str):
-    """Worker failed → ask Mayor what to do."""
-    await send_to_mayor(f"""
-ESCALATION: Worker failed on issue {issue.id}
-
-Title: {issue.title}
-Description: {issue.description}
-Failure details: {failure_details}
-Previous attempts: {db.count_events(issue.id, 'incomplete')}
-
-Options:
-1. Rephrase the issue description and re-queue
-2. Break it into smaller sub-issues
-3. Ask the human for clarification
-4. Mark as blocked and explain why
-
-Decide and output either a :::WORK_PLAN::: block or a :::HUMAN_QUESTION::: block.
-""")
+```
+Human ←→ Mayor session (interactive chat)
+              │
+              │ hive create / hive status / hive logs (bash tool calls)
+              ▼
+         SQLite DB ←→ Orchestrator (headless daemon)
+                           │
+                           │ spawns/monitors
+                           ▼
+                      Worker sessions
 ```
 
-**Mayor Context Cycling:**
+- The Mayor writes to the DB (via `hive create`, `hive close`)
+- The orchestrator reads from the DB (ready queue poll) and writes back (status updates, events)
+- The Mayor reads the orchestrator's state (via `hive status`, `hive logs`, `hive show`)
+- No RPC, no message passing, no structured output parsing — just shared DB state
 
-The Mayor is a persistent session, but it fills up like any LLM context. Cycling strategy:
+This is simpler and more robust than the previous design where the orchestrator
+drove the Mayor programmatically and parsed `:::WORK_PLAN:::` blocks.
 
-```python
-async def maybe_cycle_mayor():
-    """Cycle Mayor session when context is getting full."""
-    status = opencode.get_session_status(mayor_session_id)
-    messages = opencode.get_messages(mayor_session_id)
-    total_tokens = sum(
-        m["info"]["tokens"]["input"] + m["info"]["tokens"]["output"]
-        for m in messages
-    )
+**Escalation Flow:**
 
-    if total_tokens > MAYOR_CONTEXT_THRESHOLD:  # e.g., 120k tokens
-        # Summarize current state, create fresh session
-        state_summary = build_mayor_state_summary()  # from DB, not from context
-        old_session = mayor_session_id
-        new_session = create_mayor_session(project_dir)
-        # Prime new session with current state
-        opencode.prompt_async(new_session, f"""
-You are the Mayor resuming after a context cycle. Current system state:
+When workers fail, the orchestrator logs events to the DB. The Mayor sees these
+via `hive logs` or `hive show`. The human can ask "why did that fail?" and the
+Mayor diagnoses by reading the event trail. No special escalation protocol needed —
+it's just a conversation between human and Mayor, informed by DB state.
 
-{state_summary}
+For proactive monitoring, the Mayor can periodically run `hive status` during
+a conversation to check on worker progress and surface issues early.
 
-Ready for the next request.
-""")
-        opencode.delete_session(old_session)
-        return new_session
-```
+**Mayor Context Management:**
 
-The key insight: Mayor state lives in the **DB**, not in the context window. When the Mayor cycles, it reads current state from the DB. The context is disposable.
+The Mayor session is long-lived but context is finite. Since the Mayor's state
+lives in the DB (not in the conversation), the user can start a fresh session
+at any time without losing work. The Mayor just runs `hive status` to catch up.
+
+OpenCode's built-in context compaction also helps — the TUI will compress older
+turns automatically as the context fills up.
 
 ### 10.3 The Refinery: Merge Processor
 
@@ -1442,25 +1422,25 @@ Same pattern as the Mayor — state lives in the DB and git, not in the context 
 
 ### 10.4 Gas Town Role Mapping (Updated)
 
-| Gas Town Role | This System | How |
-|---------------|-------------|-----|
-| **Mayor** | **Mayor LLM session** | Persistent OpenCode session for strategic decisions |
-| **Witness** | **Orchestrator code** | SSE event consumer + staleness checker (deterministic) |
-| **Deacon** | **Orchestrator code** | The orchestrator process itself — always running |
-| **Boot** | **Orchestrator code** | `reconcile_on_startup()` (deterministic) |
-| **Refinery** | **Refinery LLM session** | Persistent OpenCode session for merge processing |
-| **Dogs** | **Not needed** | Mayor can spawn ad-hoc issues for cross-cutting work |
-| **Polecats** | **Worker LLM sessions** | Ephemeral OpenCode sessions, one per issue |
+| Gas Town Role | This System                         | How                                                                              |
+| ------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
+| **Mayor**     | **Mayor LLM session (user-facing)** | User chats in OpenCode TUI/web; Mayor uses `hive` CLI tools to manage the system |
+| **Witness**   | **Orchestrator code**               | SSE event consumer + staleness checker (deterministic)                           |
+| **Deacon**    | **Orchestrator code**               | The orchestrator process itself — always running                                 |
+| **Boot**      | **Orchestrator code**               | `reconcile_on_startup()` (deterministic)                                         |
+| **Refinery**  | **Refinery LLM session**            | Persistent OpenCode session for merge processing                                 |
+| **Dogs**      | **Not needed**                      | Mayor can spawn ad-hoc issues via `hive create` for cross-cutting work           |
+| **Polecats**  | **Worker LLM sessions**             | Ephemeral OpenCode sessions, one per issue                                       |
 
 ### 10.5 Context Cycling Strategy
 
 All three agent types need context cycling, but with different strategies:
 
-| Agent | Cycling Trigger | State Survives In |
-|-------|----------------|-------------------|
-| **Mayor** | Token count > threshold (~120k) | DB (issues, events, agent state) |
-| **Refinery** | Token count > threshold, or after each extraordinary merge | Git state + DB |
-| **Workers** | Between molecule steps (always); mid-step if context fills | Git worktree (sandbox) |
+| Agent        | Cycling Trigger                                                                          | State Survives In                                                       |
+| ------------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **Mayor**    | User starts a fresh session when context feels stale; OpenCode auto-compacts older turns | DB (issues, events, agent state) — Mayor runs `hive status` to catch up |
+| **Refinery** | Token count > threshold, or after each extraordinary merge                               | Git state + DB                                                          |
+| **Workers**  | Between molecule steps (always); mid-step if context fills                               | Git worktree (sandbox)                                                  |
 
 The key insight from Gas Town: **state does not live in the context window**. The context is disposable working memory. Durable state lives in the DB (issues, events) and git (code, branches). When any agent cycles, it reads its state from the DB on startup.
 
@@ -1541,29 +1521,28 @@ async def retry_or_escalate(agent, issue):
         teardown_agent(agent)
 
     else:
-        # Multiple workers failed — escalate to Mayor
+        # Multiple workers failed — mark issue as 'failed'
         teardown_agent(agent)
-        failure_details = db.get_events(issue.id, event_type="incomplete")
-        await handle_escalation(issue, format_failures(failure_details))
+        db.update_issue(issue.id, status="failed")
+        db.log_event(issue.id, agent.id, "escalated",
+                     detail={"reason": "max retries exceeded"})
+        # The Mayor will see this via `hive logs` or `hive show`
+        # and can discuss next steps with the human
 ```
 
-### 11.4 Mayor-Side Escalation (LLM Reasoning)
+### 11.4 Mayor-Side Escalation (Conversational)
 
-The Mayor receives the escalation context and decides what to do (see Section 10.2 `handle_escalation`). Options the Mayor can take:
+With the Mayor as the user-facing interface, escalation is natural conversation rather than structured message passing. When a worker fails after retries:
 
-1. **Rephrase and re-queue**: Update the issue description to be clearer, unassign it
-2. **Decompose**: Break the issue into smaller sub-issues that are individually tractable
-3. **Ask the human**: Output a `:::HUMAN_QUESTION:::` block that the orchestrator surfaces
+1. The orchestrator marks the issue as `failed` and logs the event
+2. The Mayor sees this when checking `hive status` or `hive logs`
+3. The Mayor tells the human: "Issue w-a3f8 failed after 2 retries. Here's what happened..."
+4. The human and Mayor discuss next steps:
+   - Rephrase the issue → `hive close w-a3f8` + `hive create "better title" "clearer description"`
+   - Break it down → create multiple smaller issues
+   - Give up → `hive close w-a3f8`
 
-```python
-# If Mayor outputs a :::HUMAN_QUESTION::: block:
-async def surface_question_to_human(question: str, issue):
-    """Mayor needs human input — surface it."""
-    print(f"\nMAYOR QUESTION (re: {issue.id} — {issue.title}):")
-    print(f"  {question}")
-    print(f"  Reply via: orchestrator answer {issue.id} '<your answer>'")
-    db.update_issue(issue.id, status="waiting_for_human")
-```
+No `:::HUMAN_QUESTION:::` blocks, no special escalation protocol. The Mayor is already in conversation with the human — it just brings up the failure naturally.
 
 ---
 
@@ -1573,7 +1552,7 @@ async def surface_question_to_human(question: str, issue):
 
 - **WAL mode**: Multiple readers, single writer. At <30 agents, most operations are reads (checking ready queue). Writes are infrequent (claim, status transition, create).
 - **Busy timeout**: 5 seconds handles any write contention from the single orchestrator process.
-- **Single writer**: The orchestrator is the only process that writes to the DB. Agents never touch SQLite directly — they work through OpenCode sessions and the orchestrator observes results.
+- **Two writers**: The orchestrator and the Mayor (via `hive` CLI) both write to the DB. WAL mode handles this cleanly — writes are serialized by SQLite's busy timeout. The Mayor's writes are infrequent (creating/closing issues), while the orchestrator writes more often (claiming, status transitions, events).
 
 ### OpenCode Concurrency
 
@@ -1591,24 +1570,25 @@ async def surface_question_to_human(question: str, issue):
 
 ## 13. Failure Modes and Recovery
 
-| Failure                        | Detection                                        | Recovery                                                      |
-| ------------------------------ | ------------------------------------------------ | ------------------------------------------------------------- |
-| **Worker session crashes**     | `session.error` SSE event                        | Unassign issue, retry with fresh worker                       |
-| **Worker hangs (no progress)** | Lease expiry + no progress signals (Section 7.3) | Abort session, unassign, reassign                             |
-| **Mayor session crashes**      | `session.error` SSE event                        | Recreate Mayor session, prime with DB state                   |
+| Failure                        | Detection                                        | Recovery                                                        |
+| ------------------------------ | ------------------------------------------------ | --------------------------------------------------------------- |
+| **Worker session crashes**     | `session.error` SSE event                        | Unassign issue, retry with fresh worker                         |
+| **Worker hangs (no progress)** | Lease expiry + no progress signals (Section 7.3) | Abort session, unassign, reassign                               |
+| **Mayor session crashes**      | `session.error` SSE event                        | Recreate Mayor session, prime with DB state                     |
 | **Refinery session crashes**   | `session.error` SSE event                        | Recreate Refinery session; pending merges remain in merge_queue |
-| **OpenCode server dies**       | Health check on main loop                        | Enter degraded mode; recovery loop attempts reconnect         |
-| **Orchestrator crashes**       | External process monitor (systemd, etc.)         | On restart: reconcile DB state with OpenCode sessions         |
-| **LLM rate limit**             | `session.status { type: "retry" }`               | OpenCode auto-retries; orchestrator extends leases and waits  |
-| **Worker produces bad work**   | Completion assessment or Refinery test gate       | Escalate to Mayor for re-decomposition or re-assignment       |
-| **Merge conflict (complex)**   | Refinery reports `needs_human`                   | Escalate to Mayor → human                                     |
-| **Permission blocks agent**    | Permission unblocker loop (Section 7.5)          | Auto-resolve via policy, or log for human review              |
+| **OpenCode server dies**       | Health check on main loop                        | Enter degraded mode; recovery loop attempts reconnect           |
+| **Orchestrator crashes**       | External process monitor (systemd, etc.)         | On restart: reconcile DB state with OpenCode sessions           |
+| **LLM rate limit**             | `session.status { type: "retry" }`               | OpenCode auto-retries; orchestrator extends leases and waits    |
+| **Worker produces bad work**   | Completion assessment or Refinery test gate      | Escalate to Mayor for re-decomposition or re-assignment         |
+| **Merge conflict (complex)**   | Refinery reports `needs_human`                   | Escalate to Mayor → human                                       |
+| **Permission blocks agent**    | Permission unblocker loop (Section 7.5)          | Auto-resolve via policy, or log for human review                |
 
 ### Degraded Mode
 
 When OpenCode (or another critical dependency) becomes unreachable, the orchestrator enters **degraded mode** rather than crashing or spinning in error loops.
 
 **Entering degraded mode:**
+
 ```python
 def enter_degraded_mode(reason: str):
     """Transition the engine to degraded mode."""
@@ -1618,12 +1598,14 @@ def enter_degraded_mode(reason: str):
 ```
 
 **Behavior in degraded mode:**
+
 - **Stop dispatching**: No new workers are spawned, no new issues are claimed
 - **Keep recovery loop**: A tight loop attempts to reconnect to OpenCode (exponential backoff, capped at 60s)
 - **Continue DB sweeps**: Periodic sweeps still run to reconcile DB state — mark sessions as stale, update lease expirations, process any pure-DB operations
 - **Preserve in-flight state**: Running agents are not killed. If OpenCode comes back, they may still be executing. The reconciliation step handles this.
 
 **Recovery:**
+
 ```python
 async def degraded_mode_recovery_loop():
     """Attempt to recover from degraded mode."""
@@ -1726,6 +1708,7 @@ No special infrastructure. The CV is an emergent property of the event log.
 #### Delivered Features
 
 **Core Infrastructure** ✅
+
 - SQLite database with WAL mode (6 tables)
 - Ready queue with dependency resolution
 - OpenCode HTTP client (full API coverage)
@@ -1734,6 +1717,7 @@ No special infrastructure. The CV is an emergent property of the event log.
 - Hash-based ID generation
 
 **Orchestration Engine** ✅
+
 - Main event loop with worker pool
 - Atomic issue claiming (CAS)
 - Lease-based staleness (5min default)
@@ -1741,17 +1725,20 @@ No special infrastructure. The CV is an emergent property of the event log.
 - Session lifecycle management
 
 **Agent Types** ✅/⏳
+
 - ✅ Mayor: Strategic decomposition
 - ✅ Workers: Autonomous execution
 - ✅ Session cycling for molecules
 - ⏳ Refinery: Designed but not implemented
 
 **Human Interface** ✅
+
 - CLI: 7 commands (create, list, ready, show, close, status, start)
 - Real-time status monitoring
 - Event history visualization
 
 **Quality** ✅
+
 - 78 unit tests (100% passing)
 - 17 integration tests
 - Comprehensive documentation
@@ -1777,20 +1764,20 @@ See `hive/README.md` for usage guide.
 
 ## 16. Comparison with Gas Town
 
-| Dimension                 | Gas Town                                     | This System                                      |
-| ------------------------- | -------------------------------------------- | ------------------------------------------------ |
-| **Agent runtime**         | Claude Code in tmux                          | OpenCode server (HTTP API)                       |
-| **Work queue**            | Beads (Dolt + JSONL + Git)                   | Single SQLite DB                                 |
-| **Scheduling**            | `bd ready` CLI query                         | Same SQL query, run by orchestrator              |
-| **Strategic brain**       | Mayor (LLM in tmux)                          | Mayor (LLM via OpenCode session)                 |
-| **Agent monitoring**      | Witness patrol + Deacon heartbeat            | Lease-based staleness + SSE events + permission unblocker |
-| **Session management**    | tmux sessions, `gt prime`                    | OpenCode session lifecycle API                   |
-| **Inter-agent comms**     | Mail protocol in beads                       | Orchestrator mediates via DB + structured signals |
-| **Crash recovery**        | Witness detects stalled, respawns            | Lease expiry + degraded mode + reconciliation    |
-| **Merge queue**           | Refinery agent (LLM in tmux)                 | `merge_queue` table + Refinery LLM + mechanical fast-path |
-| **Multi-project**         | Two-level beads (Town/Rig)                   | `project` column + OpenCode `?directory=`        |
-| **Infrastructure agents** | Deacon, Boot, Witness, Dogs                  | Orchestrator code (deterministic)                |
-| **Lines of Go/Rust**      | Thousands                                    | Zero (Python orchestrator + SQLite)              |
+| Dimension                 | Gas Town                          | This System                                               |
+| ------------------------- | --------------------------------- | --------------------------------------------------------- |
+| **Agent runtime**         | Claude Code in tmux               | OpenCode server (HTTP API)                                |
+| **Work queue**            | Beads (Dolt + JSONL + Git)        | Single SQLite DB                                          |
+| **Scheduling**            | `bd ready` CLI query              | Same SQL query, run by orchestrator                       |
+| **Strategic brain**       | Mayor (LLM in tmux)               | Mayor (LLM via OpenCode session)                          |
+| **Agent monitoring**      | Witness patrol + Deacon heartbeat | Lease-based staleness + SSE events + permission unblocker |
+| **Session management**    | tmux sessions, `gt prime`         | OpenCode session lifecycle API                            |
+| **Inter-agent comms**     | Mail protocol in beads            | Orchestrator mediates via DB + structured signals         |
+| **Crash recovery**        | Witness detects stalled, respawns | Lease expiry + degraded mode + reconciliation             |
+| **Merge queue**           | Refinery agent (LLM in tmux)      | `merge_queue` table + Refinery LLM + mechanical fast-path |
+| **Multi-project**         | Two-level beads (Town/Rig)        | `project` column + OpenCode `?directory=`                 |
+| **Infrastructure agents** | Deacon, Boot, Witness, Dogs       | Orchestrator code (deterministic)                         |
+| **Lines of Go/Rust**      | Thousands                         | Zero (Python orchestrator + SQLite)                       |
 
 ### What We Gain
 
@@ -1888,15 +1875,14 @@ See `hive/README.md` for usage guide.
 
 2. **Agent-to-agent knowledge transfer**: Gas Town's mail protocol lets agents share findings. Our workers are more isolated — they only communicate through the orchestrator. How does worker B learn what worker A discovered? Options: shared notes in issue metadata, Mayor-mediated context injection into worker prompts, shared scratch files in the repo.
 
-3. **Mayor model selection**: The Mayor reasons about architecture and decomposition — should it use a stronger model (e.g., Opus) while workers use a cheaper model (e.g., Sonnet)? OpenCode supports per-session model selection.
+3. **Mayor model selection**: ~~The Mayor reasons about architecture and decomposition — should it use a stronger model (e.g., Opus) while workers use a cheaper model (e.g., Sonnet)?~~ **Resolved**: The Mayor is a user-facing OpenCode session — model selection is configured at session level by the user. Workers use `HIVE_DEFAULT_MODEL` (configurable per-worker via the orchestrator). Using a stronger model for the Mayor and cheaper for workers is the recommended configuration.
 
 4. **Scale ceiling**: SQLite WAL mode is good for ~30 concurrent readers. If we need 100+ agents, when and how do we migrate to Postgres? The thin-server architecture makes this swap straightforward.
 
 5. **Cost management**: With Mayor + Refinery + N workers running concurrently, token costs can spike. OpenCode reports token usage per message. How do we implement budget caps, per-agent cost tracking, and graceful degradation when approaching limits?
 
-6. **Mayor scope**: How much should the Mayor do? Should it also review completed work before handing to the Refinery? Should it monitor overall progress and send status updates? The more responsibilities we add, the more context it consumes — but it's also the only agent with strategic visibility.
+6. **Mayor scope**: ~~How much should the Mayor do?~~ **Resolved**: The Mayor is the user-facing interface. It does whatever the user asks — from creating issues to monitoring progress to diagnosing failures. Its scope is defined by the conversation, not by the orchestrator. Context management is handled by OpenCode's built-in compaction and the user's ability to start fresh sessions (state is in the DB, not the context).
 
 7. **Refinery worktree management**: The Refinery needs to work in git worktrees to resolve conflicts. Should it have its own persistent worktree, or should the orchestrator create temporary ones per merge? Persistent is simpler; temporary is cleaner.
 
 8. **Multiple OpenCode servers**: A single OpenCode server might bottleneck at many concurrent sessions (Mayor + Refinery + N workers). Should the orchestrator manage multiple server instances, or does OpenCode scale sufficiently within a single process?
-
