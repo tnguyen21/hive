@@ -42,6 +42,23 @@ class MergeProcessor:
         self.refinery_session_id: Optional[str] = None
         self.running = False
 
+    async def shutdown(self):
+        """Clean up the refinery session on shutdown."""
+        if self.refinery_session_id:
+            try:
+                await self.opencode.abort_session(
+                    self.refinery_session_id, directory=self.project_path
+                )
+            except Exception:
+                pass
+            try:
+                await self.opencode.delete_session(
+                    self.refinery_session_id, directory=self.project_path
+                )
+            except Exception:
+                pass
+            self.refinery_session_id = None
+
     async def process_queue_once(self):
         """Process the next item in the merge queue. One at a time, sequential."""
         entries = self.db.get_queued_merges(limit=1)
@@ -65,7 +82,7 @@ class MergeProcessor:
             success, test_output = await self._try_mechanical_merge(entry)
 
             if success:
-                self._finalize_issue(entry)
+                await self._finalize_issue(entry)
             else:
                 # Tier 2: Send to Refinery LLM
                 await self._send_to_refinery(entry, test_output)
@@ -95,7 +112,9 @@ class MergeProcessor:
         # Step 1: Rebase onto main
         rebase_ok = rebase_onto_main(worktree)
         if not rebase_ok:
-            self.db.log_event(issue_id, agent_id, "rebase_conflict", {"branch": branch_name})
+            self.db.log_event(
+                issue_id, agent_id, "rebase_conflict", {"branch": branch_name}
+            )
             abort_rebase(worktree)
             return (False, None)
 
@@ -104,7 +123,9 @@ class MergeProcessor:
         # Step 2: Run tests (if configured)
         test_output = None
         if Config.TEST_COMMAND:
-            test_ok, test_output = run_command_in_worktree(worktree, Config.TEST_COMMAND)
+            test_ok, test_output = run_command_in_worktree(
+                worktree, Config.TEST_COMMAND
+            )
             if not test_ok:
                 self.db.log_event(
                     issue_id,
@@ -114,7 +135,9 @@ class MergeProcessor:
                 )
                 return (False, test_output)
 
-            self.db.log_event(issue_id, agent_id, "tests_passed", {"command": Config.TEST_COMMAND})
+            self.db.log_event(
+                issue_id, agent_id, "tests_passed", {"command": Config.TEST_COMMAND}
+            )
 
         # Step 3: Merge to main (ff-only)
         try:
@@ -131,7 +154,9 @@ class MergeProcessor:
         self.db.log_event(issue_id, agent_id, "merged", {"branch": branch_name})
         return (True, None)
 
-    async def _send_to_refinery(self, entry: Dict[str, Any], test_output: Optional[str] = None):
+    async def _send_to_refinery(
+        self, entry: Dict[str, Any], test_output: Optional[str] = None
+    ):
         """
         Hand a merge to the Refinery LLM for processing.
 
@@ -182,7 +207,7 @@ class MergeProcessor:
 
             # Process result
             if result["status"] == "merged":
-                self._finalize_issue(entry)
+                await self._finalize_issue(entry)
                 self.db.log_event(
                     issue_id,
                     agent_id,
@@ -219,7 +244,9 @@ class MergeProcessor:
                 {"error": str(e)},
             )
 
-    async def _wait_for_refinery(self, session_id: str, timeout: int = None) -> Dict[str, Any]:
+    async def _wait_for_refinery(
+        self, session_id: str, timeout: int = None
+    ) -> Dict[str, Any]:
         """
         Wait for the refinery session to become idle, then parse the result.
 
@@ -241,10 +268,14 @@ class MergeProcessor:
             elapsed += poll_interval
 
             try:
-                status = await self.opencode.get_session_status(session_id, directory=self.project_path)
+                status = await self.opencode.get_session_status(
+                    session_id, directory=self.project_path
+                )
                 if status and status.get("type") == "idle":
                     # Session finished — get messages and parse result
-                    messages = await self.opencode.get_messages(session_id, directory=self.project_path)
+                    messages = await self.opencode.get_messages(
+                        session_id, directory=self.project_path
+                    )
                     return parse_merge_result(messages)
             except Exception:
                 continue
@@ -257,7 +288,7 @@ class MergeProcessor:
             "conflicts_resolved": 0,
         }
 
-    def _finalize_issue(self, entry: Dict[str, Any]):
+    async def _finalize_issue(self, entry: Dict[str, Any]):
         """
         Mark an issue as finalized and clean up.
 
@@ -278,16 +309,35 @@ class MergeProcessor:
             {"merged_at": now},
         )
 
-        # Tear down worktree and agent
-        self._teardown_after_finalize(entry)
+        # Tear down worktree, session, and agent
+        await self._teardown_after_finalize(entry)
 
-    def _teardown_after_finalize(self, entry: Dict[str, Any]):
+    async def _teardown_after_finalize(self, entry: Dict[str, Any]):
         """
-        Clean up worktree and agent state after finalization.
+        Clean up worktree, session, and agent state after finalization.
 
         Args:
             entry: Merge queue entry dict
         """
+        # Clean up the opencode session if one exists for the agent
+        agent_id = entry.get("agent_id")
+        if agent_id:
+            agent = self.db.get_agent(agent_id)
+            session_id = agent.get("session_id") if agent else None
+            if session_id:
+                try:
+                    await self.opencode.abort_session(
+                        session_id, directory=entry.get("worktree")
+                    )
+                except Exception:
+                    pass
+                try:
+                    await self.opencode.delete_session(
+                        session_id, directory=entry.get("worktree")
+                    )
+                except Exception:
+                    pass
+
         # Remove worktree
         if entry.get("worktree"):
             try:
@@ -303,7 +353,6 @@ class MergeProcessor:
                 pass  # Best-effort cleanup
 
         # Mark agent idle
-        agent_id = entry.get("agent_id")
         if agent_id:
             self.db.conn.execute(
                 """
@@ -329,7 +378,9 @@ class MergeProcessor:
         # Check if existing session is still alive
         if self.refinery_session_id:
             try:
-                status = await self.opencode.get_session_status(self.refinery_session_id, directory=self.project_path)
+                status = await self.opencode.get_session_status(
+                    self.refinery_session_id, directory=self.project_path
+                )
                 if status is not None:
                     return self.refinery_session_id
             except Exception:

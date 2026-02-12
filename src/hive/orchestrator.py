@@ -117,16 +117,16 @@ class Orchestrator:
                     pass  # Non-critical, best-effort
                 break
 
-    def _reconcile_stale_agents(self):
+    async def _reconcile_stale_agents(self):
         """Clean up stale agents from previous daemon runs.
 
         On startup, any agents still marked 'working' in the DB are leftovers
-        from a crashed/stopped daemon. Mark them failed and release their issues
-        back to the ready queue (if still in_progress).
+        from a crashed/stopped daemon. Abort their opencode sessions, mark them
+        failed, and release their issues back to the ready queue.
         """
         cursor = self.db.conn.execute(
             """
-            SELECT id, current_issue, worktree, name
+            SELECT id, current_issue, worktree, name, session_id
             FROM agents
             WHERE status = 'working'
             """
@@ -143,10 +143,22 @@ class Orchestrator:
             agent_id = agent_dict["id"]
             issue_id = agent_dict["current_issue"]
             worktree = agent_dict["worktree"]
+            session_id = agent_dict["session_id"]
+
+            # Abort the orphaned opencode session
+            if session_id:
+                try:
+                    await self.opencode.abort_session(session_id, directory=worktree)
+                except Exception:
+                    pass  # Best-effort; session may already be dead
+                try:
+                    await self.opencode.delete_session(session_id, directory=worktree)
+                except Exception:
+                    pass
 
             # Mark agent failed
             self.db.conn.execute(
-                "UPDATE agents SET status = 'failed', current_issue = NULL WHERE id = ?",
+                "UPDATE agents SET status = 'failed', current_issue = NULL, session_id = NULL WHERE id = ?",
                 (agent_id,),
             )
 
@@ -165,7 +177,7 @@ class Orchestrator:
                     issue_id,
                     agent_id,
                     "reconciled",
-                    {"reason": "stale agent from previous daemon run"},
+                    {"reason": "stale agent from previous daemon run, session aborted"},
                 )
 
             # Clean up worktree
@@ -178,11 +190,142 @@ class Orchestrator:
         self.db.conn.commit()
         print(f"Reconciled {len(stale)} stale agent(s)")
 
+    async def _shutdown_all_sessions(self):
+        """Abort and delete all active opencode sessions on shutdown.
+
+        Called from the orchestrator's finally block to prevent orphaned
+        sessions from continuing to consume tokens after the daemon stops.
+        """
+        if not self.active_agents:
+            return
+
+        print(f"Shutting down {len(self.active_agents)} active session(s)...")
+
+        for agent_id, agent in list(self.active_agents.items()):
+            try:
+                await self.opencode.abort_session(
+                    agent.session_id, directory=agent.worktree
+                )
+            except Exception:
+                pass
+            try:
+                await self.opencode.delete_session(
+                    agent.session_id, directory=agent.worktree
+                )
+            except Exception:
+                pass
+
+            # Mark agent failed in DB
+            try:
+                self.db.conn.execute(
+                    """
+                    UPDATE agents
+                    SET status = 'failed', current_issue = NULL, session_id = NULL
+                    WHERE id = ?
+                    """,
+                    (agent_id,),
+                )
+                # Release issue back to open if still in_progress
+                self.db.conn.execute(
+                    """
+                    UPDATE issues
+                    SET assignee = NULL, status = 'open'
+                    WHERE id = ? AND status = 'in_progress'
+                    """,
+                    (agent.issue_id,),
+                )
+            except Exception:
+                pass
+
+        try:
+            self.db.conn.commit()
+        except Exception:
+            pass
+
+        # Also clean up refinery session
+        await self.merge_processor.shutdown()
+
+        self.active_agents.clear()
+        print("All sessions shut down.")
+
+    async def cancel_agent_for_issue(self, issue_id: str):
+        """Cancel the active agent working on an issue.
+
+        Aborts the opencode session, cleans up the agent and worktree.
+        Called when an issue is canceled while an agent is working on it.
+
+        Args:
+            issue_id: The issue ID that was canceled
+        """
+        # Find the agent working on this issue
+        agent = None
+        for a in self.active_agents.values():
+            if a.issue_id == issue_id:
+                agent = a
+                break
+
+        if not agent:
+            return  # No active agent for this issue
+
+        print(
+            f"Canceling agent {agent.name} (session {agent.session_id}) for issue {issue_id}"
+        )
+
+        # Abort the opencode session
+        try:
+            await self.opencode.abort_session(
+                agent.session_id, directory=agent.worktree
+            )
+        except Exception:
+            pass  # Best-effort
+
+        # Delete the session to prevent any restart
+        try:
+            await self.opencode.delete_session(
+                agent.session_id, directory=agent.worktree
+            )
+        except Exception:
+            pass
+
+        # Signal the monitor_agent loop to stop waiting
+        event = self.session_status_events.get(agent.session_id)
+        if event:
+            event.set()
+
+        # Mark agent as failed
+        self.db.conn.execute(
+            """
+            UPDATE agents
+            SET status = 'failed', current_issue = NULL, session_id = NULL
+            WHERE id = ?
+            """,
+            (agent.agent_id,),
+        )
+        self.db.conn.commit()
+
+        self.db.log_event(
+            issue_id,
+            agent.agent_id,
+            "agent_canceled",
+            {"reason": "issue canceled by user, session aborted"},
+        )
+
+        # Clean up worktree
+        if agent.worktree:
+            try:
+                remove_worktree(agent.worktree)
+            except Exception:
+                pass
+
+        # Remove from active agents
+        if agent.agent_id in self.active_agents:
+            del self.active_agents[agent.agent_id]
+
     async def start(self):
         """Start the orchestrator."""
         self.running = True
         self._setup_sse_handlers()
-        self._reconcile_stale_agents()
+        await self._reconcile_stale_agents()
 
         # Start SSE event consumer in background
         sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
@@ -198,6 +341,8 @@ class Orchestrator:
             await self.main_loop()
         finally:
             self.running = False
+            # Abort all active opencode sessions before shutting down
+            await self._shutdown_all_sessions()
             self.sse_client.stop()
             await sse_task
             await permission_task
@@ -357,6 +502,14 @@ class Orchestrator:
             remove_worktree(worktree_path)
             self.db.update_issue_status(issue_id, "failed")
 
+    def _is_issue_canceled(self, issue_id: str) -> bool:
+        """Check if an issue has been canceled in the database."""
+        try:
+            issue = self.db.get_issue(issue_id)
+            return issue is not None and issue.get("status") == "canceled"
+        except Exception:
+            return False
+
     async def monitor_agent(self, agent: AgentIdentity):
         """
         Monitor an agent until completion.
@@ -365,6 +518,9 @@ class Orchestrator:
         activity. Each SSE event resets the clock via _renew_lease_for_session.
         The agent is only declared stalled if there's been NO activity for
         the full lease duration.
+
+        Also checks periodically if the issue was canceled, and if so,
+        aborts the session immediately.
 
         Args:
             agent: Agent identity
@@ -382,9 +538,19 @@ class Orchestrator:
             while True:
                 try:
                     await asyncio.wait_for(event.wait(), timeout=check_interval)
-                    # Event was set — session went idle, agent is done
+                    # Event was set — could be idle (done) or canceled
+                    # Check if canceled before assessing completion
+                    if self._is_issue_canceled(agent.issue_id):
+                        # Issue was canceled while agent was working.
+                        # cancel_agent_for_issue already handled cleanup + set the event.
+                        return
                     break
                 except asyncio.TimeoutError:
+                    # Check if the issue was canceled
+                    if self._is_issue_canceled(agent.issue_id):
+                        await self.cancel_agent_for_issue(agent.issue_id)
+                        return
+
                     # Check if there's been recent activity
                     last_activity = self._session_last_activity.get(
                         agent.session_id, datetime.now()
@@ -413,6 +579,25 @@ class Orchestrator:
                 del self.session_status_events[agent.session_id]
             self._session_last_activity.pop(agent.session_id, None)
 
+    async def _cleanup_session(self, agent: AgentIdentity):
+        """Abort and delete an agent's opencode session.
+
+        Called after agent completion or failure to ensure the session
+        does not linger and consume tokens.
+        """
+        try:
+            await self.opencode.abort_session(
+                agent.session_id, directory=agent.worktree
+            )
+        except Exception:
+            pass
+        try:
+            await self.opencode.delete_session(
+                agent.session_id, directory=agent.worktree
+            )
+        except Exception:
+            pass
+
     async def handle_agent_complete(self, agent: AgentIdentity):
         """
         Handle agent completion.
@@ -420,6 +605,23 @@ class Orchestrator:
         Args:
             agent: Agent identity
         """
+        # Check if issue was canceled/finalized while the agent was working.
+        # If so, don't overwrite the status — just clean up the session.
+        current_issue = self.db.get_issue(agent.issue_id)
+        if current_issue and current_issue.get("status") in ("canceled", "finalized"):
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "agent_complete_skipped",
+                {
+                    "reason": f"issue already {current_issue['status']}, cleaning up session"
+                },
+            )
+            await self._cleanup_session(agent)
+            if agent.agent_id in self.active_agents:
+                del self.active_agents[agent.agent_id]
+            return
+
         # Get messages from session
         try:
             messages = await self.opencode.get_messages(
@@ -470,12 +672,12 @@ class Orchestrator:
                     next_step = self.db.get_next_ready_step(issue["parent_id"])
 
                     if next_step:
-                        # Session-cycle to next step
+                        # Session-cycle to next step (abort old session inside)
                         await self.cycle_agent_to_next_step(agent, next_step)
                         return  # Don't remove from active agents yet
 
-                # No more steps or not a molecule - release agent
-                # Remove from active agents
+                # No more steps or not a molecule - clean up session and release agent
+                await self._cleanup_session(agent)
                 if agent.agent_id in self.active_agents:
                     del self.active_agents[agent.agent_id]
 
@@ -490,7 +692,8 @@ class Orchestrator:
                     {"reason": result.reason, "summary": result.summary},
                 )
 
-                # Remove from active agents
+                # Clean up session and release agent
+                await self._cleanup_session(agent)
                 if agent.agent_id in self.active_agents:
                     del self.active_agents[agent.agent_id]
 
@@ -501,7 +704,8 @@ class Orchestrator:
                 "completion_error",
                 {"error": str(e)},
             )
-            # Remove from active agents
+            # Clean up session and release agent
+            await self._cleanup_session(agent)
             if agent.agent_id in self.active_agents:
                 del self.active_agents[agent.agent_id]
 
@@ -624,20 +828,16 @@ class Orchestrator:
             {"lease_expired": True},
         )
 
-        # Abort the session
-        try:
-            await self.opencode.abort_session(
-                agent.session_id, directory=agent.worktree
-            )
-        except Exception:
-            pass  # Best-effort, session may already be dead
+        # Abort and delete the session
+        await self._cleanup_session(agent)
 
         # Mark agent as failed so it's not picked up again
         self.db.conn.execute(
             """
             UPDATE agents
             SET status = 'failed',
-                current_issue = NULL
+                current_issue = NULL,
+                session_id = NULL
             WHERE id = ?
             """,
             (agent.agent_id,),
