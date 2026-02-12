@@ -383,24 +383,35 @@ class Database:
             )
 
     def get_events(
-        self, issue_id: Optional[str] = None, agent_id: Optional[str] = None
+        self,
+        issue_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Get events filtered by issue or agent."""
-        if issue_id:
-            cursor = self.conn.execute(
-                "SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC",
-                (issue_id,),
-            )
-        elif agent_id:
-            cursor = self.conn.execute(
-                "SELECT * FROM events WHERE agent_id = ? ORDER BY created_at DESC",
-                (agent_id,),
-            )
-        else:
-            cursor = self.conn.execute(
-                "SELECT * FROM events ORDER BY created_at DESC LIMIT 100"
-            )
+        """Get events filtered by issue, agent, or type."""
+        conditions = []
+        params = []
 
+        if issue_id:
+            conditions.append("issue_id = ?")
+            params.append(issue_id)
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
+
+        if conditions:
+            where_clause = " AND ".join(conditions)
+            query = f"SELECT * FROM events WHERE {where_clause} ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+        else:
+            query = "SELECT * FROM events ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+        cursor = self.conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
     def get_events_since(

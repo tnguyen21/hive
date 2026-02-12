@@ -1,7 +1,7 @@
 """Data models for Hive orchestrator."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -22,14 +22,6 @@ class CompletionResult:
     def test_result(self) -> Optional[bool]:
         """Get test result from artifacts."""
         return self.artifacts.get("test_result")
-
-
-@dataclass
-class WorkPlan:
-    """Mayor's work plan decomposition."""
-
-    issues: List[Dict[str, Any]]
-    summary: Optional[str] = None
 
 
 @dataclass

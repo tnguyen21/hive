@@ -1,6 +1,6 @@
 # Hive: Lightweight Multi-Agent Orchestrator
 
-A simplified multi-agent orchestration system inspired by Gas Town, using OpenCode server mode as the agent runtime and SQLite as the work queue.
+A simplified multi-agent orchestration system using OpenCode server mode as the agent runtime and SQLite as the work queue.
 
 ## Overview
 
@@ -15,25 +15,23 @@ Hive coordinates multiple AI coding agents working concurrently on a codebase. I
 ## Architecture
 
 ```
-Human (CLI)
-    ↓
-Mayor (LLM) ────→ Decomposes into Issues → SQLite DB
-    ↓
-Orchestrator ───→ Queries Ready Queue
-    ↓
-Worker Sessions ─→ Execute Issues (in git worktrees)
-    ↓
-Merge Queue ─────→ Refinery (future) or Manual Merge
-    ↓
-Finalized (main branch updated)
+Human ←→ Mayor TUI (opencode @mayor agent)
+              ↓ (hive CLI commands)
+         SQLite DB ←── Issues, deps, events
+              ↓
+         Daemon (orchestrator loop)
+              ↓
+         Worker Sessions (opencode) → git worktrees
+              ↓
+         Merge Queue → main branch
 ```
 
 ### Key Components
 
 | Component | Role |
 |-----------|------|
-| **Mayor** | Strategic brain that decomposes user requests into concrete issues |
-| **Orchestrator** | Schedules work, manages agent lifecycles, handles health checks |
+| **Mayor** | OpenCode custom agent that decomposes user requests into issues via `hive` CLI |
+| **Daemon** | Background orchestrator that polls the ready queue and spawns workers |
 | **Workers** | Ephemeral coding agents that implement features, fix bugs, write tests |
 | **SQLite DB** | Single source of truth for issues, dependencies, agents, events |
 | **OpenCode Server** | Headless agent runtime that executes prompts and streams events |
@@ -43,252 +41,183 @@ Finalized (main branch updated)
 
 ### Prerequisites
 
-1. **Python 3.11+**
-2. **OpenCode server** running at `http://127.0.0.1:4096`
+1. **Python 3.12+**
+2. **[OpenCode](https://github.com/nicholasgriffintn/opencode)** installed and available in PATH
 3. **Git repository** for your project
 
 ### Install Hive
 
 ```bash
-# Clone or navigate to the hive directory
 cd hive
 
-# Install with uv (recommended) or pip
-uv venv
-source .venv/bin/activate  # or: .venv/Scripts/activate on Windows
+# Install with uv (recommended)
+uv venv --python 3.12
+source .venv/bin/activate
 uv pip install -e ".[dev]"
-
-# Or with pip
-pip install -e ".[dev]"
-```
-
-### Start OpenCode Server
-
-In a separate terminal:
-
-```bash
-# Navigate to your opencode installation
-cd /path/to/opencode
-
-# Start the server
-bun run --cwd packages/opencode --conditions=browser src/index.ts serve --port 4096
-
-# Or with password authentication
-OPENCODE_SERVER_PASSWORD=your-secret \
-  bun run --cwd packages/opencode --conditions=browser src/index.ts serve --port 4096
 ```
 
 ## Quick Start
 
-### 1. Initialize the Database
-
-The database is created automatically on first use:
+### 1. Start the OpenCode server
 
 ```bash
-# Check status (creates hive.db if it doesn't exist)
+opencode serve --port 4096
+
+# Or with password authentication
+OPENCODE_SERVER_PASSWORD=your-secret opencode serve --port 4096
+```
+
+### 2. Start the Hive daemon
+
+In a separate terminal, from your project directory:
+
+```bash
+# Foreground (see logs directly)
+hive daemon start -f
+
+# Or as a background daemon
+hive daemon start
+```
+
+The daemon polls the ready queue, spawns workers, monitors completion, and handles retries.
+
+### 3. Launch the Mayor
+
+```bash
+hive mayor
+```
+
+This attaches to the running OpenCode server and opens a TUI. Switch to the `@mayor` agent to interact with Hive through natural language. The Mayor decomposes your requests into issues, wires dependencies, and monitors progress -- all through `hive` CLI commands.
+
+### 4. Or manage issues directly
+
+```bash
+# Create issues
+hive create "Add user authentication" "Implement JWT-based auth" --priority 1
+hive create "Write auth tests" --priority 2
+
+# Wire dependencies
+hive dep add <test-issue-id> <auth-issue-id>
+
+# Monitor
 hive status
-```
-
-### 2. Create an Issue Manually
-
-```bash
-# Create a simple task
-hive create "Add README documentation" "Create a comprehensive README.md file" --priority 1
-
-# Create multiple issues
-hive create "Write unit tests" "Add tests for authentication module" --priority 2
-hive create "Fix login bug" "Users can't login with email addresses" --priority 0
-```
-
-### 3. View Issues
-
-```bash
-# List all issues
 hive list
-
-# Filter by status
-hive list --status open
-hive list --status done
-
-# Show ready queue (unblocked, unassigned issues)
 hive ready
-
-# Show issue details
-hive show w-abc123
+hive logs -f
 ```
 
-### 4. Start the Orchestrator
-
-```bash
-# Start orchestrator in current project directory
-hive start
-
-# Or specify project path
-hive start --project /path/to/your/project
-
-# Use custom database
-hive start --db /path/to/custom.db
-```
-
-The orchestrator will:
-1. Create a Mayor session for strategic planning
-2. Poll the ready queue for work
-3. Spawn worker agents (up to MAX_AGENTS)
-4. Monitor completion via SSE events
-5. Handle failures and retries
-
-### 5. Monitor Status
-
-While the orchestrator is running (in another terminal):
-
-```bash
-# Show current status
-hive status
-
-# Output:
-# === Hive Status ===
-# Project: my-project
-# Issues:
-#   open: 5
-#   in_progress: 2
-#   done: 3
-# Active workers: 2/3
-#   - worker-a3f8b1: Add README documentation
-#   - worker-c7e2d9: Write unit tests
-# Ready queue: 3 issues
-# Merge queue: 1 pending
-```
+The daemon picks up ready issues automatically and assigns them to workers.
 
 ## CLI Reference
 
 ### Global Options
 
-```bash
---db PATH          # Database path (default: hive.db)
---project PATH     # Project directory (default: .)
+```
+--db PATH          Database path (default: hive.db)
+--project PATH     Project directory (default: .)
+--json             Output JSON (for programmatic use)
 ```
 
-### Commands
+### Issue Management
 
-#### `create` - Create a new issue
+| Command | Description |
+|---------|-------------|
+| `hive create <title> [desc] [--priority 0-4] [--type task\|bug\|feature]` | Create a new issue |
+| `hive list [--status STATUS]` | List issues |
+| `hive show <id>` | Show issue details, deps, and events |
+| `hive update <id> [--title T] [--description D] [--priority P] [--status S]` | Update an issue |
+| `hive cancel <id> [--reason TEXT]` | Cancel an issue |
+| `hive finalize <id> [--resolution TEXT]` | Mark issue as done |
+| `hive retry <id> [--notes TEXT]` | Reset a failed issue to open |
+| `hive escalate <id> --reason TEXT` | Escalate for human attention |
 
-```bash
-hive create "Title" ["Description"] [--priority 0-4]
+### Workflows
 
-# Examples:
-hive create "Implement auth" "Add JWT authentication" --priority 1
-hive create "Quick fix"  # Minimal (priority defaults to 2)
+| Command | Description |
+|---------|-------------|
+| `hive molecule <title> --steps '<JSON>' [--description D]` | Create multi-step workflow |
+| `hive dep add <id> <depends_on> [--type blocks\|related]` | Add dependency |
+| `hive dep remove <id> <depends_on>` | Remove dependency |
+
+Steps JSON format for molecules:
+```json
+[
+  {"title": "Step 1", "description": "..."},
+  {"title": "Step 2", "needs": [0]}
+]
 ```
 
-#### `list` - List all issues
+### Monitoring
 
-```bash
-hive list [--status STATUS]
+| Command | Description |
+|---------|-------------|
+| `hive status` | System overview (issue counts, workers, queues) |
+| `hive ready` | Show ready queue (unblocked, unassigned) |
+| `hive agents [--status S]` | List agents |
+| `hive agent <id>` | Show agent details |
+| `hive events [--issue ID] [--agent ID] [--type T] [--limit N]` | Query event log |
+| `hive logs [-f] [-n N] [--issue ID] [--agent ID]` | Tail event log |
 
-# Examples:
-hive list                    # All issues
-hive list --status open      # Only open issues
-hive list --status in_progress
-```
+### Daemon
 
-#### `ready` - Show ready queue
+| Command | Description |
+|---------|-------------|
+| `hive daemon start [-f]` | Start daemon (`-f` for foreground) |
+| `hive daemon stop` | Stop daemon |
+| `hive daemon restart` | Restart daemon |
+| `hive daemon status` | Show daemon status |
+| `hive daemon logs [-f] [-n N]` | Show daemon logs |
 
-```bash
-hive ready
+### Mayor
 
-# Shows unblocked, unassigned issues ordered by priority
-```
-
-#### `show` - Show issue details
-
-```bash
-hive show ISSUE_ID
-
-# Shows:
-# - Issue metadata (title, status, priority, type, assignee)
-# - Description
-# - Dependencies
-# - Event history
-```
-
-#### `close` - Mark issue as canceled
-
-```bash
-hive close ISSUE_ID
-
-# Sets status to 'canceled'
-```
-
-#### `status` - Show orchestrator status
-
-```bash
-hive status
-
-# Shows:
-# - Issue counts by status
-# - Active workers and their current tasks
-# - Ready queue size
-# - Merge queue size
-```
-
-#### `start` - Start orchestrator
-
-```bash
-hive start [--project PATH] [--db PATH]
-
-# Starts the orchestrator main loop
-# Press Ctrl+C to stop
-```
+| Command | Description |
+|---------|-------------|
+| `hive mayor` | Launch Mayor TUI (attaches to OpenCode server) |
 
 ## Configuration
 
-Set environment variables to configure Hive:
-
 ```bash
 # Concurrency
-export HIVE_MAX_AGENTS=3              # Maximum concurrent workers (default: 3)
+export HIVE_MAX_AGENTS=3                    # Max concurrent workers (default: 3)
 
 # Timing
-export HIVE_POLL_INTERVAL=5           # Ready queue poll interval in seconds (default: 5)
-export HIVE_LEASE_DURATION=300        # Worker lease duration in seconds (default: 300)
-export HIVE_PERMISSION_POLL_INTERVAL=0.5  # Permission check interval (default: 0.5)
+export HIVE_POLL_INTERVAL=5                 # Ready queue poll interval in seconds
+export HIVE_LEASE_DURATION=300              # Worker lease duration in seconds
+export HIVE_PERMISSION_POLL_INTERVAL=0.5    # Permission check interval
 
 # OpenCode
 export OPENCODE_URL=http://127.0.0.1:4096  # OpenCode server URL
 export OPENCODE_SERVER_PASSWORD=secret      # Server password (if auth enabled)
+export OPENCODE_CMD=opencode               # Path to opencode binary
 
 # Database
-export HIVE_DB_PATH=hive.db           # Database file path (default: hive.db)
-
-# Context cycling thresholds (token counts)
-export HIVE_MAYOR_TOKEN_THRESHOLD=120000     # Mayor context cycling (default: 120k)
-export HIVE_WORKER_TOKEN_THRESHOLD=150000    # Worker context cycling (default: 150k)
+export HIVE_DB_PATH=hive.db
 
 # Model
-export HIVE_DEFAULT_MODEL=claude-sonnet-4-5-20250929  # Default model
+export HIVE_DEFAULT_MODEL=claude-sonnet-4-5-20250929
 ```
 
 ## How It Works
 
 ### Workflow
 
-1. **User creates issues** via CLI or Mayor decomposes a request
-2. **Orchestrator polls ready queue** (issues with no unresolved dependencies)
-3. **Worker spawned** for each ready issue:
-   - Creates git worktree (`<project>/.worktrees/<agent-name>`)
+1. **User talks to the Mayor** (or creates issues directly via CLI)
+2. **Mayor decomposes requests** into issues with dependencies using `hive` CLI commands
+3. **Daemon polls ready queue** for issues with no unresolved dependencies
+4. **Worker spawned** for each ready issue:
+   - Creates git worktree (`.worktrees/<agent-name>`)
    - Creates OpenCode session scoped to worktree
    - Sends worker prompt with task description
-4. **Worker executes autonomously**:
+5. **Worker executes autonomously**:
    - Reads code, makes changes, runs tests
    - Commits work to branch (`agent/<agent-name>`)
    - Signals completion with `:::COMPLETION:::` block
-5. **Orchestrator assesses completion**:
+6. **Daemon assesses completion**:
    - Parses structured completion signal (or uses heuristics)
-   - If successful: marks issue `done`, enqueues to merge queue
-   - If failed: marks `failed`, retries or escalates
-6. **Session cycling for molecules**:
-   - After completing a step, checks for next ready step in molecule
-   - Aborts old session, creates new session (same worktree)
+   - Success: marks issue `done`, enqueues to merge queue
+   - Failure: marks `failed`, retries or escalates
+7. **Session cycling for molecules**:
+   - After completing a step, checks for next ready step
    - Auto-advances through sequential workflow
 
 ### Issue States
@@ -310,249 +239,57 @@ Workers run with restricted permissions:
 
 | Permission | Policy | Reason |
 |------------|--------|--------|
-| `read`, `edit`, `write`, `bash` | ✅ Allow | Standard tool usage |
-| `question`, `plan_enter` | ❌ Deny | No interactive prompts |
-| `external_directory` | ❌ Deny | Sandbox enforcement |
-| Unknown permissions | ⏸️ Block | Human review required |
-
-The permission unblocker polls every 500ms to auto-resolve permissions and keep workers running.
-
-### Lease-Based Staleness
-
-Workers have a lease duration (default: 5 minutes). If no progress is detected:
-1. Orchestrator aborts the session
-2. Issue is unassigned and returned to ready queue
-3. Another worker can pick it up
-
-## Advanced Features
-
-### Molecules (Multi-Step Workflows)
-
-Create complex workflows with dependencies:
-
-```python
-# Via Mayor (natural language)
-# User: "Implement authentication system with design, implementation, and tests"
-
-# Mayor creates:
-# - Issue 1: "Design auth architecture" (priority 1)
-# - Issue 2: "Implement JWT middleware" (depends on Issue 1)
-# - Issue 3: "Write auth tests" (depends on Issue 2)
-```
-
-Workers auto-advance through steps in the same worktree.
-
-### Mayor Integration
-
-The Mayor is a persistent LLM session that:
-- Receives user requests in natural language
-- Decomposes them into concrete work items
-- Creates issues with dependencies
-- Handles escalations from failed workers
-
-(Direct Mayor integration via CLI is planned for future phases)
+| `read`, `edit`, `write`, `bash` | Allow | Standard tool usage |
+| `question`, `plan_enter` | Deny | No interactive prompts |
+| `external_directory` | Deny | Sandbox enforcement |
 
 ## Development
 
 ### Setup
 
 ```bash
-# Create and activate a virtual environment
 uv venv --python 3.12
 source .venv/bin/activate
-
-# Install the package in editable mode with dev dependencies
 uv pip install -e ".[dev]"
 ```
 
 ### Running Tests
 
 ```bash
-# Run unit tests (default, integration tests are excluded)
-pytest
+# Unit tests (integration tests auto-skipped without server)
+uv run pytest
 
-# Run specific test file
-pytest tests/test_orchestrator.py
-```
-
-### Integration Tests
-
-Integration tests require a running OpenCode server (`opencode serve` on port 4096).
-They are excluded by default and have a 60-second per-test timeout.
-
-```bash
-# Run only integration tests
-pytest -m integration
-
-# Run all tests (unit + integration)
-pytest -m ""
+# Integration tests (requires running OpenCode server)
+uv run pytest -m integration
 ```
 
 ### Linting & Formatting
 
 ```bash
-# Check for lint errors
 uvx ruff check src/ tests/
-
-# Auto-fix lint errors
-uvx ruff check --fix src/ tests/
-
-# Format code
 uvx ruff format --line-length 144 src/ tests/
 ```
-
-### Test Coverage
-
-- **79 unit tests** across 11 test files
-- Database operations, git worktrees, prompts, orchestrator, CLI, SSE
-- Mock-based unit tests + integration tests with live OpenCode server
 
 ### Project Structure
 
 ```
 hive/
+├── .opencode/agents/
+│   └── mayor.md         # Mayor agent definition (system prompt + permissions)
 ├── src/hive/
-│   ├── __init__.py
-│   ├── cli.py           # Human CLI interface
+│   ├── cli.py           # CLI interface (all commands route through ToolExecutor)
 │   ├── config.py        # Configuration
+│   ├── daemon.py        # Background daemon management
 │   ├── db.py            # SQLite database layer
 │   ├── git.py           # Git worktree management
 │   ├── ids.py           # Hash-based ID generation
 │   ├── models.py        # Data models
 │   ├── opencode.py      # OpenCode HTTP client
 │   ├── orchestrator.py  # Main orchestration engine
-│   ├── prompts.py       # Prompt templates
-│   └── sse.py           # SSE event consumer
-├── tests/               # Test suite
-├── pyproject.toml       # Project metadata
-└── README.md            # This file
+│   ├── prompts.py       # Worker prompt templates
+│   ├── sse.py           # SSE event consumer
+│   └── tools.py         # ToolExecutor (shared backend for all CLI commands)
+├── tests/               # Test suite (97 unit tests)
+├── pyproject.toml
+└── README.md
 ```
-
-## Examples
-
-### Example 1: Simple Task
-
-```bash
-# Create a task
-hive create "Add logging to API" "Add structured logging to all API endpoints"
-
-# Start orchestrator
-hive start
-
-# Monitor (in another terminal)
-hive status
-```
-
-### Example 2: Multiple Independent Tasks
-
-```bash
-# Create several tasks
-hive create "Update dependencies" --priority 2
-hive create "Fix type errors" --priority 1
-hive create "Add docstrings" --priority 3
-
-# Start orchestrator (will run up to MAX_AGENTS concurrently)
-hive start
-```
-
-### Example 3: Tasks with Dependencies
-
-```bash
-# Create parent task
-DESIGN=$(hive create "Design database schema" --priority 1)
-
-# Create dependent task
-hive create "Implement data models" --priority 2
-
-# Wire dependency manually via Python:
-# from hive.db import Database
-# db = Database("hive.db")
-# db.connect()
-# db.add_dependency(impl_id, design_id)
-```
-
-## Troubleshooting
-
-### OpenCode server not responding
-
-```bash
-# Check if server is running
-curl http://127.0.0.1:4096/session
-
-# Restart server
-# (See Installation section)
-```
-
-### Workers getting stuck
-
-Check permission logs:
-
-```bash
-hive show <issue-id>
-# Look for permission_resolved events
-```
-
-Increase lease duration:
-
-```bash
-export HIVE_LEASE_DURATION=600  # 10 minutes
-```
-
-### Database locked errors
-
-SQLite uses WAL mode for concurrency, but:
-- Don't run multiple orchestrators on same database
-- Check for orphaned connections
-
-```bash
-# Reset if needed
-rm hive.db hive.db-wal hive.db-shm
-hive status  # Recreates database
-```
-
-## Limitations (Current Implementation)
-
-- ✅ Phase 1-2 complete (core functionality)
-- ⏳ Phase 3 pending: Refinery for automated merge processing
-- ⏳ Phase 4 pending: Escalation chain and crash recovery
-- Manual merge queue processing (no automatic rebase/conflict resolution yet)
-- No distributed operation (single SQLite database)
-- No web UI (CLI only)
-
-## Roadmap
-
-See the [Technical Design Document](../CLAUDE_TECHNICAL_DESIGN_DOC.md) for full planned features.
-
-**Completed:**
-- ✅ Database foundation with ready queue
-- ✅ OpenCode HTTP client and SSE consumer
-- ✅ Single worker loop with lease-based staleness
-- ✅ Mayor session for strategic decomposition
-- ✅ Multi-worker pool with session cycling
-- ✅ Permission unblocker and human CLI
-
-**Planned:**
-- ⏳ Merge queue processor (Refinery agent)
-- ⏳ Escalation chain (retry → agent switch → Mayor → human)
-- ⏳ Crash recovery and degraded mode
-- ⏳ Context cycling for long-running sessions
-- ⏳ Human question surfacing
-
-## License
-
-This project is part of the multi-agent orchestration research. See parent directory for license information.
-
-## Contributing
-
-This is a research implementation. For production use, consider:
-- Adding authentication
-- Implementing proper error recovery
-- Adding metrics and monitoring
-- Creating a web UI
-- Distributed database support
-
-## Credits
-
-Inspired by [Gas Town](../gastown) and [Beads](../beads).
-
-Built with [OpenCode](../opencode) and Claude 4.5 Sonnet.
