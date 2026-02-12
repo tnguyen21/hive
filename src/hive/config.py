@@ -13,7 +13,9 @@ class Config:
     POLL_INTERVAL = int(os.environ.get("HIVE_POLL_INTERVAL", "5"))  # seconds
     LEASE_DURATION = int(os.environ.get("HIVE_LEASE_DURATION", "900"))  # 15 minutes
     LEASE_EXTENSION = int(os.environ.get("HIVE_LEASE_EXTENSION", "600"))  # 10 minutes
-    PERMISSION_POLL_INTERVAL = float(os.environ.get("HIVE_PERMISSION_POLL_INTERVAL", "0.5"))  # 500ms
+    PERMISSION_POLL_INTERVAL = float(
+        os.environ.get("HIVE_PERMISSION_POLL_INTERVAL", "0.5")
+    )  # 500ms
 
     # OpenCode
     OPENCODE_URL = os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096")
@@ -24,18 +26,27 @@ class Config:
 
     # Context cycling thresholds (token counts)
     QUEEN_TOKEN_THRESHOLD = int(os.environ.get("HIVE_QUEEN_TOKEN_THRESHOLD", "120000"))
-    REFINERY_TOKEN_THRESHOLD = int(os.environ.get("HIVE_REFINERY_TOKEN_THRESHOLD", "100000"))
-    WORKER_TOKEN_THRESHOLD = int(os.environ.get("HIVE_WORKER_TOKEN_THRESHOLD", "150000"))
+    REFINERY_TOKEN_THRESHOLD = int(
+        os.environ.get("HIVE_REFINERY_TOKEN_THRESHOLD", "100000")
+    )
+    WORKER_TOKEN_THRESHOLD = int(
+        os.environ.get("HIVE_WORKER_TOKEN_THRESHOLD", "150000")
+    )
 
     # Escalation
     MAX_RETRIES = int(os.environ.get("HIVE_MAX_RETRIES", "2"))
     MAX_AGENT_SWITCHES = int(os.environ.get("HIVE_MAX_AGENT_SWITCHES", "2"))
 
     # Merge queue
-    MERGE_POLL_INTERVAL = int(os.environ.get("HIVE_MERGE_POLL_INTERVAL", "10"))  # seconds
+    MERGE_POLL_INTERVAL = int(
+        os.environ.get("HIVE_MERGE_POLL_INTERVAL", "10")
+    )  # seconds
     TEST_COMMAND = os.environ.get("HIVE_TEST_COMMAND")  # None = skip test gate
-    MERGE_QUEUE_ENABLED = os.environ.get("HIVE_MERGE_QUEUE_ENABLED", "true").lower() in ("true", "1", "yes")
+    MERGE_QUEUE_ENABLED = os.environ.get(
+        "HIVE_MERGE_QUEUE_ENABLED", "true"
+    ).lower() in ("true", "1", "yes")
 
     # Model
     DEFAULT_MODEL = os.environ.get("HIVE_DEFAULT_MODEL", "claude-opus-4-6")
-    REFINERY_MODEL = os.environ.get("HIVE_REFINERY_MODEL", DEFAULT_MODEL)
+    WORKER_MODEL = os.environ.get("HIVE_WORKER_MODEL", "claude-sonnet-4-20250514")
+    REFINERY_MODEL = os.environ.get("HIVE_REFINERY_MODEL", "claude-sonnet-4-20250514")

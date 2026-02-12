@@ -388,7 +388,7 @@ class Orchestrator:
         # Create agent identity in database
         agent_id = self.db.create_agent(
             name=agent_name,
-            model=Config.DEFAULT_MODEL,
+            model=Config.WORKER_MODEL,
             metadata={"issue_id": issue_id},
         )
 
@@ -477,7 +477,7 @@ class Orchestrator:
             await self.opencode.send_message_async(
                 session_id,
                 parts=[{"type": "text", "text": prompt}],
-                model=make_model_config(Config.DEFAULT_MODEL),
+                model=make_model_config(Config.WORKER_MODEL),
                 directory=worktree_path,
             )
 
@@ -808,7 +808,7 @@ class Orchestrator:
             await self.opencode.send_message_async(
                 new_session_id,
                 parts=[{"type": "text", "text": prompt}],
-                model=make_model_config(Config.DEFAULT_MODEL),
+                model=make_model_config(Config.WORKER_MODEL),
                 directory=agent.worktree,
             )
 
