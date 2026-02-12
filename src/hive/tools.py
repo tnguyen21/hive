@@ -50,6 +50,7 @@ class ToolExecutor:
         priority: int = 2,
         type: str = "task",
         project: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new issue."""
         issue_id = self.db.create_issue(
@@ -58,6 +59,7 @@ class ToolExecutor:
             priority=priority,
             issue_type=type,
             project=project or self.project_name,
+            model=model,
         )
         return {
             "issue_id": issue_id,
@@ -162,6 +164,7 @@ class ToolExecutor:
         description: Optional[str] = None,
         priority: Optional[int] = None,
         status: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Update issue fields."""
         issue = self.db.get_issue(issue_id)
@@ -183,6 +186,9 @@ class ToolExecutor:
         if status is not None:
             updates.append("status = ?")
             params.append(status)
+        if model is not None:
+            updates.append("model = ?")
+            params.append(model)
 
         if updates:
             query = f"UPDATE issues SET {', '.join(updates)}, updated_at = datetime('now') WHERE id = ?"
@@ -202,6 +208,7 @@ class ToolExecutor:
                             ("description", description),
                             ("priority", priority),
                             ("status", status),
+                            ("model", model),
                         ]
                         if v is not None
                     ]
@@ -216,6 +223,7 @@ class ToolExecutor:
         steps: List[Dict[str, Any]],
         description: str = "",
         project: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a multi-step molecule workflow."""
         # Create parent molecule issue
@@ -239,6 +247,7 @@ class ToolExecutor:
                 issue_type="step",
                 project=project or self.project_name,
                 parent_id=parent_id,
+                model=model,
             )
             step_map[i] = step_id
             created_steps.append({"index": i, "id": step_id, "title": step["title"]})

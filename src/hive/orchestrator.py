@@ -387,10 +387,13 @@ class Orchestrator:
         issue_id = issue["id"]
         agent_name = f"worker-{generate_id('')[2:]}"  # Strip "w-" prefix
 
+        # Resolve model: issue.model > Config.WORKER_MODEL > Config.DEFAULT_MODEL
+        model = issue.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
+
         # Create agent identity in database
         agent_id = self.db.create_agent(
             name=agent_name,
-            model=Config.WORKER_MODEL,
+            model=model,
             metadata={"issue_id": issue_id},
         )
 
@@ -479,7 +482,7 @@ class Orchestrator:
             await self.opencode.send_message_async(
                 session_id,
                 parts=[{"type": "text", "text": prompt}],
-                model=make_model_config(Config.WORKER_MODEL),
+                model=make_model_config(model),
                 directory=worktree_path,
             )
 
@@ -786,6 +789,9 @@ class Orchestrator:
                 del self.active_agents[agent.agent_id]
             return
 
+        # Resolve model for the next step: next_step.model > Config.WORKER_MODEL > Config.DEFAULT_MODEL
+        model = next_step.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
+
         # Create new session (same worktree)
         try:
             session = await self.opencode.create_session(
@@ -845,7 +851,7 @@ class Orchestrator:
             await self.opencode.send_message_async(
                 new_session_id,
                 parts=[{"type": "text", "text": prompt}],
-                model=make_model_config(Config.WORKER_MODEL),
+                model=make_model_config(model),
                 directory=agent.worktree,
             )
 

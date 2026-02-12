@@ -54,18 +54,23 @@ class HiveCLI:
         description: str = "",
         priority: int = 2,
         issue_type: str = "task",
+        model: Optional[str] = None,
         *,
         json_mode: bool = False,
     ):
         """Create a new issue."""
+        params = {
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "type": issue_type,
+        }
+        if model:
+            params["model"] = model
+
         result = self._run_tool(
             "hive_create_issue",
-            {
-                "title": title,
-                "description": description,
-                "priority": priority,
-                "type": issue_type,
-            },
+            params,
             json_mode=json_mode,
         )
         if not json_mode and result:
@@ -121,6 +126,8 @@ class HiveCLI:
             print(f"Priority: {issue['priority']}")
             print(f"Type: {issue['type']}")
             print(f"Assignee: {issue['assignee'] or 'None'}")
+            if issue.get("model"):
+                print(f"Model: {issue['model']}")
             print(f"Created: {issue['created_at']}")
             if issue["description"]:
                 print(f"\nDescription:\n{issue['description']}")
@@ -164,6 +171,7 @@ class HiveCLI:
         description: Optional[str] = None,
         priority: Optional[int] = None,
         status: Optional[str] = None,
+        model: Optional[str] = None,
         *,
         json_mode: bool = False,
     ):
@@ -177,6 +185,8 @@ class HiveCLI:
             params["priority"] = priority
         if status is not None:
             params["status"] = status
+        if model is not None:
+            params["model"] = model
         result = self._run_tool("hive_update_issue", params, json_mode=json_mode)
         if not json_mode and result:
             print(result.get("message", f"Updated issue {issue_id}"))
@@ -226,6 +236,7 @@ class HiveCLI:
         title: str,
         description: str = "",
         steps_json: str = "[]",
+        model: Optional[str] = None,
         *,
         json_mode: bool = False,
     ):
@@ -238,9 +249,13 @@ class HiveCLI:
             else:
                 print(f"Error: Invalid steps JSON: {e}", file=sys.stderr)
             sys.exit(1)
+        params = {"title": title, "description": description, "steps": steps}
+        if model:
+            params["model"] = model
+
         result = self._run_tool(
             "hive_create_molecule",
-            {"title": title, "description": description, "steps": steps},
+            params,
             json_mode=json_mode,
         )
         if not json_mode and result:
@@ -734,6 +749,10 @@ def main():
         dest="issue_type",
         help="Issue type (task, bug, feature, step, molecule)",
     )
+    create_parser.add_argument(
+        "--model",
+        help="Model to use for this issue (overrides global WORKER_MODEL)",
+    )
 
     # list command
     list_parser = subparsers.add_parser("list", help="List all issues")
@@ -774,6 +793,7 @@ def main():
     update_parser.add_argument("--description", help="New description")
     update_parser.add_argument("--priority", type=int, help="New priority (0-4)")
     update_parser.add_argument("--status", help="New status")
+    update_parser.add_argument("--model", help="New model")
 
     # cancel command
     cancel_parser = subparsers.add_parser("cancel", help="Cancel an issue")
@@ -808,6 +828,10 @@ def main():
         "--description", default="", help="Molecule description"
     )
     molecule_parser.add_argument("--steps", required=True, help="Steps as JSON array")
+    molecule_parser.add_argument(
+        "--model",
+        help="Model to use for this molecule (overrides global WORKER_MODEL)",
+    )
 
     # dep command
     dep_parser = subparsers.add_parser("dep", help="Manage dependencies")
@@ -940,6 +964,7 @@ def main():
                 args.description,
                 args.priority,
                 args.issue_type,
+                model=getattr(args, "model", None),
                 json_mode=json_mode,
             )
 
@@ -967,6 +992,7 @@ def main():
                 description=args.description,
                 priority=args.priority,
                 status=args.status,
+                model=getattr(args, "model", None),
                 json_mode=json_mode,
             )
 
@@ -987,6 +1013,7 @@ def main():
                 args.title,
                 description=args.description,
                 steps_json=args.steps,
+                model=getattr(args, "model", None),
                 json_mode=json_mode,
             )
 

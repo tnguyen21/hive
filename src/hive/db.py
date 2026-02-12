@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS issues (
     assignee    TEXT,
     parent_id   TEXT REFERENCES issues(id),
     project     TEXT,
+    model       TEXT,
     metadata    TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -133,6 +134,7 @@ class Database:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate_if_needed()
 
     def close(self):
         """Close database connection."""
@@ -152,6 +154,24 @@ class Database:
             self.conn.rollback()
             raise
 
+    def _migrate_if_needed(self):
+        """Apply any necessary database migrations."""
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
+        # Check if model column exists in issues table
+        cursor = self.conn.execute("PRAGMA table_info(issues)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "model" not in columns:
+            try:
+                self.conn.execute("ALTER TABLE issues ADD COLUMN model TEXT")
+                self.conn.commit()
+                print("Added model column to issues table")
+            except sqlite3.Error as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
     def create_issue(
         self,
         title: str,
@@ -160,6 +180,7 @@ class Database:
         issue_type: str = "task",
         project: str = "",
         parent_id: Optional[str] = None,
+        model: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
@@ -172,6 +193,7 @@ class Database:
             issue_type: Type (task, bug, feature, step, molecule)
             project: Project/repo name
             parent_id: Parent issue ID (for molecules)
+            model: Model to use for this issue (overrides global WORKER_MODEL)
             metadata: Additional metadata dict
 
         Returns:
@@ -183,8 +205,8 @@ class Database:
         with self.transaction() as conn:
             conn.execute(
                 """
-                INSERT INTO issues (id, title, description, priority, type, project, parent_id, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO issues (id, title, description, priority, type, project, parent_id, model, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     issue_id,
@@ -194,6 +216,7 @@ class Database:
                     issue_type,
                     project,
                     parent_id,
+                    model,
                     metadata_json,
                 ),
             )
