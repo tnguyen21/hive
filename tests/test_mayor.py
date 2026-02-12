@@ -5,17 +5,25 @@ import os
 
 def test_mayor_agent_definition_exists():
     """Test that the mayor agent definition file exists."""
-    agent_file = os.path.join(os.path.dirname(__file__), "..", ".opencode", "agents", "mayor.md")
-    assert os.path.exists(agent_file), "Mayor agent definition missing at .opencode/agents/mayor.md"
+    agent_file = os.path.join(
+        os.path.dirname(__file__), "..", ".opencode", "agents", "mayor.md"
+    )
+    assert os.path.exists(agent_file), (
+        "Mayor agent definition missing at .opencode/agents/mayor.md"
+    )
 
 
 def test_mayor_agent_definition_has_frontmatter():
     """Test that the mayor agent definition has valid frontmatter."""
-    agent_file = os.path.join(os.path.dirname(__file__), "..", ".opencode", "agents", "mayor.md")
+    agent_file = os.path.join(
+        os.path.dirname(__file__), "..", ".opencode", "agents", "mayor.md"
+    )
     with open(agent_file) as f:
         content = f.read()
 
-    assert content.startswith("---"), "Agent definition must start with YAML frontmatter"
+    assert content.startswith("---"), (
+        "Agent definition must start with YAML frontmatter"
+    )
     # Find end of frontmatter
     end_idx = content.index("---", 3)
     frontmatter = content[3:end_idx].strip()
@@ -24,14 +32,16 @@ def test_mayor_agent_definition_has_frontmatter():
 
     meta = yaml.safe_load(frontmatter)
     assert "description" in meta
-    assert meta.get("tools", {}).get("write") is False
-    assert meta.get("tools", {}).get("edit") is False
+    assert meta.get("tools", {}).get("write") is True
+    assert meta.get("tools", {}).get("edit") is True
     assert "permission" in meta
 
 
 def test_mayor_agent_definition_references_cli():
     """Test that the mayor agent definition references hive CLI commands."""
-    agent_file = os.path.join(os.path.dirname(__file__), "..", ".opencode", "agents", "mayor.md")
+    agent_file = os.path.join(
+        os.path.dirname(__file__), "..", ".opencode", "agents", "mayor.md"
+    )
     with open(agent_file) as f:
         content = f.read()
 
