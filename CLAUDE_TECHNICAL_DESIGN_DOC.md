@@ -6,24 +6,24 @@ _A simplified multi-agent orchestration system inspired by Gas Town, using OpenC
 
 ## 🎯 Implementation Status
 
-**Last Updated**: 2026-02-12
+**Last Updated**: 2026-02-13
 
-### ✅ Completed (Phases 1-4 + Phase 5 partial)
+### ✅ Completed (Phases 1-6)
 
 - ✅ **Phase 1**: Database foundation, OpenCode client, SSE consumer, single worker loop
 - ✅ **Phase 2**: Multi-worker pool, Queen Bee TUI, session cycling, permission unblocker, daemon mode
 - ✅ **Phase 3**: Queen Bee as user-facing interface with 20+ CLI commands
 - ✅ **Phase 4**: Merge queue processor with two-tier approach (mechanical + Refinery LLM)
-- ✅ **Phase 5 (partial)**: Session cleanup on cancel/shutdown, triple completion detection (SSE + polling + file-based), stale agent reconciliation, prompt templates (.md files), per-issue model config, CLI enhancements (--json, sort/filter)
+- ✅ **Phase 5**: Session cleanup, triple completion detection, stale agent reconciliation, prompt templates, per-issue model config, CLI enhancements, retry escalation chain (3-tier: retry → agent switch → escalate), degraded mode with exponential backoff recovery, context cycling for Refinery sessions
+- ✅ **Phase 6**: Structured logging (rotating file handler, all print() → logger.\*), capability-based routing (project/type/keyword scoring), cost tracking (`hive costs` command with token aggregation), `hive watch <issue_id>` for live worker monitoring
 
-**Status**: Fully functional multi-agent orchestrator with 128 passing unit tests across 14 modules + 3 prompt templates
+**Status**: Fully functional multi-agent orchestrator with 167 passing unit tests across 15 modules + 3 prompt templates
 
-See `hive/` directory for implementation.
+See `src/hive/` directory for implementation.
 
-### ⏳ Planned (Phase 5 remainder + Phase 6)
+### ⏳ Planned (Phase 7+)
 
-- ⏳ **Phase 5**: Escalation chain (retry → agent switch → Queen → human), degraded mode, context cycling
-- ⏳ **Phase 6**: Operational maturity (capability routing, cost tracking, structured logging)
+- ⏳ **Phase 7**: Long-lived refinery session (eager creation, periodic health checks, auto-restart on death), dead code cleanup, web dashboard, webhook notifications
 
 ---
 
@@ -694,6 +694,7 @@ Teardown happens **after finalization**, not immediately after a worker marks an
 4. On failure → issue may re-open or escalate; worktree stays for retry
 
 **Session cleanup is aggressive**: OpenCode sessions are killed (abort + delete) whenever:
+
 - An agent completes work (`handle_agent_complete`)
 - An issue is canceled (`cancel_agent_for_issue`)
 - An agent is detected as stalled (`handle_stalled_agent`)
@@ -961,8 +962,16 @@ Completion detection uses a **triple detection strategy** to ensure no worker co
 The `monitor_agent` loop runs all three in parallel. Whichever fires first breaks the loop and triggers `handle_agent_complete()`. File-based results take priority over message-parsing heuristics in `assess_completion()`.
 
 **File-based result format** (`.hive-result.jsonl`):
+
 ```json
-{"status": "success", "summary": "Added auth middleware", "files_changed": ["src/auth.py"], "tests_run": true, "blockers": [], "artifacts": [{"type": "git_commit", "value": "abc1234"}]}
+{
+  "status": "success",
+  "summary": "Added auth middleware",
+  "files_changed": ["src/auth.py"],
+  "tests_run": true,
+  "blockers": [],
+  "artifacts": [{ "type": "git_commit", "value": "abc1234" }]
+}
 ```
 
 ### 9.5 Structured Completion Signal (Recommended)
@@ -1788,20 +1797,25 @@ No special infrastructure. The CV is an emergent property of the event log.
 - `hive status` with merge queue stats
 - Real-time status monitoring
 
+**Phase 5 Resilience** ✅
+
+- Retry escalation chain: 3-tier (retry same agent up to MAX_RETRIES=2 → switch agent up to MAX_AGENT_SWITCHES=2 → escalate to human)
+- Degraded mode: `_opencode_healthy` flag, health check with exponential backoff (5s→60s cap), `log_system_event` for system-level events
+- Context cycling for Refinery: `_maybe_cycle_refinery_session()` checks token count after each merge, cycles at REFINERY_TOKEN_THRESHOLD (100K tokens) or >20 messages
+- `count_events_by_type()` helper for clean retry/switch counting
+
+**Phase 6 Operational Maturity** ✅
+
+- Structured logging: `src/hive/logging_config.py`, rotating file handler (10MB, 5 backups), HIVE_LOG_LEVEL env var, all print() converted to logger.\*
+- Capability-based routing: `get_idle_agents()`, `get_agent_capability_scores()` with project/type/keyword scoring, prefer experienced agents for similar work
+- Cost tracking: `get_token_usage()` aggregation from 'tokens_used' events, `hive costs` CLI command with --issue/--agent filters
+- `hive watch <issue_id>`: Live SSE streaming from worker sessions, formatted terminal output
+
 **Quality** ✅
 
-- 128 unit tests (100% passing)
-- 14 integration tests (require OpenCode server)
-- 14 modules + 3 prompt templates, ~5,500 lines production code
-- 12 test files, ~3,000 lines test code
-
-#### Not Yet Implemented
-
-- ⏳ Retry escalation chain (MAX_RETRIES enforcement, agent switching)
-- ⏳ Degraded mode (stop dispatching on OpenCode failure, recovery loop)
-- ⏳ Context cycling at runtime (token threshold → session cycle)
-
-See `IMPLEMENTATION_SUMMARY.md` for overview.
+- 167 unit tests (100% passing)
+- 15 modules + 3 prompt templates, ~6,500 lines production code
+- 12 test files, ~4,500 lines test code
 
 ---
 
@@ -1896,7 +1910,7 @@ The merge queue processor closes the loop from `done` → `finalized` → worktr
 - [x] `HIVE_MERGE_QUEUE_ENABLED` feature flag
 - [x] Lazy refinery session creation (only when needed)
 
-### 🔶 Phase 5: Resilience (Partial)
+### ✅ Phase 5: Resilience (COMPLETED)
 
 - [x] Session cleanup on cancel/abort/shutdown — sessions are killed (abort + delete) in all exit paths
 - [x] Stale agent reconciliation on daemon restart — orphaned sessions aborted, agents reset
@@ -1905,25 +1919,28 @@ The merge queue processor closes the loop from `done` → `finalized` → worktr
 - [x] Per-issue model configuration — `HIVE_WORKER_MODEL`, `HIVE_REFINERY_MODEL`, `--model` flag
 - [x] Prompt templates — `.md` files in `src/hive/prompts/` for easy hand-editing
 - [x] CLI enhancements — `--json` for logs/daemon, `--sort`/`--reverse`/`--type`/`--assignee`/`--limit` for list
-- [ ] Orchestrator retry logic — re-queue failed issues up to `MAX_RETRIES`
-- [ ] Degraded mode — `mode:degraded` label, stop dispatching, recovery loop with backoff
-- [ ] Context cycling for Refinery session (token threshold)
+- [x] Retry escalation chain — 3-tier: retry same agent (MAX_RETRIES=2) → switch agent (MAX_AGENT_SWITCHES=2) → escalate to human
+- [x] Degraded mode — `_opencode_healthy` flag, exponential backoff health check (5s→60s), auto-recovery
+- [x] Context cycling for Refinery session — token threshold (100K) or message count (>20)
 
 **Note**: Mayor escalation is now conversational (the human is already chatting with the Mayor), so the old structured escalation chain (worker → orchestrator → Mayor → `:::HUMAN_QUESTION:::`) is no longer needed.
 
-### Phase 6: Operational Maturity
+### ✅ Phase 6: Operational Maturity (COMPLETED)
 
-- [ ] Capability-based routing (agent CV queries, Section 14)
-- [ ] Labels and metadata on issues
-- [ ] Structured logging and metrics
-- [ ] Cost tracking per agent (OpenCode reports token usage per message)
-- [ ] `hive watch <issue-id>` — stream live OpenCode messages from a worker session
+- [x] Capability-based routing — `get_agent_capability_scores()` with project/type/keyword scoring, prefer experienced agents
+- [x] Structured logging — `src/hive/logging_config.py`, rotating file handler, all print() → logger.\*, HIVE_LOG_LEVEL
+- [x] Cost tracking — `get_token_usage()` aggregation, `hive costs` CLI command with --issue/--agent filters
+- [x] `hive watch <issue-id>` — live SSE streaming from worker sessions with formatted terminal output
 
-### Phase 7: Extensions
+### Phase 7: Resilience & Extensions
 
+- [ ] Long-lived refinery session — eager creation at startup, periodic health checks, auto-restart on death, stale-result race prevention
+- [ ] Dead code cleanup — remove orphaned functions, unused DB tables, unused config values
 - [ ] Web dashboard (read-only view of SQLite)
-- [ ] Webhook/Slack notifications on failures
 - [ ] Formula/template system for reusable molecule definitions
+
+### Maybe Eventualy
+
 - [ ] Multi-project support (multiple orchestrator instances sharing one OpenCode server)
 
 ---
