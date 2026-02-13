@@ -404,3 +404,28 @@ def test_get_merge_queue_stats_empty(temp_db):
     """Test merge queue stats with empty queue."""
     stats = temp_db.get_merge_queue_stats()
     assert stats == {"queued": 0, "running": 0, "merged": 0, "failed": 0}
+
+
+def test_count_events_by_type(temp_db):
+    """Test counting events by type for an issue."""
+    issue_id = temp_db.create_issue("Test issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Initially no events
+    assert temp_db.count_events_by_type(issue_id, "retry") == 0
+    assert temp_db.count_events_by_type(issue_id, "agent_switch") == 0
+
+    # Log some retry events
+    temp_db.log_event(issue_id, agent_id, "retry", {"attempt": 1})
+    temp_db.log_event(issue_id, agent_id, "retry", {"attempt": 2})
+    temp_db.log_event(issue_id, agent_id, "agent_switch", {"switch": 1})
+
+    # Count should be correct
+    assert temp_db.count_events_by_type(issue_id, "retry") == 2
+    assert temp_db.count_events_by_type(issue_id, "agent_switch") == 1
+    assert temp_db.count_events_by_type(issue_id, "escalated") == 0
+
+
+def test_count_events_by_type_nonexistent_issue(temp_db):
+    """Test counting events for non-existent issue returns 0."""
+    assert temp_db.count_events_by_type("nonexistent", "retry") == 0

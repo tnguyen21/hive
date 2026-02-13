@@ -494,6 +494,23 @@ class Database:
         rows.reverse()
         return rows
 
+    def count_events_by_type(self, issue_id: str, event_type: str) -> int:
+        """
+        Count events of a specific type for an issue.
+
+        Args:
+            issue_id: Issue ID to count events for
+            event_type: Type of event to count (e.g., 'retry', 'agent_switch')
+
+        Returns:
+            Number of events of the specified type for the issue
+        """
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ?",
+            (issue_id, event_type),
+        )
+        return cursor.fetchone()[0]
+
     def get_next_ready_step(self, parent_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the next ready step within a molecule.

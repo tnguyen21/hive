@@ -719,15 +719,8 @@ class Orchestrator:
                     del self.active_agents[agent.agent_id]
 
             else:
-                # Mark as failed
-                self.db.update_issue_status(agent.issue_id, "failed")
-
-                self.db.log_event(
-                    agent.issue_id,
-                    agent.agent_id,
-                    "incomplete",
-                    {"reason": result.reason, "summary": result.summary},
-                )
+                # Handle failure with retry escalation chain
+                await self._handle_agent_failure(agent, result)
 
                 # Clean up session and release agent
                 await self._cleanup_session(agent)
@@ -745,6 +738,71 @@ class Orchestrator:
             await self._cleanup_session(agent)
             if agent.agent_id in self.active_agents:
                 del self.active_agents[agent.agent_id]
+
+    async def _handle_agent_failure(self, agent: AgentIdentity, result):
+        """
+        Handle agent failure with retry escalation chain.
+
+        Three-tier escalation:
+        1. Retry same agent (up to Config.MAX_RETRIES times)
+        2. Switch agent (up to Config.MAX_AGENT_SWITCHES times)
+        3. Escalate to human intervention
+
+        Args:
+            agent: Agent identity that failed
+            result: Completion result with failure details
+        """
+        issue_id = agent.issue_id
+
+        # Count existing retry and agent_switch events
+        retry_count = self.db.count_events_by_type(issue_id, "retry")
+        agent_switch_count = self.db.count_events_by_type(issue_id, "agent_switch")
+
+        # Log the failure first
+        self.db.log_event(
+            issue_id,
+            agent.agent_id,
+            "incomplete",
+            {"reason": result.reason, "summary": result.summary},
+        )
+
+        if retry_count < Config.MAX_RETRIES:
+            # Tier 1: Retry with same or different agent
+            self.db.update_issue_status(issue_id, "open")
+            self.db.log_event(
+                issue_id,
+                agent.agent_id,
+                "retry",
+                {"retry_count": retry_count + 1, "reason": result.reason, "previous_agent": agent.name},
+            )
+            print(f"Retrying issue {issue_id} (attempt {retry_count + 1}/{Config.MAX_RETRIES})")
+
+        elif agent_switch_count < Config.MAX_AGENT_SWITCHES:
+            # Tier 2: Switch agent (reset issue to open with fresh session)
+            self.db.update_issue_status(issue_id, "open")
+            self.db.log_event(
+                issue_id,
+                agent.agent_id,
+                "agent_switch",
+                {"switch_count": agent_switch_count + 1, "reason": result.reason, "previous_agent": agent.name},
+            )
+            print(f"Switching agent for issue {issue_id} (switch {agent_switch_count + 1}/{Config.MAX_AGENT_SWITCHES})")
+
+        else:
+            # Tier 3: Escalate to human intervention
+            self.db.update_issue_status(issue_id, "escalated")
+            self.db.log_event(
+                issue_id,
+                agent.agent_id,
+                "escalated",
+                {
+                    "reason": "Exhausted all retry and agent switch attempts",
+                    "final_failure_reason": result.reason,
+                    "total_retries": retry_count,
+                    "total_agent_switches": agent_switch_count,
+                },
+            )
+            print(f"Escalating issue {issue_id} to human intervention after {retry_count} retries and {agent_switch_count} agent switches")
 
     async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
         """
