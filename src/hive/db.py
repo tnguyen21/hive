@@ -671,3 +671,153 @@ class Database:
             (event_type, detail_json),
         )
         self.conn.commit()
+
+    def get_idle_agents(self) -> List[Dict[str, Any]]:
+        """
+        Get all idle agents.
+
+        Returns:
+            List of idle agent dicts
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT * FROM agents
+            WHERE status = 'idle'
+            ORDER BY created_at ASC
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_agent_capability_scores(self, issue_dict: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Calculate capability scores for idle agents based on their track record with similar issues.
+
+        Similarity is determined by:
+        - Same project (exact match)
+        - Same issue type (task/bug/feature)
+        - Title keyword overlap (basic keyword matching)
+
+        Scoring formula:
+        Score = (same_project_completions * 3) + (same_type_completions * 2) + (keyword_overlap_completions * 1)
+
+        Args:
+            issue_dict: Issue dictionary containing 'project', 'type', 'title' fields
+
+        Returns:
+            Dict mapping agent_id to capability score (float)
+        """
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
+        # Get idle agents
+        idle_agents = self.get_idle_agents()
+        if not idle_agents:
+            return {}
+
+        # Extract issue characteristics
+        issue_project = issue_dict.get("project", "")
+        issue_type = issue_dict.get("type", "")
+        issue_title = issue_dict.get("title", "")
+
+        # Simple keyword extraction - split title into words, remove common words
+        stop_words = {
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "from",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "should",
+            "could",
+            "can",
+            "may",
+            "might",
+            "must",
+        }
+        issue_keywords = set(
+            [word.lower().strip(".,!?;:()[]{}\"'") for word in issue_title.split() if len(word) > 2 and word.lower() not in stop_words]
+        )
+
+        scores = {}
+
+        for agent in idle_agents:
+            agent_id = agent["id"]
+
+            # Query for successfully completed issues by this agent
+            cursor = self.conn.execute(
+                """
+                SELECT DISTINCT i.project, i.type, i.title
+                FROM events e
+                JOIN issues i ON e.issue_id = i.id
+                WHERE e.agent_id = ?
+                  AND e.event_type IN ('done', 'finalized', 'completed')
+                """,
+                (agent_id,),
+            )
+
+            completed_issues = cursor.fetchall()
+
+            if not completed_issues:
+                # No track record, score = 0
+                scores[agent_id] = 0.0
+                continue
+
+            same_project_count = 0
+            same_type_count = 0
+            keyword_overlap_count = 0
+
+            for completed in completed_issues:
+                completed_project = completed["project"] or ""
+                completed_type = completed["type"] or ""
+                completed_title = completed["title"] or ""
+
+                # Same project check (exact match)
+                if issue_project and completed_project == issue_project:
+                    same_project_count += 1
+
+                # Same type check (exact match)
+                if issue_type and completed_type == issue_type:
+                    same_type_count += 1
+
+                # Keyword overlap check
+                completed_keywords = set(
+                    [
+                        word.lower().strip(".,!?;:()[]{}\"'")
+                        for word in completed_title.split()
+                        if len(word) > 2 and word.lower() not in stop_words
+                    ]
+                )
+
+                if issue_keywords and completed_keywords:
+                    overlap = len(issue_keywords.intersection(completed_keywords))
+                    if overlap > 0:
+                        keyword_overlap_count += 1
+
+            # Calculate final score
+            score = (same_project_count * 3.0) + (same_type_count * 2.0) + (keyword_overlap_count * 1.0)
+            scores[agent_id] = score
+
+        return scores
