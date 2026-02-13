@@ -35,55 +35,55 @@ Workers do their coding in worktrees on separate branches. You coordinate from m
 
 ## CLI REFERENCE
 
-Always use `--json` when calling `hive` commands so you can parse the output programmatically.
+Always use `--json` before the subcommand when calling `hive` commands so you can parse the output programmatically.
 
 ### Issue Management
 
 #### Create an issue
 ```
-hive create <title> [description] [--priority 0-4] [--type task|bug|feature|step|molecule] [--model MODEL] [--json]
+hive --json create <title> [description] [--priority 0-4] [--type task|bug|feature|step|molecule] [--model MODEL]
 ```
 
 #### List issues
 ```
-hive list [--status open|in_progress|done|finalized|failed|blocked|canceled|escalated] [--sort priority|created|updated|status|title] [--reverse] [--type TYPE] [--assignee AGENT] [--limit N] [--json]
+hive --json list [--status open|in_progress|done|finalized|failed|blocked|canceled|escalated] [--sort priority|created|updated|status|title] [--reverse] [--type TYPE] [--assignee AGENT] [--limit N]
 ```
 
 #### Show issue details
 ```
-hive show <issue_id> [--json]
+hive --json show <issue_id>
 ```
 
 #### Update an issue
 ```
-hive update <issue_id> [--title TEXT] [--description TEXT] [--priority 0-4] [--status STATUS] [--model MODEL] [--json]
+hive --json update <issue_id> [--title TEXT] [--description TEXT] [--priority 0-4] [--status STATUS] [--model MODEL]
 ```
 
 #### Cancel an issue
 ```
-hive cancel <issue_id> [--reason TEXT] [--json]
+hive --json cancel <issue_id> [--reason TEXT]
 ```
 
 #### Finalize an issue (mark as done)
 ```
-hive finalize <issue_id> [--resolution TEXT] [--json]
+hive --json finalize <issue_id> [--resolution TEXT]
 ```
 
 #### Retry a failed/blocked issue
 ```
-hive retry <issue_id> [--notes TEXT] [--json]
+hive --json retry <issue_id> [--notes TEXT]
 ```
 
 #### Escalate an issue
 ```
-hive escalate <issue_id> --reason TEXT [--json]
+hive --json escalate <issue_id> --reason TEXT
 ```
 
 ### Workflows
 
 #### Create a molecule (multi-step workflow)
 ```
-hive molecule <title> [--description TEXT] --steps '<JSON array>' [--json]
+hive --json molecule <title> [--description TEXT] --steps '<JSON array>'
 ```
 
 Steps JSON format:
@@ -99,49 +99,49 @@ The `needs` array references step indices (0-based).
 
 #### Add a dependency
 ```
-hive dep add <issue_id> <depends_on_id> [--type blocks|related] [--json]
+hive --json dep add <issue_id> <depends_on_id> [--type blocks|related]
 ```
 
 #### Remove a dependency
 ```
-hive dep remove <issue_id> <depends_on_id> [--json]
+hive --json dep remove <issue_id> <depends_on_id>
 ```
 
 ### Monitoring
 
 #### System status overview
 ```
-hive status [--json]
+hive --json status
 ```
 
 #### Ready queue (unblocked, unassigned issues)
 ```
-hive ready [--json]
+hive --json ready
 ```
 
 #### List agents
 ```
-hive agents [--status idle|working|stalled|failed] [--json]
+hive --json agents [--status idle|working|stalled|failed]
 ```
 
 #### Show agent details
 ```
-hive agent <agent_id> [--json]
+hive --json agent <agent_id>
 ```
 
 #### Event log
 ```
-hive events [--issue ID] [--agent ID] [--type TYPE] [--limit N] [--json]
+hive --json events [--issue ID] [--agent ID] [--type TYPE] [--limit N]
 ```
 
 #### Tail events (live stream)
 ```
-hive logs [-f] [-n COUNT] [--issue ID] [--agent ID] [--json]
+hive --json logs [-f] [-n COUNT] [--issue ID] [--agent ID]
 ```
 
 #### Merge queue
 ```
-hive merges [--status queued|running|merged|failed] [--json]
+hive --json merges [--status queued|running|merged|failed]
 ```
 
 ## WRITING GOOD ISSUE DESCRIPTIONS
@@ -186,10 +186,10 @@ hive create "Fix the API client" "It sometimes fails, add retry logic"
 
 ## MONITORING CADENCE
 
-- After creating issues, check `hive status --json` within 30 seconds to confirm they were picked up.
-- While workers are active, check `hive status --json` periodically (every few minutes in conversation).
-- When the human asks "how's it going?", always run `hive status --json` and `hive events --limit 10 --json`.
-- When an issue shows `failed`, immediately run `hive show <id> --json` to diagnose.
+- After creating issues, check `hive --json status` within 30 seconds to confirm they were picked up.
+- While workers are active, check `hive --json status` periodically (every few minutes in conversation).
+- When the human asks "how's it going?", always run `hive --json status` and `hive --json events --limit 10`.
+- When an issue shows `failed`, immediately run `hive --json show <id>` to diagnose.
 
 ## GUIDELINES
 

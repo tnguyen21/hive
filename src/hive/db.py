@@ -276,12 +276,16 @@ class Database:
         """
         Atomically claim an issue using CAS (Compare-And-Set).
 
+        Only succeeds if the issue is unclaimed AND all blocking dependencies
+        are resolved. This prevents a race where the orchestrator grabs an issue
+        from the ready queue before its dependencies have been wired.
+
         Args:
             issue_id: ID of issue to claim
             agent_id: ID of agent claiming the issue
 
         Returns:
-            True if claim successful, False if already claimed
+            True if claim successful, False if already claimed or blocked
         """
         with self.transaction() as conn:
             cursor = conn.execute(
@@ -292,8 +296,15 @@ class Database:
                     updated_at = datetime('now')
                 WHERE id = ?
                   AND assignee IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM dependencies d
+                    JOIN issues blocker ON d.depends_on = blocker.id
+                    WHERE d.issue_id = ?
+                      AND d.type = 'blocks'
+                      AND blocker.status NOT IN ('done', 'finalized', 'canceled')
+                  )
                 """,
-                (agent_id, issue_id),
+                (agent_id, issue_id, issue_id),
             )
 
             success = cursor.rowcount == 1

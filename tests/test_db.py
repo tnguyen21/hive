@@ -207,6 +207,64 @@ def test_claim_issue_concurrent(temp_db):
     assert issue["assignee"] in [agent1_id, agent2_id, agent3_id]
 
 
+def test_claim_issue_blocked_by_dependency(temp_db):
+    """Test that claiming an issue with unresolved blocking deps fails."""
+    blocker_id = temp_db.create_issue("Blocker issue")
+    blocked_id = temp_db.create_issue("Blocked issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Add dependency: blocked depends on blocker
+    temp_db.add_dependency(blocked_id, blocker_id, "blocks")
+
+    # Claim should fail — blocker is still open
+    success = temp_db.claim_issue(blocked_id, agent_id)
+    assert not success
+
+    # Issue should remain open and unassigned
+    issue = temp_db.get_issue(blocked_id)
+    assert issue["status"] == "open"
+    assert issue["assignee"] is None
+
+
+def test_claim_issue_resolved_dependency(temp_db):
+    """Test that claiming succeeds when blocking deps are resolved."""
+    blocker_id = temp_db.create_issue("Blocker issue")
+    blocked_id = temp_db.create_issue("Blocked issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    temp_db.add_dependency(blocked_id, blocker_id, "blocks")
+
+    # Resolve the blocker
+    temp_db.update_issue_status(blocker_id, "finalized")
+
+    # Now claim should succeed
+    success = temp_db.claim_issue(blocked_id, agent_id)
+    assert success
+
+    issue = temp_db.get_issue(blocked_id)
+    assert issue["status"] == "in_progress"
+    assert issue["assignee"] == agent_id
+
+
+def test_claim_issue_dep_race_condition(temp_db):
+    """Test the exact race condition: issue created, then dep added before claim."""
+    # Simulate: issue created (appears in ready queue), then dep added
+    issue_id = temp_db.create_issue("New issue")
+    blocker_id = temp_db.create_issue("Blocker")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Dep added after creation but before claim (the race window)
+    temp_db.add_dependency(issue_id, blocker_id, "blocks")
+
+    # Claim should fail even though the issue was "ready" when created
+    success = temp_db.claim_issue(issue_id, agent_id)
+    assert not success
+
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "open"
+    assert issue["assignee"] is None
+
+
 def test_log_event(temp_db):
     """Test event logging."""
     issue_id = temp_db.create_issue("Test issue")

@@ -37,6 +37,45 @@ def test_cli_create_json(temp_db, tmp_path, capsys):
     assert data["status"] == "open"
 
 
+def test_cli_create_with_depends_on(temp_db, tmp_path, capsys):
+    """Test creating an issue with --depends-on wires deps atomically."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Create a blocker issue first
+    blocker_id = cli.create("Blocker", "block desc")
+
+    # Create a dependent issue with --depends-on
+    dependent_id = cli.create("Dependent", "dep desc", depends_on=[blocker_id])
+
+    # Verify dependency was created
+    issue = temp_db.get_issue(dependent_id)
+    assert issue["status"] == "open"
+
+    # The dependent should NOT be claimable (blocker is still open)
+    agent_id = temp_db.create_agent("test-agent")
+    claimed = temp_db.claim_issue(dependent_id, agent_id)
+    assert not claimed
+
+    # Resolve blocker, then claim should work
+    temp_db.update_issue_status(blocker_id, "finalized")
+    claimed = temp_db.claim_issue(dependent_id, agent_id)
+    assert claimed
+
+
+def test_cli_create_with_depends_on_json(temp_db, tmp_path, capsys):
+    """Test --depends-on shows in JSON output."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    blocker_id = cli.create("Blocker", "desc")
+    capsys.readouterr()  # Clear output from first create
+
+    cli.create("Dependent", "desc", depends_on=[blocker_id], json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert blocker_id in data["depends_on"]
+
+
 def test_cli_list_issues(temp_db, tmp_path, capsys):
     """Test listing issues via CLI."""
     cli = HiveCLI(temp_db, str(tmp_path))

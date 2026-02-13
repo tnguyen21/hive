@@ -57,6 +57,7 @@ class HiveCLI:
         priority: int = 2,
         issue_type: str = "task",
         model: Optional[str] = None,
+        depends_on: Optional[list] = None,
         *,
         json_mode: bool = False,
     ):
@@ -69,6 +70,8 @@ class HiveCLI:
         }
         if model:
             params["model"] = model
+        if depends_on:
+            params["depends_on"] = depends_on
 
         result = self._run_tool(
             "hive_create_issue",
@@ -79,6 +82,8 @@ class HiveCLI:
             print(f"Created issue: {result['issue_id']}")
             print(f"  Title: {title}")
             print(f"  Priority: {priority}")
+            if depends_on:
+                print(f"  Depends on: {', '.join(depends_on)}")
         return result.get("issue_id") if result else None
 
     def list_issues(
@@ -893,6 +898,12 @@ def main():
         "--model",
         help="Model to use for this issue (overrides global WORKER_MODEL)",
     )
+    create_parser.add_argument(
+        "--depends-on",
+        dest="depends_on",
+        action="append",
+        help="Issue ID this depends on (can be repeated: --depends-on w-abc --depends-on w-def)",
+    )
 
     # list command
     list_parser = subparsers.add_parser("list", help="List all issues")
@@ -1088,6 +1099,7 @@ def main():
                 args.priority,
                 args.issue_type,
                 model=getattr(args, "model", None),
+                depends_on=getattr(args, "depends_on", None),
                 json_mode=json_mode,
             )
 

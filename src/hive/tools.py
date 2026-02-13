@@ -51,8 +51,9 @@ class ToolExecutor:
         type: str = "task",
         project: Optional[str] = None,
         model: Optional[str] = None,
+        depends_on: Optional[list] = None,
     ) -> Dict[str, Any]:
-        """Create a new issue."""
+        """Create a new issue, optionally with dependencies wired atomically."""
         issue_id = self.db.create_issue(
             title=title,
             description=description,
@@ -61,10 +62,19 @@ class ToolExecutor:
             project=project or self.project_name,
             model=model,
         )
+
+        # Wire dependencies immediately so the issue can't be claimed before they exist
+        deps_added = []
+        if depends_on:
+            for dep_id in depends_on:
+                self.db.add_dependency(issue_id, dep_id, "blocks")
+                deps_added.append(dep_id)
+
         return {
             "issue_id": issue_id,
             "title": title,
             "status": "open",
+            "depends_on": deps_added,
             "message": f"Created issue {issue_id}: {title}",
         }
 
