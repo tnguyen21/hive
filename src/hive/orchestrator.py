@@ -93,7 +93,9 @@ class Orchestrator:
         """Renew the lease for the agent associated with a session.
 
         Called on any SSE activity from the session, proving the worker
-        is still alive and making progress.
+        is still alive and making progress. Uses LEASE_EXTENSION (not
+        LEASE_DURATION) so renewals grant a shorter window than the
+        initial lease.
         """
         now = datetime.now()
         self._session_last_activity[session_id] = now
@@ -108,7 +110,7 @@ class Orchestrator:
                         SET lease_expires_at = datetime('now', '+{} seconds'),
                             last_progress_at = datetime('now')
                         WHERE id = ?
-                        """.format(Config.LEASE_DURATION),
+                        """.format(Config.LEASE_EXTENSION),
                         (agent.agent_id,),
                     )
                     self.db.conn.commit()
@@ -465,11 +467,12 @@ class Orchestrator:
             # Create event for waiting on completion
             self.session_status_events[session_id] = asyncio.Event()
 
-            # Send prompt asynchronously
+            # Send prompt asynchronously (with system prompt for project context)
             await self.opencode.send_message_async(
                 session_id,
                 parts=[{"type": "text", "text": prompt}],
                 model=make_model_config(model),
+                system=system_prompt,
                 directory=worktree_path,
             )
 
@@ -820,11 +823,12 @@ class Orchestrator:
             # Create event for waiting on completion
             self.session_status_events[new_session_id] = asyncio.Event()
 
-            # Send prompt asynchronously
+            # Send prompt asynchronously (with system prompt for project context)
             await self.opencode.send_message_async(
                 new_session_id,
                 parts=[{"type": "text", "text": prompt}],
                 model=make_model_config(model),
+                system=system_prompt,
                 directory=agent.worktree,
             )
 

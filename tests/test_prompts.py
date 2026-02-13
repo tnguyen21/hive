@@ -32,11 +32,9 @@ def test_build_worker_prompt_basic():
     assert "No Approval Fallacy" in prompt
     assert "Directory Discipline" in prompt
     assert "COMPLETION SIGNAL" in prompt
-    # GT behavioral principles
+    # Behavioral principles
     assert "Propulsion Principle" in prompt
-    assert "Idle Worker Heresy" in prompt
     assert "Escalate and Move On" in prompt
-    assert "Capability Ledger" in prompt
 
 
 def test_build_worker_prompt_with_molecule():

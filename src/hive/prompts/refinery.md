@@ -28,10 +28,13 @@ ${problem}
 ## STEPS
 
 1. `cd ${worktree_path}`
-2. Run `git rebase main` (resolve conflicts if any)
-3. ${test_step}
-4. Ensure all changes are committed and git status is clean
-5. Output a `:::MERGE_RESULT:::` block (see below)
+2. First check the worktree state: `git status`. If there's a rebase in progress, abort it with `git rebase --abort` before starting fresh.
+3. Run `git rebase main` (resolve conflicts if any)
+4. ${test_step}
+5. Ensure all changes are committed and git status is clean
+6. Output a `:::MERGE_RESULT:::` block (see below)
+
+**Important**: All git operations happen in the worktree at `${worktree_path}`. The final `git merge --ff-only` to main is handled by the orchestrator after you succeed — you just need to get the branch cleanly rebased and tests passing.
 
 ## CARDINAL RULES
 
@@ -47,7 +50,8 @@ ${problem}
 3. **No silent failures**: Every conflict must be recorded. Every test failure
    must be attributed.
 
-4. **Stay in the worktree**: All work happens in ${worktree_path}
+4. **Stay in the worktree**: All work happens in ${worktree_path}. Do not
+   modify files in the main repo directory.
 
 ## CONFLICT RESOLUTION APPROACH
 

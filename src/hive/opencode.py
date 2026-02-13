@@ -145,6 +145,7 @@ class OpenCodeClient:
         parts: List[Dict[str, Any]],
         agent: str = "build",
         model: Optional[Dict[str, str]] = None,
+        system: Optional[str] = None,
         directory: Optional[str] = None,
     ):
         """
@@ -157,6 +158,7 @@ class OpenCodeClient:
             parts: Message parts
             agent: Agent type (default: "build")
             model: Model config dict with providerID and modelID
+            system: Additional system prompt
             directory: Directory context for this request
         """
         if not self.session:
@@ -171,6 +173,8 @@ class OpenCodeClient:
         payload = {"parts": parts, "agent": agent}
         if model:
             payload["model"] = model
+        if system:
+            payload["system"] = system
 
         url = f"{self.base_url}/session/{session_id}/prompt_async"
         async with self.session.post(url, json=payload, headers=headers) as resp:

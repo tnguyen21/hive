@@ -1,6 +1,7 @@
 """SSE (Server-Sent Events) client for OpenCode event stream."""
 
 import asyncio
+import inspect
 import json
 from typing import Any, Callable, Dict, Optional
 
@@ -124,7 +125,7 @@ class SSEClient:
         # Call specific handler if registered
         if event_type in self.handlers:
             handler = self.handlers[event_type]
-            if asyncio.iscoroutinefunction(handler):
+            if inspect.iscoroutinefunction(handler):
                 await handler(properties)
             else:
                 handler(properties)
@@ -132,7 +133,7 @@ class SSEClient:
         # Call catch-all handler if registered
         if "*" in self.handlers:
             handler = self.handlers["*"]
-            if asyncio.iscoroutinefunction(handler):
+            if inspect.iscoroutinefunction(handler):
                 await handler(event_type, properties)
             else:
                 handler(event_type, properties)
