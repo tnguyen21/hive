@@ -505,6 +505,66 @@ class HiveCLI:
         except KeyboardInterrupt:
             pass
 
+    def costs(
+        self,
+        issue_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        *,
+        json_mode: bool = False,
+    ):
+        """Show token usage and cost estimates."""
+        usage = self.db.get_token_usage(issue_id=issue_id, agent_id=agent_id)
+
+        if json_mode:
+            print(json.dumps(usage, indent=2))
+            return
+
+        print("\n=== Token Usage & Costs ===")
+        if issue_id:
+            print(f"Issue: {issue_id}")
+        elif agent_id:
+            print(f"Agent: {agent_id}")
+        else:
+            print("Project-wide")
+
+        print(f"\nTotal tokens: {usage['total_tokens']:,}")
+        print(f"  Input tokens: {usage['total_input_tokens']:,}")
+        print(f"  Output tokens: {usage['total_output_tokens']:,}")
+        print(f"Estimated cost: ${usage['estimated_cost_usd']:.4f}")
+
+        # Show breakdowns if not filtered
+        if not issue_id and not agent_id:
+            issue_breakdown = usage.get("issue_breakdown", {})
+            if issue_breakdown:
+                print(f"\n=== Top Issues by Token Usage ===")
+                sorted_issues = sorted(
+                    issue_breakdown.items(),
+                    key=lambda x: x[1]["input_tokens"] + x[1]["output_tokens"],
+                    reverse=True,
+                )
+                for issue, tokens in sorted_issues[:10]:  # Top 10
+                    total = tokens["input_tokens"] + tokens["output_tokens"]
+                    print(f"{issue}: {total:,} tokens")
+
+            agent_breakdown = usage.get("agent_breakdown", {})
+            if agent_breakdown:
+                print(f"\n=== Top Agents by Token Usage ===")
+                sorted_agents = sorted(
+                    agent_breakdown.items(),
+                    key=lambda x: x[1]["input_tokens"] + x[1]["output_tokens"],
+                    reverse=True,
+                )
+                for agent, tokens in sorted_agents[:10]:  # Top 10
+                    total = tokens["input_tokens"] + tokens["output_tokens"]
+                    print(f"{agent}: {total:,} tokens")
+
+            model_breakdown = usage.get("model_breakdown", {})
+            if model_breakdown:
+                print(f"\n=== Usage by Model ===")
+                for model, tokens in model_breakdown.items():
+                    total = tokens["input_tokens"] + tokens["output_tokens"]
+                    print(f"{model}: {total:,} tokens")
+
     # ── Daemon management ────────────────────────────────────────────
 
     def _make_daemon(self) -> HiveDaemon:
@@ -828,6 +888,11 @@ def main():
     merges_parser = subparsers.add_parser("merges", help="List merge queue entries")
     merges_parser.add_argument("--status", help="Filter by status (queued|running|merged|failed)")
 
+    # costs command
+    costs_parser = subparsers.add_parser("costs", help="Show token usage and cost estimates")
+    costs_parser.add_argument("--issue", help="Filter by specific issue ID")
+    costs_parser.add_argument("--agent", help="Filter by specific agent ID")
+
     # status command
     subparsers.add_parser("status", help="Show orchestrator status")
 
@@ -984,6 +1049,13 @@ def main():
 
         elif args.command == "merges":
             cli.merges(status=args.status, json_mode=json_mode)
+
+        elif args.command == "costs":
+            cli.costs(
+                issue_id=args.issue,
+                agent_id=args.agent,
+                json_mode=json_mode,
+            )
 
         elif args.command == "status":
             cli.status(json_mode=json_mode)

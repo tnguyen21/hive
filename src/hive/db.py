@@ -821,3 +821,101 @@ class Database:
             scores[agent_id] = score
 
         return scores
+
+    def get_token_usage(
+        self,
+        issue_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get aggregated token usage from 'tokens_used' events.
+
+        Args:
+            issue_id: Filter by specific issue ID (optional)
+            agent_id: Filter by specific agent ID (optional)
+
+        Returns:
+            Dict with aggregated token counts and cost estimates
+        """
+        conditions = ["event_type = 'tokens_used'"]
+        params = []
+
+        if issue_id:
+            conditions.append("issue_id = ?")
+            params.append(issue_id)
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+
+        where_clause = " AND ".join(conditions)
+        query = f"""
+            SELECT detail, agent_id, issue_id
+            FROM events
+            WHERE {where_clause}
+            ORDER BY id ASC
+        """
+
+        cursor = self.conn.execute(query, params)
+        events = cursor.fetchall()
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_tokens = 0
+
+        issue_breakdown = {}
+        agent_breakdown = {}
+        model_breakdown = {}
+
+        for row in events:
+            detail_json = row["detail"]
+            if not detail_json:
+                continue
+
+            try:
+                detail = json.loads(detail_json)
+                input_tokens = detail.get("input_tokens", 0)
+                output_tokens = detail.get("output_tokens", 0)
+                model = detail.get("model", "unknown")
+
+                total_input_tokens += input_tokens
+                total_output_tokens += output_tokens
+                total_tokens += input_tokens + output_tokens
+
+                # Breakdown by issue
+                issue = row["issue_id"]
+                if issue and issue not in issue_breakdown:
+                    issue_breakdown[issue] = {"input_tokens": 0, "output_tokens": 0}
+                if issue:
+                    issue_breakdown[issue]["input_tokens"] += input_tokens
+                    issue_breakdown[issue]["output_tokens"] += output_tokens
+
+                # Breakdown by agent
+                agent = row["agent_id"]
+                if agent and agent not in agent_breakdown:
+                    agent_breakdown[agent] = {"input_tokens": 0, "output_tokens": 0}
+                if agent:
+                    agent_breakdown[agent]["input_tokens"] += input_tokens
+                    agent_breakdown[agent]["output_tokens"] += output_tokens
+
+                # Breakdown by model
+                if model not in model_breakdown:
+                    model_breakdown[model] = {"input_tokens": 0, "output_tokens": 0}
+                model_breakdown[model]["input_tokens"] += input_tokens
+                model_breakdown[model]["output_tokens"] += output_tokens
+
+            except json.JSONDecodeError:
+                continue
+
+        # Estimate cost (rough approximation, varies by model)
+        # Using Claude Sonnet pricing as baseline: ~$15/1M input, ~$75/1M output
+        estimated_cost = (total_input_tokens / 1_000_000 * 15.0) + (total_output_tokens / 1_000_000 * 75.0)
+
+        return {
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": round(estimated_cost, 4),
+            "issue_breakdown": issue_breakdown,
+            "agent_breakdown": agent_breakdown,
+            "model_breakdown": model_breakdown,
+        }

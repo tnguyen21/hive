@@ -630,3 +630,118 @@ def test_get_agent_capability_scores_combined_scoring(db_with_capability_data):
     # - Keyword overlap: issue5 ("Fix","bug") = 1 match = 1 point
     # Total: 3 + 2 + 1 = 6 points
     assert scores[data["agent2"]] == 6.0
+
+
+def test_get_token_usage_no_data(temp_db):
+    """Test get_token_usage with no data."""
+    usage = temp_db.get_token_usage()
+
+    assert usage["total_tokens"] == 0
+    assert usage["total_input_tokens"] == 0
+    assert usage["total_output_tokens"] == 0
+    assert usage["estimated_cost_usd"] == 0
+    assert usage["issue_breakdown"] == {}
+    assert usage["agent_breakdown"] == {}
+    assert usage["model_breakdown"] == {}
+
+
+def test_get_token_usage_with_data(temp_db):
+    """Test get_token_usage with token usage events."""
+    # Create issue and agent
+    issue_id = temp_db.create_issue("Test issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Add token usage events
+    temp_db.log_event(issue_id, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500, "model": "claude-sonnet-4-5-20250929"})
+    temp_db.log_event(issue_id, agent_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1500, "model": "claude-sonnet-4-5-20250929"})
+
+    usage = temp_db.get_token_usage()
+
+    assert usage["total_tokens"] == 5000
+    assert usage["total_input_tokens"] == 3000
+    assert usage["total_output_tokens"] == 2000
+    assert usage["estimated_cost_usd"] > 0  # Should have some cost
+
+    # Check breakdowns
+    assert issue_id in usage["issue_breakdown"]
+    assert usage["issue_breakdown"][issue_id]["input_tokens"] == 3000
+    assert usage["issue_breakdown"][issue_id]["output_tokens"] == 2000
+
+    assert agent_id in usage["agent_breakdown"]
+    assert usage["agent_breakdown"][agent_id]["input_tokens"] == 3000
+    assert usage["agent_breakdown"][agent_id]["output_tokens"] == 2000
+
+    assert "claude-sonnet-4-5-20250929" in usage["model_breakdown"]
+    model_usage = usage["model_breakdown"]["claude-sonnet-4-5-20250929"]
+    assert model_usage["input_tokens"] == 3000
+    assert model_usage["output_tokens"] == 2000
+
+
+def test_get_token_usage_filtered_by_issue(temp_db):
+    """Test get_token_usage filtered by issue ID."""
+    # Create two issues and agent
+    issue1_id = temp_db.create_issue("Issue 1")
+    issue2_id = temp_db.create_issue("Issue 2")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Add token usage for both issues
+    temp_db.log_event(issue1_id, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
+    temp_db.log_event(issue2_id, agent_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1500})
+
+    # Get usage for issue1 only
+    usage = temp_db.get_token_usage(issue_id=issue1_id)
+
+    assert usage["total_tokens"] == 1500
+    assert usage["total_input_tokens"] == 1000
+    assert usage["total_output_tokens"] == 500
+
+    # Should only have issue1 in breakdown
+    assert len(usage["issue_breakdown"]) == 1
+    assert issue1_id in usage["issue_breakdown"]
+    assert issue2_id not in usage["issue_breakdown"]
+
+
+def test_get_token_usage_filtered_by_agent(temp_db):
+    """Test get_token_usage filtered by agent ID."""
+    # Create issue and two agents
+    issue_id = temp_db.create_issue("Test issue")
+    agent1_id = temp_db.create_agent("agent-1")
+    agent2_id = temp_db.create_agent("agent-2")
+
+    # Add token usage for both agents
+    temp_db.log_event(issue_id, agent1_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
+    temp_db.log_event(issue_id, agent2_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1500})
+
+    # Get usage for agent1 only
+    usage = temp_db.get_token_usage(agent_id=agent1_id)
+
+    assert usage["total_tokens"] == 1500
+    assert usage["total_input_tokens"] == 1000
+    assert usage["total_output_tokens"] == 500
+
+    # Should only have agent1 in breakdown
+    assert len(usage["agent_breakdown"]) == 1
+    assert agent1_id in usage["agent_breakdown"]
+    assert agent2_id not in usage["agent_breakdown"]
+
+
+def test_get_token_usage_with_invalid_json(temp_db):
+    """Test get_token_usage with malformed JSON in events."""
+    issue_id = temp_db.create_issue("Test issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Add valid event
+    temp_db.log_event(issue_id, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
+
+    # Add invalid JSON event directly to database
+    temp_db.conn.execute(
+        "INSERT INTO events (issue_id, agent_id, event_type, detail) VALUES (?, ?, ?, ?)", (issue_id, agent_id, "tokens_used", "invalid json")
+    )
+    temp_db.conn.commit()
+
+    # Should still work, ignoring the invalid JSON
+    usage = temp_db.get_token_usage()
+
+    assert usage["total_tokens"] == 1500
+    assert usage["total_input_tokens"] == 1000
+    assert usage["total_output_tokens"] == 500

@@ -507,3 +507,101 @@ async def test_permission_unblocker_auto_resolve(temp_db, tmp_path):
         # In a real scenario, we'd create a session that triggers a permission request
         # and verify it gets auto-resolved
         assert isinstance(pending, list)
+
+
+def test_cli_costs_no_data(temp_db, tmp_path, capsys):
+    """Test costs command with no token usage data."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.costs()
+
+    captured = capsys.readouterr()
+    assert "Token Usage & Costs" in captured.out
+    assert "Total tokens: 0" in captured.out
+    assert "Estimated cost: $0.0000" in captured.out
+
+
+def test_cli_costs_with_data(temp_db, tmp_path, capsys):
+    """Test costs command with token usage data."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Create issue and agent
+    issue_id = temp_db.create_issue("Test issue", project=tmp_path.name)
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Add some token usage events
+    temp_db.log_event(issue_id, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500, "model": "claude-sonnet-4-5-20250929"})
+    temp_db.log_event(issue_id, agent_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1000, "model": "claude-sonnet-4-5-20250929"})
+
+    cli.costs()
+
+    captured = capsys.readouterr()
+    assert "Total tokens: 4,500" in captured.out
+    assert "Input tokens: 3,000" in captured.out
+    assert "Output tokens: 1,500" in captured.out
+    assert "$" in captured.out  # Should have some cost estimate
+
+
+def test_cli_costs_json(temp_db, tmp_path, capsys):
+    """Test costs command with JSON output."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Create issue and agent with token usage
+    issue_id = temp_db.create_issue("Test issue", project=tmp_path.name)
+    agent_id = temp_db.create_agent("test-agent")
+
+    temp_db.log_event(issue_id, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500, "model": "claude-sonnet-4-5-20250929"})
+
+    cli.costs(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["total_tokens"] == 1500
+    assert data["total_input_tokens"] == 1000
+    assert data["total_output_tokens"] == 500
+    assert "estimated_cost_usd" in data
+    assert "issue_breakdown" in data
+    assert "agent_breakdown" in data
+    assert "model_breakdown" in data
+
+
+def test_cli_costs_by_issue(temp_db, tmp_path, capsys):
+    """Test costs command filtered by issue."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Create issues and agents with token usage
+    issue1_id = temp_db.create_issue("Issue 1", project=tmp_path.name)
+    issue2_id = temp_db.create_issue("Issue 2", project=tmp_path.name)
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Add token usage for both issues
+    temp_db.log_event(issue1_id, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
+    temp_db.log_event(issue2_id, agent_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1000})
+
+    # Filter by issue1
+    cli.costs(issue_id=issue1_id)
+
+    captured = capsys.readouterr()
+    assert f"Issue: {issue1_id}" in captured.out
+    assert "Total tokens: 1,500" in captured.out
+
+
+def test_cli_costs_by_agent(temp_db, tmp_path, capsys):
+    """Test costs command filtered by agent."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Create issues and agents with token usage
+    issue_id = temp_db.create_issue("Test issue", project=tmp_path.name)
+    agent1_id = temp_db.create_agent("agent-1")
+    agent2_id = temp_db.create_agent("agent-2")
+
+    # Add token usage for both agents
+    temp_db.log_event(issue_id, agent1_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
+    temp_db.log_event(issue_id, agent2_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1000})
+
+    # Filter by agent1
+    cli.costs(agent_id=agent1_id)
+
+    captured = capsys.readouterr()
+    assert f"Agent: {agent1_id}" in captured.out
+    assert "Total tokens: 1,500" in captured.out

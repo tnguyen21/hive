@@ -5,7 +5,7 @@ import aiohttp
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import Config
 from .db import Database
@@ -253,6 +253,62 @@ class Orchestrator:
 
         self.active_agents.clear()
         logger.info("All sessions shut down")
+
+    def _log_token_usage(self, agent: AgentIdentity, messages: List[Dict[str, Any]]):
+        """
+        Extract token usage from messages and log as 'tokens_used' event.
+
+        Args:
+            agent: Agent identity
+            messages: List of session messages from OpenCode
+        """
+        total_input_tokens = 0
+        total_output_tokens = 0
+        model = None
+
+        for message in messages:
+            metadata = message.get("metadata", {})
+            if metadata:
+                # Check if this message has token usage metadata
+                input_tokens = metadata.get("input_tokens", 0)
+                output_tokens = metadata.get("output_tokens", 0)
+                msg_model = metadata.get("model")
+
+                if input_tokens > 0 or output_tokens > 0:
+                    total_input_tokens += input_tokens
+                    total_output_tokens += output_tokens
+                    if msg_model and not model:
+                        model = msg_model
+
+            # If no metadata, estimate from text length (1 token ≈ 4 chars)
+            if not metadata or (metadata.get("input_tokens", 0) == 0 and metadata.get("output_tokens", 0) == 0):
+                text_content = ""
+                for part in message.get("parts", []):
+                    if part.get("type") == "text":
+                        text_content += part.get("text", "")
+
+                if text_content:
+                    estimated_tokens = len(text_content) // 4  # Rough estimation
+                    if message.get("role") == "user":
+                        total_input_tokens += estimated_tokens
+                    else:
+                        total_output_tokens += estimated_tokens
+
+        # Only log if we found some token usage
+        if total_input_tokens > 0 or total_output_tokens > 0:
+            detail = {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+            }
+            if model:
+                detail["model"] = model
+
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "tokens_used",
+                detail,
+            )
 
     async def cancel_agent_for_issue(self, issue_id: str):
         """Cancel the active agent working on an issue.
@@ -748,6 +804,9 @@ class Orchestrator:
         # Get messages from session
         try:
             messages = await self.opencode.get_messages(agent.session_id, directory=agent.worktree)
+
+            # Extract and log token usage from messages
+            self._log_token_usage(agent, messages)
 
             # Assess completion — file_result takes priority over message parsing
             result = assess_completion(messages, file_result=file_result)
