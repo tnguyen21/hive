@@ -383,6 +383,9 @@ class Orchestrator:
         self._setup_sse_handlers()
         await self._reconcile_stale_agents()
 
+        # Initialize merge processor (eager refinery session creation)
+        await self.merge_processor.initialize()
+
         # Start SSE event consumer in background
         sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
 
@@ -391,6 +394,7 @@ class Orchestrator:
 
         # Start merge queue processor in background
         merge_task = asyncio.create_task(self.merge_processor_loop())
+        merge_task.add_done_callback(self._on_merge_task_done)
 
         try:
             # Run main loop
@@ -945,7 +949,9 @@ class Orchestrator:
                     "total_agent_switches": agent_switch_count,
                 },
             )
-            logger.warning(f"Escalating issue {issue_id} to human intervention after {retry_count} retries and {agent_switch_count} agent switches")
+            logger.warning(
+                f"Escalating issue {issue_id} to human intervention after {retry_count} retries and {agent_switch_count} agent switches"
+            )
 
     async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
         """
@@ -1206,16 +1212,44 @@ class Orchestrator:
         for agent in stalled:
             await self.handle_stalled_agent(agent)
 
+    def _on_merge_task_done(self, task: asyncio.Task):
+        """Handle merge_processor_loop task completion/failure.
+
+        If the task died unexpectedly and the orchestrator is still running,
+        auto-restart the merge processor loop.
+        """
+        if task.cancelled():
+            logger.info("Merge processor loop was cancelled")
+            return
+
+        exception = task.exception()
+        if exception:
+            logger.error(f"Merge processor loop died with exception: {exception}")
+            if self.running:
+                logger.info("Auto-restarting merge processor loop")
+                new_task = asyncio.create_task(self.merge_processor_loop())
+                new_task.add_done_callback(self._on_merge_task_done)
+
     async def merge_processor_loop(self):
         """
         Background loop to process the merge queue.
 
         Runs on MERGE_POLL_INTERVAL, processes one merge at a time.
+        Includes periodic health checks for the refinery session.
         """
+        health_check_counter = 0
+
         while self.running:
             try:
                 if Config.MERGE_QUEUE_ENABLED:
                     await self.merge_processor.process_queue_once()
+
+                # Health check every 6 iterations (~60s at 10s poll interval)
+                health_check_counter += 1
+                if health_check_counter >= 6:
+                    health_check_counter = 0
+                    await self.merge_processor.health_check()
+
             except Exception as e:
                 logger.error(f"Error in merge processor: {e}")
             await asyncio.sleep(Config.MERGE_POLL_INTERVAL)

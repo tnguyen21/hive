@@ -411,3 +411,255 @@ async def test_refinery_session_no_cycling_under_threshold(temp_db, mock_opencod
     assert mp.refinery_session_id == "test-session-789"
     mock_opencode.abort_session.assert_not_called()
     mock_opencode.delete_session.assert_not_called()
+
+
+# --- New tests for hardened refinery session ---
+
+
+@pytest.mark.asyncio
+async def test_force_reset_refinery_session(temp_db, mock_opencode):
+    """Test _force_reset_refinery_session cleans up and resets session ID."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Set up a session to reset
+    original_session_id = "session-to-reset"
+    mp.refinery_session_id = original_session_id
+
+    mock_opencode.abort_session = AsyncMock()
+    mock_opencode.delete_session = AsyncMock()
+
+    # Call force reset
+    reason = "Test reset"
+    await mp._force_reset_refinery_session(reason)
+
+    # Verify session ID was cleared
+    assert mp.refinery_session_id is None
+
+    # Verify abort and delete were called
+    mock_opencode.abort_session.assert_called_once_with(original_session_id, directory=mp.project_path)
+    mock_opencode.delete_session.assert_called_once_with(original_session_id, directory=mp.project_path)
+
+    # Verify event was logged
+    events = temp_db.get_events(None)
+    reset_events = [e for e in events if e["event_type"] == "refinery_session_reset"]
+    assert len(reset_events) == 1
+
+    event = reset_events[0]
+    import json
+
+    details = json.loads(event["detail"])
+    assert details["session_id"] == original_session_id
+    assert details["reason"] == reason
+
+
+@pytest.mark.asyncio
+async def test_force_reset_no_session(temp_db, mock_opencode):
+    """Test _force_reset_refinery_session handles no session gracefully."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # No session set
+    assert mp.refinery_session_id is None
+
+    mock_opencode.abort_session = AsyncMock()
+    mock_opencode.delete_session = AsyncMock()
+
+    # Call force reset - should do nothing
+    await mp._force_reset_refinery_session("No session to reset")
+
+    # Verify no calls were made
+    mock_opencode.abort_session.assert_not_called()
+    mock_opencode.delete_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_refinery_consecutive_errors(temp_db, mock_opencode):
+    """Test _wait_for_refinery bails after consecutive errors."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Mock get_session_status to always throw exceptions
+    mock_opencode.get_session_status = AsyncMock(side_effect=Exception("Connection failed"))
+
+    # Should bail after 5 consecutive errors with short timeout
+    result = await mp._wait_for_refinery("test-session", timeout=10)
+
+    assert result["status"] == "needs_human"
+    assert "consecutive errors" in result["summary"]
+    assert result["tests_passed"] is False
+    assert result["conflicts_resolved"] == 0
+
+    # Verify get_session_status was called multiple times but stopped at 5 errors
+    assert mock_opencode.get_session_status.call_count >= 5
+
+
+@pytest.mark.asyncio
+async def test_wait_for_refinery_message_count_fence(temp_db, mock_opencode):
+    """Test _wait_for_refinery respects min_message_count fence."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # First call: session is idle but no new messages
+    mock_opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
+    mock_opencode.get_messages = AsyncMock(
+        side_effect=[
+            # First call: only old messages, should continue waiting
+            [{"parts": [{"type": "text", "text": "old message"}]}],  # Only 1 message
+            # Second call: new message arrived
+            [
+                {"parts": [{"type": "text", "text": "old message"}]},
+                {"parts": [{"type": "text", "text": "new response"}]},
+            ],  # 2 messages
+        ]
+    )
+
+    # Mock parse_merge_result
+    with patch("hive.merge.parse_merge_result") as mock_parse:
+        mock_parse.return_value = {"status": "merged", "summary": "Success"}
+
+        # Call with min_message_count=1 (fence)
+        result = await mp._wait_for_refinery("test-session", timeout=30, min_message_count=1)
+
+    assert result["status"] == "merged"
+    # Should have been called twice - once for fence check, once for actual result
+    assert mock_opencode.get_messages.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_health_check_recreates_dead_session(temp_db, mock_opencode):
+    """Test health_check recreates dead session."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Set up a "dead" session
+    mp.refinery_session_id = "dead-session"
+
+    # Mock get_session_status to return None (dead session)
+    mock_opencode.get_session_status = AsyncMock(return_value=None)
+
+    # Mock session creation for recreation
+    mock_opencode.create_session = AsyncMock(return_value={"id": "new-session"})
+
+    # Call health check
+    healthy = await mp.health_check()
+
+    assert healthy is True
+    assert mp.refinery_session_id == "new-session"
+
+    # Verify get_session_status was called for the dead session
+    mock_opencode.get_session_status.assert_called_once_with("dead-session", directory=mp.project_path)
+
+    # Verify new session was created
+    mock_opencode.create_session.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_health_check_healthy_session(temp_db, mock_opencode):
+    """Test health_check returns True for healthy session."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Set up a healthy session
+    mp.refinery_session_id = "healthy-session"
+
+    # Mock get_session_status to return valid status
+    mock_opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
+
+    # Call health check
+    healthy = await mp.health_check()
+
+    assert healthy is True
+    assert mp.refinery_session_id == "healthy-session"  # Unchanged
+
+    # Verify session was checked
+    mock_opencode.get_session_status.assert_called_once_with("healthy-session", directory=mp.project_path)
+
+
+@pytest.mark.asyncio
+async def test_health_check_no_session_creates_new(temp_db, mock_opencode):
+    """Test health_check creates session when none exists."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # No session initially
+    assert mp.refinery_session_id is None
+
+    # Mock session creation
+    mock_opencode.create_session = AsyncMock(return_value={"id": "new-session"})
+
+    # Call health check
+    healthy = await mp.health_check()
+
+    assert healthy is True
+    assert mp.refinery_session_id == "new-session"
+
+    # Verify session was created
+    mock_opencode.create_session.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_initialize_creates_session(temp_db, mock_opencode):
+    """Test initialize creates refinery session eagerly."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Mock session creation
+    mock_opencode.create_session = AsyncMock(return_value={"id": "eager-session"})
+
+    # Call initialize
+    await mp.initialize()
+
+    assert mp.refinery_session_id == "eager-session"
+    mock_opencode.create_session.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_initialize_handles_failure_gracefully(temp_db, mock_opencode):
+    """Test initialize handles session creation failure gracefully."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Mock session creation to fail
+    mock_opencode.create_session = AsyncMock(side_effect=Exception("Creation failed"))
+
+    # Call initialize - should not raise
+    await mp.initialize()
+
+    # Session should remain None, will fall back to lazy creation
+    assert mp.refinery_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
+    """Test status verification after send_message_async detects unprocessed messages."""
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Set up merge entry
+    entry = {
+        "id": 1,
+        "issue_id": "test-issue",
+        "agent_id": "test-agent",
+        "branch_name": "test-branch",
+        "worktree": "/tmp/worktree",
+        "issue_title": "Test Issue",
+    }
+
+    # Mock session creation and message retrieval
+    mock_opencode.create_session = AsyncMock(return_value={"id": "test-session"})
+    mock_opencode.get_messages = AsyncMock(return_value=[])  # No existing messages
+    mock_opencode.send_message_async = AsyncMock()
+
+    # Mock session status to remain idle after message send (message not picked up)
+    mock_opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
+
+    mock_opencode.abort_session = AsyncMock()
+    mock_opencode.delete_session = AsyncMock()
+
+    # Patch config
+    with patch("hive.merge.Config") as mock_config:
+        mock_config.REFINERY_MODEL = "test-model"
+        mock_config.TEST_COMMAND = None
+
+        # Should raise RuntimeError and reset session
+        await mp._send_to_refinery(entry)
+
+    # Verify session was reset due to unprocessed message
+    assert mp.refinery_session_id is None
+    mock_opencode.abort_session.assert_called()
+    mock_opencode.delete_session.assert_called()
+
+    # Verify merge queue was marked failed
+    queue_entry = temp_db.get_merge_queue_entry(1)
+    assert queue_entry["status"] == "failed"

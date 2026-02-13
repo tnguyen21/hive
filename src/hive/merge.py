@@ -55,6 +55,76 @@ class MergeProcessor:
                 pass
             self.refinery_session_id = None
 
+    async def _force_reset_refinery_session(self, reason: str):
+        """Force reset the refinery session after a failure.
+
+        Args:
+            reason: Description of why the session is being reset
+        """
+        if not self.refinery_session_id:
+            return
+
+        session_id = self.refinery_session_id
+        self.refinery_session_id = None  # Clear immediately to prevent reuse
+
+        # Best-effort abort and delete
+        try:
+            await self.opencode.abort_session(session_id, directory=self.project_path)
+        except Exception:
+            pass  # Best effort
+
+        try:
+            await self.opencode.delete_session(session_id, directory=self.project_path)
+        except Exception:
+            pass  # Best effort
+
+        # Log the reset event
+        self.db.log_event(
+            None,  # No specific issue
+            None,  # No specific agent
+            "refinery_session_reset",
+            {"session_id": session_id, "reason": reason},
+        )
+
+    async def initialize(self):
+        """Initialize the merge processor, including eager refinery session creation."""
+        try:
+            # Pre-create refinery session so it's warm when first merge arrives
+            await self._ensure_refinery_session()
+        except Exception:
+            # Non-fatal if creation fails, will fall back to lazy creation
+            pass
+
+    async def health_check(self) -> bool:
+        """Check if the refinery session is alive, recreate if needed.
+
+        Returns:
+            True if healthy (or successfully recreated), False if failed to recreate
+        """
+        if not self.refinery_session_id:
+            # No session exists, try to create one
+            try:
+                await self._ensure_refinery_session()
+                return True
+            except Exception:
+                return False
+
+        try:
+            # Check if existing session is still alive
+            status = await self.opencode.get_session_status(self.refinery_session_id, directory=self.project_path)
+            if status is not None:
+                return True  # Session is alive
+
+            # Session is dead, recreate
+            self.refinery_session_id = None
+            await self._ensure_refinery_session()
+            return True
+
+        except Exception:
+            # Failed to check or recreate
+            self.refinery_session_id = None
+            return False
+
     async def process_queue_once(self):
         """Process the next item in the merge queue. One at a time, sequential."""
         entries = self.db.get_queued_merges(limit=1)
@@ -170,6 +240,10 @@ class MergeProcessor:
         try:
             session_id = await self._ensure_refinery_session()
 
+            # Record message count before sending (fence against stale results)
+            pre_send_messages = await self.opencode.get_messages(session_id, directory=self.project_path)
+            pre_send_count = len(pre_send_messages) if pre_send_messages else 0
+
             # Build the refinery prompt
             prompt = build_refinery_prompt(
                 issue_title=entry.get("issue_title", "Unknown"),
@@ -190,8 +264,15 @@ class MergeProcessor:
                 directory=self.project_path,
             )
 
+            # Brief delay to check if message was picked up
+            await asyncio.sleep(0.5)
+            status = await self.opencode.get_session_status(session_id, directory=self.project_path)
+            if status and status.get("type") == "idle":
+                # Message wasn't picked up, session still idle
+                raise RuntimeError("Refinery session did not pick up the message")
+
             # Wait for refinery to finish (poll session status)
-            result = await self._wait_for_refinery(session_id)
+            result = await self._wait_for_refinery(session_id, min_message_count=pre_send_count)
 
             # Process result
             if result["status"] == "merged":
@@ -234,14 +315,17 @@ class MergeProcessor:
                 "refinery_error",
                 {"error": str(e)},
             )
+            # Force reset refinery session so next merge gets a fresh session
+            await self._force_reset_refinery_session(f"Exception in _send_to_refinery: {str(e)}")
 
-    async def _wait_for_refinery(self, session_id: str, timeout: int = None) -> Dict[str, Any]:
+    async def _wait_for_refinery(self, session_id: str, timeout: int = None, min_message_count: int = 0) -> Dict[str, Any]:
         """
         Wait for the refinery session to become idle, then parse the result.
 
         Args:
             session_id: OpenCode session ID
             timeout: Timeout in seconds (defaults to LEASE_DURATION)
+            min_message_count: Minimum expected message count to avoid stale-result race
 
         Returns:
             Parsed merge result dict
@@ -251,6 +335,7 @@ class MergeProcessor:
 
         poll_interval = 5
         elapsed = 0
+        consecutive_errors = 0
 
         while elapsed < timeout:
             await asyncio.sleep(poll_interval)
@@ -261,9 +346,28 @@ class MergeProcessor:
                 if status and status.get("type") == "idle":
                     # Session finished — get messages and parse result
                     messages = await self.opencode.get_messages(session_id, directory=self.project_path)
+
+                    # Check if we have enough new messages (fence against stale results)
+                    if len(messages) <= min_message_count:
+                        # No new messages, the prompt wasn't processed - continue waiting
+                        continue
+
                     return parse_merge_result(messages)
-            except Exception:
-                continue
+
+                # Reset consecutive errors on successful status check
+                consecutive_errors = 0
+
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors >= 5:
+                    # Too many consecutive errors, bail early with needs_human
+                    return {
+                        "status": "needs_human",
+                        "summary": f"Refinery failed after {consecutive_errors} consecutive errors: {str(e)}",
+                        "tests_passed": False,
+                        "conflicts_resolved": 0,
+                    }
+                # Otherwise continue polling
 
         # Timeout
         return {

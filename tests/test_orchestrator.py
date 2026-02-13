@@ -629,3 +629,174 @@ async def test_degraded_mode_recovery(temp_db, tmp_path):
     # Check that recovery event was logged
     events = temp_db.get_events(event_type="opencode_recovered")
     assert len(events) == 1
+
+
+# Tests for new auto-restart functionality
+
+
+@pytest.mark.asyncio
+async def test_merge_task_auto_restart(temp_db, tmp_path):
+    """Test auto-restart of merge_processor_loop on unexpected death."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Mock merge processor
+    orch.merge_processor = AsyncMock()
+    orch.merge_processor.initialize = AsyncMock()
+
+    # Test callback with exception (should restart if running)
+    orch.running = True
+
+    # Create a mock task that died with an exception
+    failed_task = AsyncMock()
+    failed_task.cancelled.return_value = False
+    failed_task.exception.return_value = Exception("Merge processor died")
+
+    # Mock asyncio.create_task to capture the new task creation
+    with patch("asyncio.create_task") as mock_create_task:
+        mock_new_task = AsyncMock()
+        mock_create_task.return_value = mock_new_task
+
+        # Call the callback
+        orch._on_merge_task_done(failed_task)
+
+        # Verify new task was created with callback
+        mock_create_task.assert_called_once()
+        mock_new_task.add_done_callback.assert_called_once_with(orch._on_merge_task_done)
+
+
+@pytest.mark.asyncio
+async def test_merge_task_no_restart_when_cancelled(temp_db, tmp_path):
+    """Test no restart when task is cancelled."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Test callback with cancelled task (should not restart)
+    cancelled_task = AsyncMock()
+    cancelled_task.cancelled.return_value = True
+
+    with patch("asyncio.create_task") as mock_create_task:
+        # Call the callback
+        orch._on_merge_task_done(cancelled_task)
+
+        # Verify no new task was created
+        mock_create_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_task_no_restart_when_not_running(temp_db, tmp_path):
+    """Test no restart when orchestrator is not running."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Test callback when not running (should not restart)
+    orch.running = False
+
+    failed_task = AsyncMock()
+    failed_task.cancelled.return_value = False
+    failed_task.exception.return_value = Exception("Merge processor died")
+
+    with patch("asyncio.create_task") as mock_create_task:
+        # Call the callback
+        orch._on_merge_task_done(failed_task)
+
+        # Verify no new task was created
+        mock_create_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_processor_loop_health_check(temp_db, tmp_path):
+    """Test merge_processor_loop calls health_check periodically."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Mock merge processor and config
+    orch.merge_processor = AsyncMock()
+    orch.merge_processor.process_queue_once = AsyncMock()
+    orch.merge_processor.health_check = AsyncMock()
+
+    with patch("hive.orchestrator.Config") as mock_config:
+        mock_config.MERGE_QUEUE_ENABLED = True
+        mock_config.MERGE_POLL_INTERVAL = 0.01  # Very fast for testing
+
+        # Run the loop for a short time to trigger multiple iterations
+        orch.running = True
+
+        # Create a task and let it run briefly
+        loop_task = asyncio.create_task(orch.merge_processor_loop())
+
+        # Let it run for enough iterations to trigger health check
+        # Health check happens every 6 iterations
+        await asyncio.sleep(0.1)  # Should allow more than 6 iterations
+
+        # Stop the loop
+        orch.running = False
+
+        # Wait for task to complete
+        try:
+            await asyncio.wait_for(loop_task, timeout=1.0)
+        except asyncio.TimeoutError:
+            loop_task.cancel()
+
+    # Verify health check was called at least once
+    # (exact count depends on timing, but should be at least 1)
+    assert orch.merge_processor.health_check.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_merge_processor_initialize_called_on_start(temp_db, tmp_path):
+    """Test merge processor initialize is called during orchestrator start."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Mock all the async components to avoid actual startup
+    orch.merge_processor.initialize = AsyncMock()
+    orch._reconcile_stale_agents = AsyncMock()
+    orch.sse_client.connect_with_reconnect = AsyncMock()
+
+    with patch("asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = AsyncMock()
+
+        # Mock main_loop to exit immediately
+        orch.main_loop = AsyncMock()
+
+        # Call start
+        await orch.start()
+
+        # Verify initialize was called
+        orch.merge_processor.initialize.assert_called_once()
