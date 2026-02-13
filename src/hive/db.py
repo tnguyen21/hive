@@ -1,11 +1,14 @@
 """SQLite database layer for Hive orchestrator."""
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from .ids import generate_id
+
+logger = logging.getLogger(__name__)
 
 
 # SQL schema definition
@@ -167,7 +170,7 @@ class Database:
             try:
                 self.conn.execute("ALTER TABLE issues ADD COLUMN model TEXT")
                 self.conn.commit()
-                print("Added model column to issues table")
+                logger.info("Added model column to issues table")
             except sqlite3.Error as e:
                 if "duplicate column name" not in str(e).lower():
                     raise

@@ -2,6 +2,7 @@
 
 import asyncio
 import aiohttp
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -21,6 +22,8 @@ from .prompts import (
     remove_result_file,
 )
 from .sse import SSEClient
+
+logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -143,7 +146,7 @@ class Orchestrator:
         if not stale:
             return
 
-        print(f"Reconciling {len(stale)} stale agent(s) from previous run...")
+        logger.info(f"Reconciling {len(stale)} stale agent(s) from previous run")
 
         for row in stale:
             agent_dict = dict(row)
@@ -195,7 +198,7 @@ class Orchestrator:
                     pass
 
         self.db.conn.commit()
-        print(f"Reconciled {len(stale)} stale agent(s)")
+        logger.info(f"Reconciled {len(stale)} stale agent(s)")
 
     async def _shutdown_all_sessions(self):
         """Abort and delete all active opencode sessions on shutdown.
@@ -206,7 +209,7 @@ class Orchestrator:
         if not self.active_agents:
             return
 
-        print(f"Shutting down {len(self.active_agents)} active session(s)...")
+        logger.info(f"Shutting down {len(self.active_agents)} active session(s)")
 
         for agent_id, agent in list(self.active_agents.items()):
             try:
@@ -249,7 +252,7 @@ class Orchestrator:
         await self.merge_processor.shutdown()
 
         self.active_agents.clear()
-        print("All sessions shut down.")
+        logger.info("All sessions shut down")
 
     async def cancel_agent_for_issue(self, issue_id: str):
         """Cancel the active agent working on an issue.
@@ -270,7 +273,7 @@ class Orchestrator:
         if not agent:
             return  # No active agent for this issue
 
-        print(f"Canceling agent {agent.name} (session {agent.session_id}) for issue {issue_id}")
+        logger.info(f"Canceling agent {agent.name} (session {agent.session_id}) for issue {issue_id}")
 
         # Abort the opencode session
         try:
@@ -363,7 +366,7 @@ class Orchestrator:
                         self._opencode_healthy = True
                         self._degraded_since = None
                         self._backoff_delay = 5  # Reset backoff
-                        print(f"OpenCode recovered after {degraded_duration:.1f}s degraded mode")
+                        logger.info(f"OpenCode recovered after {degraded_duration:.1f}s degraded mode")
                     else:
                         # Still unhealthy - wait with exponential backoff
                         await asyncio.sleep(self._backoff_delay)
@@ -400,7 +403,7 @@ class Orchestrator:
                 if self._is_opencode_error(e):
                     await self._enter_degraded_mode(str(e))
                 else:
-                    print(f"Error in main loop: {e}")
+                    logger.error(f"Error in main loop: {e}")
                     await asyncio.sleep(Config.POLL_INTERVAL)
 
     async def spawn_worker(self, issue: Dict[str, str]):
@@ -812,7 +815,7 @@ class Orchestrator:
                 "retry",
                 {"retry_count": retry_count + 1, "reason": result.reason, "previous_agent": agent.name},
             )
-            print(f"Retrying issue {issue_id} (attempt {retry_count + 1}/{Config.MAX_RETRIES})")
+            logger.info(f"Retrying issue {issue_id} (attempt {retry_count + 1}/{Config.MAX_RETRIES})")
 
         elif agent_switch_count < Config.MAX_AGENT_SWITCHES:
             # Tier 2: Switch agent (reset issue to open with fresh session)
@@ -823,7 +826,7 @@ class Orchestrator:
                 "agent_switch",
                 {"switch_count": agent_switch_count + 1, "reason": result.reason, "previous_agent": agent.name},
             )
-            print(f"Switching agent for issue {issue_id} (switch {agent_switch_count + 1}/{Config.MAX_AGENT_SWITCHES})")
+            logger.info(f"Switching agent for issue {issue_id} (switch {agent_switch_count + 1}/{Config.MAX_AGENT_SWITCHES})")
 
         else:
             # Tier 3: Escalate to human intervention
@@ -839,7 +842,7 @@ class Orchestrator:
                     "total_agent_switches": agent_switch_count,
                 },
             )
-            print(f"Escalating issue {issue_id} to human intervention after {retry_count} retries and {agent_switch_count} agent switches")
+            logger.warning(f"Escalating issue {issue_id} to human intervention after {retry_count} retries and {agent_switch_count} agent switches")
 
     async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
         """
@@ -1066,7 +1069,7 @@ class Orchestrator:
             self._backoff_delay = 5  # Reset backoff
 
             self.db.log_system_event("opencode_degraded", {"reason": error_reason, "timestamp": self._degraded_since.isoformat()})
-            print(f"Entering degraded mode: {error_reason}")
+            logger.warning(f"Entering degraded mode: {error_reason}")
 
     async def check_stalled_agents(self):
         """Check for stalled agents owned by THIS daemon and handle them.
@@ -1111,7 +1114,7 @@ class Orchestrator:
                 if Config.MERGE_QUEUE_ENABLED:
                     await self.merge_processor.process_queue_once()
             except Exception as e:
-                print(f"Error in merge processor: {e}")
+                logger.error(f"Error in merge processor: {e}")
             await asyncio.sleep(Config.MERGE_POLL_INTERVAL)
 
     async def permission_unblocker_loop(self):
@@ -1161,7 +1164,7 @@ class Orchestrator:
                 await asyncio.sleep(Config.PERMISSION_POLL_INTERVAL)
 
             except Exception as e:
-                print(f"Error in permission unblocker: {e}")
+                logger.error(f"Error in permission unblocker: {e}")
                 await asyncio.sleep(Config.PERMISSION_POLL_INTERVAL)
 
     def evaluate_permission_policy(self, perm: Dict[str, Any]) -> Optional[str]:
@@ -1218,7 +1221,7 @@ async def main():
         try:
             await orchestrator.start()
         except KeyboardInterrupt:
-            print("\nShutting down orchestrator...")
+            logger.info("Shutting down orchestrator")
         finally:
             db.close()
 

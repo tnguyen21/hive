@@ -26,3 +26,10 @@ packages = ["src/hive"]
 
 [tool.ruff]
 line-length = 144
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-timeout>=2.4.0",
+]
