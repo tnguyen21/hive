@@ -646,3 +646,25 @@ class Database:
         for row in cursor.fetchall():
             stats[row["status"]] = row["count"]
         return stats
+
+    def log_system_event(self, event_type: str, detail: Optional[Dict[str, Any]] = None):
+        """
+        Log a system-level event to the audit trail.
+
+        Args:
+            event_type: Type of system event (e.g., 'opencode_degraded', 'opencode_recovered')
+            detail: Additional event details dict
+        """
+        detail_json = json.dumps(detail) if detail else None
+
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
+        self.conn.execute(
+            """
+            INSERT INTO events (issue_id, agent_id, event_type, detail)
+            VALUES (NULL, NULL, ?, ?)
+            """,
+            (event_type, detail_json),
+        )
+        self.conn.commit()

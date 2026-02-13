@@ -429,3 +429,41 @@ def test_count_events_by_type(temp_db):
 def test_count_events_by_type_nonexistent_issue(temp_db):
     """Test counting events for non-existent issue returns 0."""
     assert temp_db.count_events_by_type("nonexistent", "retry") == 0
+
+
+def test_log_system_event(temp_db):
+    """Test logging system-level events."""
+    temp_db.log_system_event("opencode_degraded", {"reason": "Connection timeout"})
+
+    # Get all events
+    events = temp_db.get_events()
+
+    # Find the system event
+    system_events = [e for e in events if e["event_type"] == "opencode_degraded"]
+    assert len(system_events) == 1
+
+    event = system_events[0]
+    assert event["issue_id"] is None
+    assert event["agent_id"] is None
+    assert event["event_type"] == "opencode_degraded"
+
+    detail = json.loads(event["detail"])
+    assert detail == {"reason": "Connection timeout"}
+
+
+def test_log_system_event_no_detail(temp_db):
+    """Test logging system-level events without detail."""
+    temp_db.log_system_event("system_started")
+
+    # Get all events
+    events = temp_db.get_events()
+
+    # Find the system event
+    system_events = [e for e in events if e["event_type"] == "system_started"]
+    assert len(system_events) == 1
+
+    event = system_events[0]
+    assert event["issue_id"] is None
+    assert event["agent_id"] is None
+    assert event["event_type"] == "system_started"
+    assert event["detail"] is None

@@ -1,6 +1,7 @@
 """Main orchestrator for Hive multi-agent system."""
 
 import asyncio
+import aiohttp
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -72,6 +73,11 @@ class Orchestrator:
 
         # Running flag
         self.running = False
+
+        # Degraded mode state
+        self._opencode_healthy = True
+        self._degraded_since: Optional[datetime] = None
+        self._backoff_delay = 5  # Initial backoff delay in seconds
 
     def _setup_sse_handlers(self):
         """Set up SSE event handlers."""
@@ -343,15 +349,41 @@ class Orchestrator:
         """Main orchestration loop."""
         while self.running:
             try:
-                # Check if we can spawn more agents
+                # Check if OpenCode is healthy before scheduling work
+                if not self._opencode_healthy:
+                    # In degraded mode - check health with exponential backoff
+                    healthy = await self._check_opencode_health()
+
+                    if healthy:
+                        # OpenCode recovered
+                        degraded_duration = (datetime.now() - self._degraded_since).total_seconds() if self._degraded_since else 0
+                        self.db.log_system_event(
+                            "opencode_recovered", {"degraded_duration_seconds": degraded_duration, "backoff_delay": self._backoff_delay}
+                        )
+                        self._opencode_healthy = True
+                        self._degraded_since = None
+                        self._backoff_delay = 5  # Reset backoff
+                        print(f"OpenCode recovered after {degraded_duration:.1f}s degraded mode")
+                    else:
+                        # Still unhealthy - wait with exponential backoff
+                        await asyncio.sleep(self._backoff_delay)
+                        self._backoff_delay = min(60, self._backoff_delay * 2)  # Cap at 60 seconds
+                        continue  # Skip scheduling and stall checks
+
+                # Normal operation - check if we can spawn more agents
                 if len(self.active_agents) < Config.MAX_AGENTS:
                     # Get ready work
                     ready = self.db.get_ready_queue(limit=1)
 
                     if ready:
                         issue = ready[0]
-                        # Try to claim and spawn worker
-                        await self.spawn_worker(issue)
+                        try:
+                            # Try to claim and spawn worker
+                            await self.spawn_worker(issue)
+                        except Exception as e:
+                            # Check if the error suggests OpenCode is unhealthy
+                            if self._is_opencode_error(e):
+                                await self._enter_degraded_mode(str(e))
                     else:
                         # No ready work, wait before polling again
                         await asyncio.sleep(Config.POLL_INTERVAL)
@@ -359,12 +391,17 @@ class Orchestrator:
                     # At capacity, wait
                     await asyncio.sleep(Config.POLL_INTERVAL)
 
-                # Check for stalled agents
-                await self.check_stalled_agents()
+                # Check for stalled agents (only when healthy)
+                if self._opencode_healthy:
+                    await self.check_stalled_agents()
 
             except Exception as e:
-                print(f"Error in main loop: {e}")
-                await asyncio.sleep(Config.POLL_INTERVAL)
+                # Check if this is an OpenCode connectivity issue
+                if self._is_opencode_error(e):
+                    await self._enter_degraded_mode(str(e))
+                else:
+                    print(f"Error in main loop: {e}")
+                    await asyncio.sleep(Config.POLL_INTERVAL)
 
     async def spawn_worker(self, issue: Dict[str, str]):
         """
@@ -965,6 +1002,71 @@ class Orchestrator:
         # Remove from active agents
         if agent.agent_id in self.active_agents:
             del self.active_agents[agent.agent_id]
+
+    async def _check_opencode_health(self) -> bool:
+        """
+        Check if OpenCode is healthy by making a lightweight HTTP request.
+
+        Returns:
+            True if OpenCode is healthy, False otherwise
+        """
+        try:
+            timeout = aiohttp.ClientTimeout(total=5.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # Use the /session endpoint for a lightweight health check
+                url = f"{Config.OPENCODE_URL}/session"
+                headers = {}
+                if Config.OPENCODE_PASSWORD:
+                    import base64
+
+                    auth_str = base64.b64encode(f":{Config.OPENCODE_PASSWORD}".encode()).decode()
+                    headers["Authorization"] = f"Basic {auth_str}"
+
+                async with session.get(url, headers=headers) as response:
+                    # Any 2xx or 3xx response indicates OpenCode is responding
+                    return response.status < 500
+        except Exception:
+            return False
+
+    def _is_opencode_error(self, exception: Exception) -> bool:
+        """
+        Determine if an exception indicates OpenCode connectivity issues.
+
+        Args:
+            exception: Exception to examine
+
+        Returns:
+            True if this suggests OpenCode is unavailable
+        """
+        error_msg = str(exception).lower()
+
+        # Common connectivity issues
+        if any(
+            phrase in error_msg
+            for phrase in ["connection refused", "connection failed", "timeout", "server error", "5", "network", "unreachable"]
+        ):
+            return True
+
+        # HTTP status code 5xx errors
+        if hasattr(exception, "status") and hasattr(exception.status, "__ge__"):
+            return exception.status >= 500
+
+        return False
+
+    async def _enter_degraded_mode(self, error_reason: str):
+        """
+        Enter degraded mode due to OpenCode unavailability.
+
+        Args:
+            error_reason: Description of the error that caused degraded mode
+        """
+        if self._opencode_healthy:  # Only log the first time we enter degraded mode
+            self._opencode_healthy = False
+            self._degraded_since = datetime.now()
+            self._backoff_delay = 5  # Reset backoff
+
+            self.db.log_system_event("opencode_degraded", {"reason": error_reason, "timestamp": self._degraded_since.isoformat()})
+            print(f"Entering degraded mode: {error_reason}")
 
     async def check_stalled_agents(self):
         """Check for stalled agents owned by THIS daemon and handle them.

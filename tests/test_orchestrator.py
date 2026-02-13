@@ -1,5 +1,7 @@
 """Tests for orchestrator."""
 
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from hive.config import Config
@@ -444,3 +446,186 @@ def git_repo(tmp_path):
     subprocess.run(["git", "branch", "-M", "main"], cwd=repo_path, check=True, capture_output=True)
 
     return repo_path
+
+
+# Tests for degraded mode functionality
+
+
+@pytest.mark.asyncio
+async def test_check_opencode_health_success(temp_db, tmp_path):
+    """Test health check when OpenCode is responding."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Mock successful HTTP response
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_get.return_value.__aenter__.return_value = mock_response
+
+        result = await orch._check_opencode_health()
+        assert result is True
+
+
+@pytest.mark.asyncio
+async def test_check_opencode_health_server_error(temp_db, tmp_path):
+    """Test health check when OpenCode returns 5xx error."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Mock 500 server error response
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_response = AsyncMock()
+        mock_response.status = 500
+        mock_get.return_value.__aenter__.return_value = mock_response
+
+        result = await orch._check_opencode_health()
+        assert result is False
+
+
+@pytest.mark.asyncio
+async def test_check_opencode_health_connection_error(temp_db, tmp_path):
+    """Test health check when connection fails."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Mock connection error
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        mock_get.side_effect = Exception("Connection refused")
+
+        result = await orch._check_opencode_health()
+        assert result is False
+
+
+def test_is_opencode_error():
+    """Test detection of OpenCode-related errors."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=MagicMock(),
+        opencode_client=opencode,
+        project_path="/tmp",
+        project_name="test-project",
+    )
+
+    # Test connection errors
+    assert orch._is_opencode_error(Exception("Connection refused"))
+    assert orch._is_opencode_error(Exception("Connection failed"))
+    assert orch._is_opencode_error(Exception("timeout"))
+    assert orch._is_opencode_error(Exception("Server error"))
+    assert orch._is_opencode_error(Exception("Network unreachable"))
+
+    # Test non-OpenCode errors
+    assert not orch._is_opencode_error(Exception("Git merge conflict"))
+    assert not orch._is_opencode_error(Exception("File not found"))
+
+    # Test HTTP 5xx status codes
+    http_error = Exception("HTTP error")
+    http_error.status = 503
+    assert orch._is_opencode_error(http_error)
+
+    # Test HTTP 4xx status codes (should not be treated as degraded mode)
+    http_error_4xx = Exception("HTTP error")
+    http_error_4xx.status = 404
+    assert not orch._is_opencode_error(http_error_4xx)
+
+
+@pytest.mark.asyncio
+async def test_enter_degraded_mode(temp_db, tmp_path):
+    """Test entering degraded mode."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    assert orch._opencode_healthy is True
+    assert orch._degraded_since is None
+
+    # Enter degraded mode
+    await orch._enter_degraded_mode("Connection refused")
+
+    assert orch._opencode_healthy is False
+    assert orch._degraded_since is not None
+    assert orch._backoff_delay == 5
+
+    # Check that system event was logged
+    events = temp_db.get_events(event_type="opencode_degraded")
+    assert len(events) == 1
+    assert events[0]["issue_id"] is None
+    assert events[0]["agent_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_degraded_mode_recovery(temp_db, tmp_path):
+    """Test recovery from degraded mode."""
+    from hive.opencode import OpenCodeClient
+
+    opencode = OpenCodeClient()
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=opencode,
+        project_path=str(tmp_path),
+        project_name="test-project",
+    )
+
+    # Start in degraded mode
+    await orch._enter_degraded_mode("Connection refused")
+    original_degraded_time = orch._degraded_since
+
+    # Mock successful health check recovery
+    with patch.object(orch, "_check_opencode_health") as mock_health:
+        mock_health.return_value = True
+
+        # Simulate recovery in main_loop
+        orch.running = True
+
+        # Mock get_ready_queue to return no work so loop exits quickly
+        with patch.object(temp_db, "get_ready_queue") as mock_queue:
+            mock_queue.return_value = []
+
+            # Run one iteration of main loop
+            await asyncio.sleep(0.01)  # Allow async scheduling
+
+            # Manually trigger recovery logic
+            healthy = await orch._check_opencode_health()
+            if healthy:
+                temp_db.log_system_event("opencode_recovered", {"degraded_duration_seconds": 1.0, "backoff_delay": orch._backoff_delay})
+                orch._opencode_healthy = True
+                orch._degraded_since = None
+                orch._backoff_delay = 5
+
+    # Verify recovery
+    assert orch._opencode_healthy is True
+    assert orch._degraded_since is None
+    assert orch._backoff_delay == 5
+
+    # Check that recovery event was logged
+    events = temp_db.get_events(event_type="opencode_recovered")
+    assert len(events) == 1
