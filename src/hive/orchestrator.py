@@ -12,7 +12,7 @@ from .db import Database
 from .git import create_worktree, get_commit_hash, remove_worktree
 from .merge import MergeProcessor
 from .ids import generate_id
-from .models import AgentIdentity
+from .models import AgentIdentity, CompletionResult
 from .opencode import OpenCodeClient, make_model_config
 from .prompts import (
     assess_completion,
@@ -172,23 +172,43 @@ class Orchestrator:
                 (agent_id,),
             )
 
-            # Release the issue if still in_progress
+            # Release the issue if still in_progress — but only if it
+            # hasn't exhausted its retry budget. Otherwise escalate to
+            # prevent an infinite spawn loop across daemon restarts.
             if issue_id:
-                self.db.conn.execute(
-                    """
-                    UPDATE issues
-                    SET assignee = NULL, status = 'open'
-                    WHERE id = ? AND status = 'in_progress'
-                    """,
-                    (issue_id,),
-                )
+                retry_count = self.db.count_events_by_type(issue_id, "retry")
+                agent_switch_count = self.db.count_events_by_type(issue_id, "agent_switch")
 
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "reconciled",
-                    {"reason": "stale agent from previous daemon run, session aborted"},
-                )
+                if retry_count < Config.MAX_RETRIES or agent_switch_count < Config.MAX_AGENT_SWITCHES:
+                    self.db.conn.execute(
+                        """
+                        UPDATE issues
+                        SET assignee = NULL, status = 'open'
+                        WHERE id = ? AND status = 'in_progress'
+                        """,
+                        (issue_id,),
+                    )
+                    self.db.log_event(
+                        issue_id,
+                        agent_id,
+                        "reconciled",
+                        {"reason": "stale agent from previous daemon run, session aborted"},
+                    )
+                else:
+                    self.db.conn.execute(
+                        """
+                        UPDATE issues
+                        SET assignee = NULL, status = 'failed'
+                        WHERE id = ? AND status = 'in_progress'
+                        """,
+                        (issue_id,),
+                    )
+                    self.db.log_event(
+                        issue_id,
+                        agent_id,
+                        "reconciled",
+                        {"reason": "stale agent, retry budget exhausted — marking failed"},
+                    )
 
             # Clean up worktree
             if worktree:
@@ -916,6 +936,9 @@ class Orchestrator:
         if retry_count < Config.MAX_RETRIES:
             # Tier 1: Retry with same or different agent
             self.db.update_issue_status(issue_id, "open")
+            # Clear assignee so get_ready_queue can pick this issue up again
+            self.db.conn.execute("UPDATE issues SET assignee = NULL WHERE id = ?", (issue_id,))
+            self.db.conn.commit()
             self.db.log_event(
                 issue_id,
                 agent.agent_id,
@@ -927,6 +950,9 @@ class Orchestrator:
         elif agent_switch_count < Config.MAX_AGENT_SWITCHES:
             # Tier 2: Switch agent (reset issue to open with fresh session)
             self.db.update_issue_status(issue_id, "open")
+            # Clear assignee so get_ready_queue can pick this issue up again
+            self.db.conn.execute("UPDATE issues SET assignee = NULL WHERE id = ?", (issue_id,))
+            self.db.conn.commit()
             self.db.log_event(
                 issue_id,
                 agent.agent_id,
@@ -1064,6 +1090,10 @@ class Orchestrator:
         """
         Handle a stalled agent (lease expired).
 
+        Routes through the retry escalation chain so that repeatedly
+        stalling issues eventually get escalated instead of looping
+        forever.
+
         Args:
             agent: Agent identity
         """
@@ -1088,21 +1118,19 @@ class Orchestrator:
             """,
             (agent.agent_id,),
         )
-
-        # Only reset issue to open if it's still in_progress.
-        # If the issue was already finalized/canceled/done by someone else
-        # (e.g. queen manually finalized it), don't touch it.
-        self.db.conn.execute(
-            """
-            UPDATE issues
-            SET assignee = NULL,
-                status = 'open'
-            WHERE id = ?
-              AND status = 'in_progress'
-            """,
-            (agent.issue_id,),
-        )
         self.db.conn.commit()
+
+        # Route through escalation chain (retry → agent_switch → escalate)
+        # instead of unconditionally resetting to open, which caused an
+        # infinite spawn loop for issues whose workers always stall.
+        current_issue = self.db.get_issue(agent.issue_id)
+        if current_issue and current_issue.get("status") == "in_progress":
+            stall_result = CompletionResult(
+                success=False,
+                reason="Agent stalled (lease expired, no activity)",
+                summary="Worker became unresponsive",
+            )
+            await self._handle_agent_failure(agent, stall_result)
 
         # Clean up worktree
         if agent.worktree:

@@ -662,17 +662,20 @@ def check_stalled_agents():
                 # Lease expired AND no progress — truly stalled
                 opencode.abort_session(agent.session_id)
                 db.mark_agent_stalled(agent.id)
-                db.unassign_issue(agent.current_issue)
                 db.log_event(agent.current_issue, agent.id, "stalled",
                              detail={"last_progress": str(agent.last_progress_at),
                                      "lease_expired": str(agent.lease_expires_at)})
+                # IMPORTANT: route through escalation chain (INV-1).
+                # Do NOT unconditionally unassign — that causes infinite
+                # spawn loops. See Section 18.
+                handle_agent_failure(agent, reason="stalled")
 
         else:
-            # Unknown/error state — kill and reassign
+            # Unknown/error state — kill and escalate via retry chain
             opencode.abort_session(agent.session_id)
             db.mark_agent_stalled(agent.id)
-            db.unassign_issue(agent.current_issue)
             db.log_event(agent.current_issue, agent.id, "stalled")
+            handle_agent_failure(agent, reason="unknown_state")
 
 
 def has_new_progress(messages, last_progress_at) -> bool:
@@ -1547,7 +1550,7 @@ No `:::HUMAN_QUESTION:::` blocks, no special escalation protocol. The Mayor is a
 | Failure                        | Detection                                        | Recovery                                                        |
 | ------------------------------ | ------------------------------------------------ | --------------------------------------------------------------- |
 | **Worker session crashes**     | `session.error` SSE event                        | Unassign issue, retry with fresh worker                         |
-| **Worker hangs (no progress)** | Lease expiry + no progress signals (Section 7.3) | Abort session, unassign, reassign                               |
+| **Worker hangs (no progress)** | Lease expiry + no progress signals (Section 7.3) | Abort session, route through escalation chain (Section 18)      |
 | **Mayor session crashes**      | `session.error` SSE event                        | Recreate Mayor session, prime with DB state                     |
 | **Refinery session crashes**   | `session.error` SSE event                        | Recreate Refinery session; pending merges remain in merge_queue |
 | **OpenCode server dies**       | Health check on main loop                        | Enter degraded mode; recovery loop attempts reconnect           |
@@ -1913,3 +1916,133 @@ The merge queue processor closes the loop from `done` → `finalized` → worktr
 7. **Refinery worktree management**: ~~Should it have its own persistent worktree, or use temporary ones per merge?~~ **Resolved**: The Refinery session is scoped to the main project directory, but operates on worker worktrees by `cd`-ing into them. It straddles both — needs access to main (for `git merge --ff-only`) and to worktrees (for conflict resolution). No dedicated worktree needed.
 
 8. **Multiple OpenCode servers**: A single OpenCode server might bottleneck at many concurrent sessions (Mayor + Refinery + N workers). Should the orchestrator manage multiple server instances, or does OpenCode scale sufficiently within a single process?
+
+---
+
+## 18. Post-Mortem: Infinite Spawn Loop (2026-02-14)
+
+### The Bug
+
+Two issues (`w-49ea04`, `w-f3c2b8`) entered an infinite loop where the orchestrator spawned a worker, the worker stalled, the orchestrator reset the issue to open, and the cycle repeated — for **11 hours**. This created 319 failed agents, consumed 636 stall/claim cycles, and burned significant API credits with no useful work produced.
+
+### Root Cause
+
+**`handle_stalled_agent` bypassed the retry escalation chain.** When a worker stalled (lease expired), the function unconditionally reset the issue to `status='open', assignee=NULL`:
+
+```python
+# THE BUG — unconditional reset, no escalation check
+UPDATE issues SET assignee = NULL, status = 'open'
+WHERE id = ? AND status = 'in_progress'
+```
+
+Meanwhile, `_handle_agent_failure` (the normal completion-failure path) had a proper 3-tier escalation chain: retry (up to MAX_RETRIES) → agent switch (up to MAX_AGENT_SWITCHES) → escalate. But stalled agents **never entered this code path**. They went straight back to the ready queue, where the orchestrator immediately picked them up again.
+
+The same unconditional-reset existed in `_reconcile_stale_agents` (daemon restart) and `_shutdown_all_sessions` (daemon shutdown), creating additional entry points for the loop to restart.
+
+### Secondary Bug
+
+`_handle_agent_failure` set the issue status to `open` for retries but **did not clear the `assignee` field**. Since `get_ready_queue` requires `assignee IS NULL`, retried issues through the normal failure path would never be picked up again. This bug was masked by the stalled path (which did clear the assignee), meaning the system only "worked" via the broken path.
+
+### The Fix
+
+1. **`handle_stalled_agent`**: Routes through `_handle_agent_failure` with a synthetic `CompletionResult` instead of unconditionally resetting. Stalls now count against the retry budget and eventually escalate.
+2. **`_handle_agent_failure`**: Clears `assignee = NULL` when setting status back to `open`, so `get_ready_queue` can actually find retried issues.
+3. **`_reconcile_stale_agents`**: Checks retry budget before resetting to open on daemon restart. Exhausted issues are marked `failed` instead of recycled.
+
+### The Fundamental Error
+
+This bug reveals a class of error that recurs in orchestration systems: **multiple code paths that transition the same state machine, with different subsets of the transition logic.**
+
+The issue status machine has a critical invariant: **every transition back to `open` must be gated by a retry budget.** But the system had three separate code paths that moved issues to `open`:
+
+| Code Path | Had Retry Check? | Result |
+|---|---|---|
+| `_handle_agent_failure` (normal failure) | Yes | Correct — escalates after MAX_RETRIES |
+| `handle_stalled_agent` (lease expiry) | **No** | **Infinite loop** |
+| `_reconcile_stale_agents` (daemon restart) | **No** | **Infinite loop across restarts** |
+
+The escalation logic was implemented correctly in one place but not applied uniformly. The design doc (Section 11.3) describes the escalation chain, but the implementation only enforced it in the normal completion-failure path. The stall path and the reconciliation path were written as separate, independent functions that happened to touch the same state — and nobody connected them to the escalation contract.
+
+### Invariants the Orchestrator Must Enforce
+
+The following invariants should be treated as **system-wide contracts**. Every code path that touches issue or agent state must respect them. When adding new code paths, verify these explicitly.
+
+#### INV-1: Retry Budget is Universal
+
+**Every transition from a non-terminal state back to `open` must check the retry budget.** There are no exceptions. This applies to:
+- Normal worker failure (`_handle_agent_failure`)
+- Worker stall/lease expiry (`handle_stalled_agent`)
+- Daemon restart reconciliation (`_reconcile_stale_agents`)
+- Daemon shutdown (`_shutdown_all_sessions`)
+- Any future code path that "releases" an issue
+
+If the retry budget is exhausted, the issue must move to a **terminal state** (`failed`, `escalated`, `canceled`) — never back to `open`.
+
+**Diagnostic query to detect violations:**
+```sql
+-- Issues that are open but have exhausted their retry budget
+SELECT i.id, i.title, i.status,
+       (SELECT COUNT(*) FROM events WHERE issue_id = i.id AND event_type = 'retry') as retries,
+       (SELECT COUNT(*) FROM events WHERE issue_id = i.id AND event_type = 'stalled') as stalls
+FROM issues i
+WHERE i.status = 'open'
+  AND (SELECT COUNT(*) FROM events WHERE issue_id = i.id AND event_type = 'retry') >= 2;
+```
+
+#### INV-2: `assignee` and `status` Must Be Consistent
+
+The `assignee` field and `status` field form a coupled pair. The valid combinations are:
+
+| status | assignee | Meaning |
+|---|---|---|
+| `open` | `NULL` | Ready for claiming |
+| `open` | set | **INVALID** — will never be picked up |
+| `in_progress` | set | Being worked on |
+| `in_progress` | `NULL` | **INVALID** — work with no owner |
+| `done`/`finalized`/`failed`/`escalated`/`canceled` | any | Terminal — assignee is historical record |
+
+Any code that sets `status = 'open'` **must also set `assignee = NULL`**. Any code that sets `assignee` **must also set `status = 'in_progress'`** (or use `claim_issue` which does both atomically).
+
+**Diagnostic query:**
+```sql
+-- Issues in an invalid assignee/status combination
+SELECT id, title, status, assignee FROM issues
+WHERE (status = 'open' AND assignee IS NOT NULL)
+   OR (status = 'in_progress' AND assignee IS NULL);
+```
+
+#### INV-3: No Unbounded Loops in the Orchestrator
+
+The main loop spawns workers for ready issues. If a worker fails and the issue goes back to `open`, the main loop will pick it up again on the next iteration. **Every cycle through this loop must make progress toward a terminal state.** Specifically:
+
+- Each spawn attempt must increment a counter (retry event, agent_switch event, or stalled event)
+- After a finite number of attempts, the issue must reach a terminal state
+- No code path may reset an issue to `open` without leaving an auditable event
+
+This is the liveness property: **all issues eventually terminate.**
+
+#### INV-4: State Transitions Are Funneled Through Shared Logic
+
+Do not write ad-hoc SQL to transition issue state. All "release issue back to queue" operations should go through a single function that enforces INV-1 and INV-2. Currently this is `_handle_agent_failure`. If a new code path needs to release an issue, it should call `_handle_agent_failure` (or a shared helper extracted from it) — not write its own UPDATE statement.
+
+The temptation to write a quick `UPDATE issues SET status = 'open'` in a new handler is the exact pattern that caused this bug.
+
+#### INV-5: Events Are the Source of Truth for Retry Budgets
+
+The retry budget is computed by counting events (`retry`, `agent_switch`), not by maintaining a counter column. This is intentional — it's crash-safe (events are append-only) and auditable. But it means:
+
+- Every attempt must log an event before the issue can be retried
+- The event types used for counting (`retry`, `agent_switch`) must not be logged for other purposes
+- `count_events_by_type` is the single source of truth for "how many times has this been tried?"
+
+### Recommendations for Rigor
+
+**1. Add a health-check query to the daemon startup.** Before entering the main loop, run the diagnostic queries from INV-1 and INV-2. If any issues are in an invalid state, log a warning and fix them (mark as failed, clear assignee, etc.). This catches state corruption from crashes or bugs before it causes cascading failures.
+
+**2. Add a circuit breaker to the main loop.** If the same issue appears in the ready queue N times within a short window (e.g., 5 times in 10 minutes), it's likely in a spawn loop. The orchestrator should detect this pattern and escalate the issue instead of spawning another worker.
+
+**3. Consider a `total_attempts` column on `issues`.** While events are the source of truth, a denormalized counter would make the "am I in a loop?" check O(1) instead of a COUNT query. Increment on every claim, check before every spawn. This is defense-in-depth — the event-based check is authoritative, but the column is a fast circuit breaker.
+
+**4. Integration test for the full stall→retry→escalate cycle.** The existing unit tests cover `_handle_agent_failure` in isolation, but nothing tested the `handle_stalled_agent → _handle_agent_failure` chain end-to-end. The bug survived because the stall path was tested independently from the escalation path. An integration test that runs: spawn → stall → stall → stall → verify escalation would have caught this.
+
+**5. Audit all `UPDATE issues SET status` statements.** Grep the codebase for raw SQL that touches `issues.status`. Each one is a potential bypass of the state machine. They should all go through `update_issue_status` or `_handle_agent_failure` (INV-4).
