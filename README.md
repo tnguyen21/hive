@@ -230,14 +230,13 @@ export HIVE_MERGE_POLL_INTERVAL=10          # Merge queue poll interval in secon
 5. **Worker executes autonomously**:
    - Reads code, makes changes, runs tests
    - Commits work to branch (`agent/<agent-name>`)
-   - Writes `.hive-result.jsonl` file to worktree root
-   - Signals completion with `:::COMPLETION:::` block
+   - Writes `.hive-result.jsonl` file to worktree root (the sole completion signal)
 6. **Daemon detects completion** (triple strategy):
    - SSE event: `session.status → idle` (sub-second)
    - File-based: polls for `.hive-result.jsonl` in worktree (deterministic)
    - Session polling: calls `get_session_status()` as fallback
 7. **Daemon assesses and merges**:
-   - Parses file-based result, structured signal, or heuristics
+   - Reads `.hive-result.jsonl` for worker and refinery results
    - Success: marks issue `done`, enqueues to merge queue
    - Merge queue: mechanical rebase → test → ff-merge, or Refinery LLM for conflicts
    - On merge success: issue → `finalized`, worktree cleaned up, session killed
@@ -282,7 +281,7 @@ uv pip install -e ".[dev]"
 ### Running Tests
 
 ```bash
-# Unit tests (128 passing; integration tests auto-skipped without server)
+# Unit tests (integration tests auto-skipped without server)
 uv run pytest
 
 # Integration tests (requires running OpenCode server)
@@ -330,7 +329,7 @@ hive/
 │   │   └── refinery.md       # Merge refinery prompt template
 │   ├── sse.py                # SSE event consumer + dispatch
 │   └── tools.py              # ToolExecutor (CLI backend, sort/filter)
-├── tests/                    # 128 unit tests + 14 integration tests
+├── tests/                    # 250 unit tests + 13 integration tests
 ├── pyproject.toml
 └── README.md
 ```
