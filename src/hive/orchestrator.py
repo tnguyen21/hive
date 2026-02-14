@@ -843,6 +843,11 @@ class Orchestrator:
                 If provided, used directly for completion assessment (skips
                 message parsing heuristics).
         """
+        # Guard: skip if this agent was already handled (removed from active_agents)
+        if agent.agent_id not in self.active_agents:
+            logger.debug(f"Skipping completion handling for {agent.name} — already removed from active agents")
+            return
+
         # Always clean up the result file if it exists
         remove_result_file(agent.worktree)
 
@@ -1164,6 +1169,11 @@ class Orchestrator:
         Args:
             agent: Agent identity
         """
+        # Guard: skip if this agent was already handled (removed from active_agents)
+        if agent.agent_id not in self.active_agents:
+            logger.debug(f"Skipping stall handling for {agent.name} — already removed from active agents")
+            return
+
         self.db.log_event(
             agent.issue_id,
             agent.agent_id,

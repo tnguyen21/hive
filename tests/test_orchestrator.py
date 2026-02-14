@@ -1164,13 +1164,9 @@ async def test_reconcile_mixed_ghost_live_orphan(temp_db, tmp_path):
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
 
     # Ghost agent — session not on server
-    ghost_agent_id, ghost_issue_id, _ = _make_stale_agent(
-        temp_db, name="ghost", session_id="ghost-sess", issue_title="Ghost task"
-    )
+    ghost_agent_id, ghost_issue_id, _ = _make_stale_agent(temp_db, name="ghost", session_id="ghost-sess", issue_title="Ghost task")
     # Live agent — session still on server
-    live_agent_id, live_issue_id, _ = _make_stale_agent(
-        temp_db, name="live", session_id="live-sess", issue_title="Live task"
-    )
+    live_agent_id, live_issue_id, _ = _make_stale_agent(temp_db, name="live", session_id="live-sess", issue_title="Live task")
 
     await orch._reconcile_stale_agents()
 
@@ -1249,9 +1245,11 @@ async def test_handle_permission_event_with_id(temp_db, tmp_path):
 async def test_handle_permission_event_without_id_fetches_pending(temp_db, tmp_path):
     """SSE permission event without id falls back to fetching pending."""
     mock_oc = AsyncMock(spec=OpenCodeClient)
-    mock_oc.get_pending_permissions = AsyncMock(return_value=[
-        {"id": "perm-2", "permission": "read", "sessionID": "s1"},
-    ])
+    mock_oc.get_pending_permissions = AsyncMock(
+        return_value=[
+            {"id": "perm-2", "permission": "read", "sessionID": "s1"},
+        ]
+    )
     mock_oc.reply_permission = AsyncMock()
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
 
@@ -1294,8 +1292,11 @@ def test_log_permission_resolved_uses_reverse_map(temp_db, tmp_path):
     agent_id = temp_db.create_agent("test-agent")
 
     agent = AgentIdentity(
-        agent_id=agent_id, name="test-agent", issue_id=issue_id,
-        worktree="/tmp/wt", session_id="s1",
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree="/tmp/wt",
+        session_id="s1",
     )
     orch.active_agents[agent_id] = agent
     orch._session_to_agent["s1"] = agent_id
@@ -1318,3 +1319,88 @@ def test_log_permission_resolved_unknown_session(temp_db, tmp_path):
     # No events logged (no agent found)
     events = temp_db.get_events(event_type="permission_resolved")
     assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_stalled_agent_double_call_guard(temp_db, tmp_path):
+    """Test that handle_stalled_agent guards against double execution."""
+    # Create orchestrator with mock opencode
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    # Create issue and agent
+    issue_id = temp_db.create_issue("Test task", "Do something")
+    agent_id = temp_db.create_agent("test-agent")
+
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-123",
+    )
+
+    # Add agent to active agents (simulating it's being monitored)
+    orch.active_agents[agent_id] = agent
+
+    # First call should process normally
+    await orch.handle_stalled_agent(agent)
+
+    # Verify agent was removed from active_agents
+    assert agent_id not in orch.active_agents
+
+    # Check that exactly 1 'stalled' event was logged
+    stall_events = [e for e in temp_db.get_events(issue_id=issue_id) if e["event_type"] == "stalled"]
+    assert len(stall_events) == 1
+
+    # Second call should be a no-op (guard should prevent execution)
+    await orch.handle_stalled_agent(agent)
+
+    # Verify still only 1 'stalled' event (no duplicate)
+    stall_events = [e for e in temp_db.get_events(issue_id=issue_id) if e["event_type"] == "stalled"]
+    assert len(stall_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_complete_double_call_guard(temp_db, tmp_path):
+    """Test that handle_agent_complete guards against double execution."""
+    # Create orchestrator with mock opencode
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    # Mock get_messages to return empty list to avoid processing issues
+    mock_opencode.get_messages.return_value = []
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    # Create issue and agent
+    issue_id = temp_db.create_issue("Test task", "Do something")
+    agent_id = temp_db.create_agent("test-agent")
+
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-123",
+    )
+
+    # Add agent to active agents (simulating it's being monitored)
+    orch.active_agents[agent_id] = agent
+
+    # Count events before any calls
+    events_before = len(temp_db.get_events(issue_id=issue_id))
+
+    # First call should process normally
+    await orch.handle_agent_complete(agent)
+
+    # Verify agent was removed from active_agents during processing
+    assert agent_id not in orch.active_agents
+
+    # Count events after first call
+    events_after_first = len(temp_db.get_events(issue_id=issue_id))
+    assert events_after_first > events_before  # Some events should have been logged
+
+    # Second call should be a no-op (guard should prevent execution)
+    await orch.handle_agent_complete(agent)
+
+    # Verify no additional events were logged
+    events_after_second = len(temp_db.get_events(issue_id=issue_id))
+    assert events_after_second == events_after_first
