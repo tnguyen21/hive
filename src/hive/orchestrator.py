@@ -585,7 +585,7 @@ class Orchestrator:
             issue: Issue dict from database
         """
         issue_id = issue["id"]
-        agent_name = f"worker-{generate_id('')[2:]}"  # Strip "w-" prefix
+        agent_name = generate_id("worker")
         model = issue.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
 
         # Create agent identity in database
