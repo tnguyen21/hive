@@ -5,6 +5,7 @@ import logging
 import sqlite3
 from collections import defaultdict
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .ids import generate_id
@@ -174,18 +175,21 @@ CREATE INDEX IF NOT EXISTS idx_mq_project ON merge_queue(project);
 class Database:
     """SQLite database wrapper for Hive orchestrator."""
 
-    def __init__(self, db_path: str = "hive.db"):
+    def __init__(self, db_path: str = None):
         """
         Initialize database connection.
 
         Args:
             db_path: Path to SQLite database file
         """
-        self.db_path = db_path
+        from .config import Config
+
+        self.db_path = db_path or Config.DB_PATH
         self.conn: Optional[sqlite3.Connection] = None
 
     def connect(self):
         """Open database connection and initialize schema."""
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)

@@ -1,6 +1,7 @@
 """Configuration for Hive orchestrator."""
 
 import os
+from pathlib import Path
 
 
 class Config:
@@ -20,8 +21,9 @@ class Config:
     OPENCODE_URL = os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096")
     OPENCODE_PASSWORD = os.environ.get("OPENCODE_SERVER_PASSWORD")
 
-    # Database
-    DB_PATH = os.environ.get("HIVE_DB_PATH", "hive.db")
+    # Database — global shared DB so cross-project queries work naturally
+    HIVE_DIR = Path.home() / ".hive"
+    DB_PATH = os.environ.get("HIVE_DB_PATH", str(HIVE_DIR / "hive.db"))
 
     # Context cycling thresholds (token counts)
     REFINERY_TOKEN_THRESHOLD = int(os.environ.get("HIVE_REFINERY_TOKEN_THRESHOLD", "100000"))

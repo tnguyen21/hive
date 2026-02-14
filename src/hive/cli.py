@@ -907,7 +907,7 @@ def main():
     parser = argparse.ArgumentParser(description="Hive multi-agent orchestrator")
 
     # Global options
-    parser.add_argument("--db", default="hive.db", help="Database path")
+    parser.add_argument("--db", default=Config.DB_PATH, help="Database path (default: ~/.hive/hive.db)")
     parser.add_argument("--project", default=".", help="Project directory")
     parser.add_argument(
         "--json",
