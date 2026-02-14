@@ -231,7 +231,7 @@ class Database:
                     metadata_json,
                 ),
             )
-            self.log_event(issue_id, None, "created", {"title": title})
+            self.log_event(issue_id, None, "created", {"title": title}, commit=False)
 
         return issue_id
 
@@ -321,7 +321,7 @@ class Database:
                     """,
                     (issue_id, agent_id),
                 )
-                self.log_event(issue_id, agent_id, "claimed", {})
+                self.log_event(issue_id, agent_id, "claimed", {}, commit=False)
 
             return success
 
@@ -331,6 +331,7 @@ class Database:
         agent_id: Optional[str],
         event_type: str,
         detail: Optional[Dict[str, Any]] = None,
+        commit: bool = True,
     ):
         """
         Log an event to the audit trail.
@@ -353,7 +354,8 @@ class Database:
             """,
             (issue_id, agent_id, event_type, detail_json),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def create_agent(
         self,
@@ -413,7 +415,7 @@ class Database:
                 """,
                 (status, status, issue_id),
             )
-            self.log_event(issue_id, None, f"status_{status}", {"status": status})
+            self.log_event(issue_id, None, f"status_{status}", {"status": status}, commit=False)
 
     def add_dependency(self, issue_id: str, depends_on: str, dep_type: str = "blocks"):
         """Add a dependency between issues."""
@@ -645,7 +647,7 @@ class Database:
             stats[row["status"]] = row["count"]
         return stats
 
-    def log_system_event(self, event_type: str, detail: Optional[Dict[str, Any]] = None):
+    def log_system_event(self, event_type: str, detail: Optional[Dict[str, Any]] = None, commit: bool = True):
         """
         Log a system-level event to the audit trail.
 
@@ -665,6 +667,13 @@ class Database:
             """,
             (event_type, detail_json),
         )
+        if commit:
+            self.conn.commit()
+
+    def batch_log_events(self, events: list):
+        """Log multiple events in a single transaction."""
+        for event in events:
+            self.log_event(event["issue_id"], event.get("agent_id"), event["event_type"], event.get("detail"), commit=False)
         self.conn.commit()
 
     def get_idle_agents(self) -> List[Dict[str, Any]]:
