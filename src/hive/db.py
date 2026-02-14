@@ -530,21 +530,20 @@ class Database:
         agent_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get events with id > after_id, ordered ascending (oldest first)."""
+        conditions = ["id > ?"]
+        params = [after_id]
+
         if issue_id:
-            cursor = self.conn.execute(
-                "SELECT * FROM events WHERE id > ? AND issue_id = ? ORDER BY id ASC",
-                (after_id, issue_id),
-            )
-        elif agent_id:
-            cursor = self.conn.execute(
-                "SELECT * FROM events WHERE id > ? AND agent_id = ? ORDER BY id ASC",
-                (after_id, agent_id),
-            )
-        else:
-            cursor = self.conn.execute(
-                "SELECT * FROM events WHERE id > ? ORDER BY id ASC",
-                (after_id,),
-            )
+            conditions.append("issue_id = ?")
+            params.append(issue_id)
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+
+        where_clause = " AND ".join(conditions)
+        query = f"SELECT * FROM events WHERE {where_clause} ORDER BY id ASC"
+
+        cursor = self.conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
     def get_max_event_id(self) -> int:
@@ -559,23 +558,25 @@ class Database:
         agent_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get the most recent n events, returned oldest-first."""
+        conditions = []
+        params = []
+
         if issue_id:
-            cursor = self.conn.execute(
-                "SELECT * FROM (SELECT * FROM events WHERE issue_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
-                (issue_id, n),
-            )
-        elif agent_id:
-            cursor = self.conn.execute(
-                "SELECT * FROM (SELECT * FROM events WHERE agent_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
-                (agent_id, n),
-            )
+            conditions.append("issue_id = ?")
+            params.append(issue_id)
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+
+        if conditions:
+            where_clause = " AND ".join(conditions)
+            query = f"SELECT * FROM (SELECT * FROM events WHERE {where_clause} ORDER BY id DESC LIMIT ?) ORDER BY id ASC"
         else:
-            cursor = self.conn.execute(
-                "SELECT * FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
-                (n,),
-            )
-        rows = [dict(row) for row in cursor.fetchall()]
-        return rows
+            query = "SELECT * FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id ASC"
+
+        params.append(n)
+        cursor = self.conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
 
     def count_events_by_type(self, issue_id: str, event_type: str) -> int:
         """
