@@ -6,6 +6,7 @@ import pytest
 
 from hive.config import Config
 from hive.models import AgentIdentity, CompletionResult
+from hive.opencode import OpenCodeClient
 from hive.orchestrator import Orchestrator
 
 
@@ -447,68 +448,49 @@ def git_repo(tmp_path):
 @pytest.mark.asyncio
 async def test_check_opencode_health_success(temp_db, tmp_path):
     """Test health check when OpenCode is responding."""
-    from hive.opencode import OpenCodeClient
-
-    opencode = OpenCodeClient()
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(return_value=[])
     orch = Orchestrator(
         db=temp_db,
-        opencode_client=opencode,
+        opencode_client=mock_oc,
         project_path=str(tmp_path),
         project_name="test-project",
     )
 
-    # Mock successful HTTP response
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_get.return_value.__aenter__.return_value = mock_response
-
-        result = await orch._check_opencode_health()
-        assert result is True
+    result = await orch._check_opencode_health()
+    assert result is True
 
 
 @pytest.mark.asyncio
 async def test_check_opencode_health_server_error(temp_db, tmp_path):
-    """Test health check when OpenCode returns 5xx error."""
-    from hive.opencode import OpenCodeClient
-
-    opencode = OpenCodeClient()
+    """Test health check when OpenCode returns an error."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(side_effect=Exception("500 Server Error"))
     orch = Orchestrator(
         db=temp_db,
-        opencode_client=opencode,
+        opencode_client=mock_oc,
         project_path=str(tmp_path),
         project_name="test-project",
     )
 
-    # Mock 500 server error response
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_response = AsyncMock()
-        mock_response.status = 500
-        mock_get.return_value.__aenter__.return_value = mock_response
-
-        result = await orch._check_opencode_health()
-        assert result is False
+    result = await orch._check_opencode_health()
+    assert result is False
 
 
 @pytest.mark.asyncio
 async def test_check_opencode_health_connection_error(temp_db, tmp_path):
     """Test health check when connection fails."""
-    from hive.opencode import OpenCodeClient
-
-    opencode = OpenCodeClient()
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(side_effect=Exception("Connection refused"))
     orch = Orchestrator(
         db=temp_db,
-        opencode_client=opencode,
+        opencode_client=mock_oc,
         project_path=str(tmp_path),
         project_name="test-project",
     )
 
-    # Mock connection error
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_get.side_effect = Exception("Connection refused")
-
-        result = await orch._check_opencode_health()
-        assert result is False
+    result = await orch._check_opencode_health()
+    assert result is False
 
 
 def test_is_opencode_error():
@@ -1024,3 +1006,233 @@ async def test_merge_processor_initialize_called_on_start(temp_db, tmp_path):
 
         # Verify initialize was called
         orch.merge_processor.initialize.assert_called_once()
+
+
+# --- Bidirectional reconciliation tests ---
+
+
+def _make_orchestrator(temp_db, tmp_path, mock_opencode=None):
+    """Helper to create an orchestrator with a mocked OpenCodeClient."""
+    if mock_opencode is None:
+        mock_opencode = AsyncMock(spec=OpenCodeClient)
+    return Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+
+def _make_stale_agent(temp_db, name="stale-agent", issue_title="Stale task", session_id="sess-1", worktree="/tmp/wt"):
+    """Create a stale agent (status='working') with an in_progress issue."""
+    issue_id = temp_db.create_issue(issue_title)
+    agent_id = temp_db.create_agent(name)
+    # Claim the issue so it becomes in_progress
+    temp_db.claim_issue(issue_id, agent_id)
+    # Set session_id and worktree on the agent
+    temp_db.conn.execute(
+        "UPDATE agents SET session_id = ?, worktree = ? WHERE id = ?",
+        (session_id, worktree, agent_id),
+    )
+    temp_db.conn.commit()
+    return agent_id, issue_id, session_id
+
+
+@pytest.mark.asyncio
+async def test_reconcile_ghost_agents(temp_db, tmp_path):
+    """Ghost agent: DB says working, but session is gone from server."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    # Server returns no sessions — the agent's session is gone
+    mock_oc.list_sessions = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent_id, issue_id, session_id = _make_stale_agent(temp_db, session_id="ghost-sess")
+
+    await orch._reconcile_stale_agents()
+
+    # Agent should be marked failed
+    agent = temp_db.get_agent(agent_id)
+    assert agent["status"] == "failed"
+
+    # Abort should NOT have been called (session doesn't exist)
+    mock_oc.abort_session.assert_not_called()
+    mock_oc.delete_session.assert_not_called()
+
+    # Issue should be released back to open
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stale_agents_with_live_sessions(temp_db, tmp_path):
+    """Stale agent whose session is still alive on the server — abort + delete."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(return_value=[{"id": "live-sess"}])
+    mock_oc.abort_session = AsyncMock()
+    mock_oc.delete_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent_id, issue_id, _ = _make_stale_agent(temp_db, session_id="live-sess")
+
+    await orch._reconcile_stale_agents()
+
+    # Abort + delete should have been called for the live session
+    mock_oc.abort_session.assert_called_once_with("live-sess", directory="/tmp/wt")
+    mock_oc.delete_session.assert_called_once_with("live-sess", directory="/tmp/wt")
+
+    # Agent marked failed, issue released
+    agent = temp_db.get_agent(agent_id)
+    assert agent["status"] == "failed"
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_orphan_sessions(temp_db, tmp_path):
+    """Sessions alive on server with no DB agent — cleaned up as orphans."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    # Server has two sessions, DB knows about neither
+    mock_oc.list_sessions = AsyncMock(return_value=[{"id": "orphan-1"}, {"id": "orphan-2"}])
+    mock_oc.abort_session = AsyncMock()
+    mock_oc.delete_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # No stale agents — so Phase 1 is a no-op, Phase 2 finds orphans
+    await orch._reconcile_stale_agents()
+
+    # Both orphans should be aborted + deleted
+    assert mock_oc.abort_session.call_count == 2
+    assert mock_oc.delete_session.call_count == 2
+    aborted_ids = {call.args[0] for call in mock_oc.abort_session.call_args_list}
+    assert aborted_ids == {"orphan-1", "orphan-2"}
+
+    # System event should be logged
+    events = temp_db.get_events(event_type="orphan_sessions_cleaned")
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fallback_when_opencode_unreachable(temp_db, tmp_path):
+    """list_sessions() throws — falls back to best-effort abort/delete."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(side_effect=Exception("Connection refused"))
+    mock_oc.abort_session = AsyncMock()
+    mock_oc.delete_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent_id, issue_id, session_id = _make_stale_agent(temp_db, session_id="fallback-sess")
+
+    await orch._reconcile_stale_agents()
+
+    # Best-effort abort/delete should still be called
+    mock_oc.abort_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
+    mock_oc.delete_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
+
+    # Agent failed, issue released
+    agent = temp_db.get_agent(agent_id)
+    assert agent["status"] == "failed"
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "open"
+
+    # No orphan cleanup event (Phase 2 skipped)
+    events = temp_db.get_events(event_type="orphan_sessions_cleaned")
+    assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_respects_retry_budget(temp_db, tmp_path):
+    """Exhausted retry budget → issue marked failed, not open."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent_id, issue_id, _ = _make_stale_agent(temp_db, session_id="budget-sess")
+
+    # Exhaust retry and agent_switch budgets
+    for i in range(Config.MAX_RETRIES):
+        temp_db.log_event(issue_id, agent_id, "retry", {"attempt": i + 1})
+    for i in range(Config.MAX_AGENT_SWITCHES):
+        temp_db.log_event(issue_id, agent_id, "agent_switch", {"switch": i + 1})
+
+    await orch._reconcile_stale_agents()
+
+    # Issue should be marked failed (not open)
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_mixed_ghost_live_orphan(temp_db, tmp_path):
+    """All three conditions in one reconciliation run."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    # Server has: live-sess (stale agent's), orphan-sess (no agent), but NOT ghost-sess
+    mock_oc.list_sessions = AsyncMock(return_value=[{"id": "live-sess"}, {"id": "orphan-sess"}])
+    mock_oc.abort_session = AsyncMock()
+    mock_oc.delete_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # Ghost agent — session not on server
+    ghost_agent_id, ghost_issue_id, _ = _make_stale_agent(
+        temp_db, name="ghost", session_id="ghost-sess", issue_title="Ghost task"
+    )
+    # Live agent — session still on server
+    live_agent_id, live_issue_id, _ = _make_stale_agent(
+        temp_db, name="live", session_id="live-sess", issue_title="Live task"
+    )
+
+    await orch._reconcile_stale_agents()
+
+    # Ghost agent: no abort/delete for ghost-sess
+    ghost_calls = [c for c in mock_oc.abort_session.call_args_list if c.args[0] == "ghost-sess"]
+    assert len(ghost_calls) == 0
+
+    # Live agent: abort + delete for live-sess
+    live_abort_calls = [c for c in mock_oc.abort_session.call_args_list if c.args[0] == "live-sess"]
+    assert len(live_abort_calls) == 1
+
+    # Orphan session: abort + delete for orphan-sess
+    orphan_abort_calls = [c for c in mock_oc.abort_session.call_args_list if c.args[0] == "orphan-sess"]
+    assert len(orphan_abort_calls) == 1
+
+    # Both agents should be failed
+    assert temp_db.get_agent(ghost_agent_id)["status"] == "failed"
+    assert temp_db.get_agent(live_agent_id)["status"] == "failed"
+
+    # Orphan cleanup event
+    events = temp_db.get_events(event_type="orphan_sessions_cleaned")
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_no_stale_agents(temp_db, tmp_path):
+    """Clean state — no stale agents, no orphans, no errors."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # Should complete without error
+    await orch._reconcile_stale_agents()
+
+    # No abort/delete calls
+    mock_oc.abort_session.assert_not_called()
+    mock_oc.delete_session.assert_not_called()
+
+    # No orphan events
+    events = temp_db.get_events(event_type="orphan_sessions_cleaned")
+    assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_check_opencode_health_uses_list_sessions(temp_db, tmp_path):
+    """Verify _check_opencode_health delegates to list_sessions."""
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # Success case
+    mock_oc.list_sessions = AsyncMock(return_value=[])
+    assert await orch._check_opencode_health() is True
+    mock_oc.list_sessions.assert_called_once()
+
+    # Failure case
+    mock_oc.list_sessions = AsyncMock(side_effect=Exception("Connection refused"))
+    assert await orch._check_opencode_health() is False

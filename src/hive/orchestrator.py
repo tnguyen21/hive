@@ -1,7 +1,6 @@
 """Main orchestrator for Hive multi-agent system."""
 
 import asyncio
-import aiohttp
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -134,12 +133,23 @@ class Orchestrator:
                 pass  # Non-critical, best-effort
 
     async def _reconcile_stale_agents(self):
-        """Clean up stale agents from previous daemon runs.
+        """Bidirectional reconciliation on startup.
 
-        On startup, any agents still marked 'working' in the DB are leftovers
-        from a crashed/stopped daemon. Abort their opencode sessions, mark them
-        failed, and release their issues back to the ready queue.
+        Three phases:
+        - Phase 0: Fetch live sessions from OpenCode server
+        - Phase 1: Reconcile DB agents with status='working' (ghost + live)
+        - Phase 2: Clean up orphan sessions (alive on server, no DB agent)
         """
+        # Phase 0 — Fetch live sessions
+        live_session_ids: set | None = None
+        try:
+            sessions = await self.opencode.list_sessions()
+            live_session_ids = {s["id"] for s in sessions}
+            logger.info(f"Fetched {len(live_session_ids)} live session(s) from OpenCode")
+        except Exception as e:
+            logger.warning(f"Could not fetch live sessions from OpenCode ({e}), falling back to DB-only reconciliation")
+
+        # Phase 1 — Reconcile stale DB agents
         cursor = self.db.conn.execute(
             """
             SELECT id, current_issue, worktree, name, session_id
@@ -149,10 +159,8 @@ class Orchestrator:
         )
         stale = cursor.fetchall()
 
-        if not stale:
-            return
-
-        logger.info(f"Reconciling {len(stale)} stale agent(s) from previous run")
+        if stale:
+            logger.info(f"Reconciling {len(stale)} stale agent(s) from previous run")
 
         for row in stale:
             agent_dict = dict(row)
@@ -161,16 +169,33 @@ class Orchestrator:
             worktree = agent_dict["worktree"]
             session_id = agent_dict["session_id"]
 
-            # Abort the orphaned opencode session
             if session_id:
-                try:
-                    await self.opencode.abort_session(session_id, directory=worktree)
-                except Exception:
-                    pass  # Best-effort; session may already be dead
-                try:
-                    await self.opencode.delete_session(session_id, directory=worktree)
-                except Exception:
-                    pass
+                if live_session_ids is not None:
+                    # Authoritative: we know which sessions are alive
+                    if session_id in live_session_ids:
+                        # Session still running — abort + delete it
+                        try:
+                            await self.opencode.abort_session(session_id, directory=worktree)
+                        except Exception:
+                            pass
+                        try:
+                            await self.opencode.delete_session(session_id, directory=worktree)
+                        except Exception:
+                            pass
+                        live_session_ids.discard(session_id)
+                    else:
+                        # Ghost agent — session already gone, just log
+                        logger.info(f"Agent {agent_id} is a ghost (session {session_id} no longer exists)")
+                else:
+                    # OpenCode unreachable — best-effort abort/delete
+                    try:
+                        await self.opencode.abort_session(session_id, directory=worktree)
+                    except Exception:
+                        pass
+                    try:
+                        await self.opencode.delete_session(session_id, directory=worktree)
+                    except Exception:
+                        pass
 
             # Mark agent failed
             self.db.conn.execute(
@@ -198,7 +223,7 @@ class Orchestrator:
                         issue_id,
                         agent_id,
                         "reconciled",
-                        {"reason": "stale agent from previous daemon run, session aborted"},
+                        {"reason": "stale agent from previous daemon run"},
                     )
                 else:
                     self.db.conn.execute(
@@ -223,8 +248,30 @@ class Orchestrator:
                 except Exception:
                     pass
 
-        self.db.conn.commit()
-        logger.info(f"Reconciled {len(stale)} stale agent(s)")
+        if stale:
+            self.db.conn.commit()
+            logger.info(f"Reconciled {len(stale)} stale agent(s)")
+
+        # Phase 2 — Clean up orphan sessions (alive on server, no DB agent)
+        if live_session_ids is not None and live_session_ids:
+            # Collect all session_ids known to the DB (any status)
+            cursor = self.db.conn.execute("SELECT session_id FROM agents WHERE session_id IS NOT NULL")
+            db_session_ids = {row["session_id"] for row in cursor.fetchall()}
+
+            orphans = live_session_ids - db_session_ids
+            if orphans:
+                for session_id in orphans:
+                    try:
+                        await self.opencode.abort_session(session_id)
+                    except Exception:
+                        pass
+                    try:
+                        await self.opencode.delete_session(session_id)
+                    except Exception:
+                        pass
+
+                self.db.log_system_event("orphan_sessions_cleaned", {"count": len(orphans)})
+                logger.info(f"Cleaned up {len(orphans)} orphan session(s)")
 
     def _rebuild_reverse_maps(self):
         """Rebuild reverse lookup maps from current active_agents.
@@ -1231,26 +1278,17 @@ class Orchestrator:
 
     async def _check_opencode_health(self) -> bool:
         """
-        Check if OpenCode is healthy by making a lightweight HTTP request.
+        Check if OpenCode is healthy by listing sessions via the client.
+
+        Reuses the existing OpenCodeClient (and its connection pool / auth)
+        instead of creating a throwaway aiohttp.ClientSession per call.
 
         Returns:
             True if OpenCode is healthy, False otherwise
         """
         try:
-            timeout = aiohttp.ClientTimeout(total=5.0)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                # Use the /session endpoint for a lightweight health check
-                url = f"{Config.OPENCODE_URL}/session"
-                headers = {}
-                if Config.OPENCODE_PASSWORD:
-                    import base64
-
-                    auth_str = base64.b64encode(f":{Config.OPENCODE_PASSWORD}".encode()).decode()
-                    headers["Authorization"] = f"Basic {auth_str}"
-
-                async with session.get(url, headers=headers) as response:
-                    # Any 2xx or 3xx response indicates OpenCode is responding
-                    return response.status < 500
+            await self.opencode.list_sessions()
+            return True
         except Exception:
             return False
 
