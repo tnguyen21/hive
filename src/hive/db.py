@@ -852,6 +852,9 @@ class Database:
         Returns:
             Dict with aggregated token counts and cost estimates
         """
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
         conditions = ["event_type = 'tokens_used'"]
         params = []
 
@@ -863,63 +866,75 @@ class Database:
             params.append(agent_id)
 
         where_clause = " AND ".join(conditions)
-        query = f"""
-            SELECT detail, agent_id, issue_id
+
+        # Get totals using json_extract
+        totals_query = f"""
+            SELECT
+                COALESCE(SUM(json_extract(detail, '$.input_tokens')), 0) as total_input,
+                COALESCE(SUM(json_extract(detail, '$.output_tokens')), 0) as total_output
             FROM events
-            WHERE {where_clause}
-            ORDER BY id ASC
+            WHERE {where_clause} AND json_valid(detail)
         """
 
-        cursor = self.conn.execute(query, params)
-        events = cursor.fetchall()
+        cursor = self.conn.execute(totals_query, params)
+        totals_row = cursor.fetchone()
+        total_input_tokens = totals_row["total_input"]
+        total_output_tokens = totals_row["total_output"]
+        total_tokens = total_input_tokens + total_output_tokens
 
-        total_input_tokens = 0
-        total_output_tokens = 0
-        total_tokens = 0
-
+        # Get breakdown by issue
         issue_breakdown = {}
+        if issue_id is None:  # Only aggregate by issue if not filtering by specific issue
+            issue_query = f"""
+                SELECT
+                    issue_id,
+                    COALESCE(SUM(json_extract(detail, '$.input_tokens')), 0) as input_tokens,
+                    COALESCE(SUM(json_extract(detail, '$.output_tokens')), 0) as output_tokens
+                FROM events
+                WHERE {where_clause} AND issue_id IS NOT NULL AND json_valid(detail)
+                GROUP BY issue_id
+            """
+            cursor = self.conn.execute(issue_query, params)
+            for row in cursor.fetchall():
+                issue_breakdown[row["issue_id"]] = {"input_tokens": row["input_tokens"], "output_tokens": row["output_tokens"]}
+        elif issue_id:
+            # If filtering by specific issue, include it in breakdown
+            issue_breakdown[issue_id] = {"input_tokens": total_input_tokens, "output_tokens": total_output_tokens}
+
+        # Get breakdown by agent
         agent_breakdown = {}
+        if agent_id is None:  # Only aggregate by agent if not filtering by specific agent
+            agent_query = f"""
+                SELECT
+                    agent_id,
+                    COALESCE(SUM(json_extract(detail, '$.input_tokens')), 0) as input_tokens,
+                    COALESCE(SUM(json_extract(detail, '$.output_tokens')), 0) as output_tokens
+                FROM events
+                WHERE {where_clause} AND agent_id IS NOT NULL AND json_valid(detail)
+                GROUP BY agent_id
+            """
+            cursor = self.conn.execute(agent_query, params)
+            for row in cursor.fetchall():
+                agent_breakdown[row["agent_id"]] = {"input_tokens": row["input_tokens"], "output_tokens": row["output_tokens"]}
+        elif agent_id:
+            # If filtering by specific agent, include it in breakdown
+            agent_breakdown[agent_id] = {"input_tokens": total_input_tokens, "output_tokens": total_output_tokens}
+
+        # Get breakdown by model
+        model_query = f"""
+            SELECT
+                COALESCE(json_extract(detail, '$.model'), 'unknown') as model,
+                COALESCE(SUM(json_extract(detail, '$.input_tokens')), 0) as input_tokens,
+                COALESCE(SUM(json_extract(detail, '$.output_tokens')), 0) as output_tokens
+            FROM events
+            WHERE {where_clause} AND json_valid(detail)
+            GROUP BY json_extract(detail, '$.model')
+        """
+
         model_breakdown = {}
-
-        for row in events:
-            detail_json = row["detail"]
-            if not detail_json:
-                continue
-
-            try:
-                detail = json.loads(detail_json)
-                input_tokens = detail.get("input_tokens", 0)
-                output_tokens = detail.get("output_tokens", 0)
-                model = detail.get("model", "unknown")
-
-                total_input_tokens += input_tokens
-                total_output_tokens += output_tokens
-                total_tokens += input_tokens + output_tokens
-
-                # Breakdown by issue
-                issue = row["issue_id"]
-                if issue and issue not in issue_breakdown:
-                    issue_breakdown[issue] = {"input_tokens": 0, "output_tokens": 0}
-                if issue:
-                    issue_breakdown[issue]["input_tokens"] += input_tokens
-                    issue_breakdown[issue]["output_tokens"] += output_tokens
-
-                # Breakdown by agent
-                agent = row["agent_id"]
-                if agent and agent not in agent_breakdown:
-                    agent_breakdown[agent] = {"input_tokens": 0, "output_tokens": 0}
-                if agent:
-                    agent_breakdown[agent]["input_tokens"] += input_tokens
-                    agent_breakdown[agent]["output_tokens"] += output_tokens
-
-                # Breakdown by model
-                if model not in model_breakdown:
-                    model_breakdown[model] = {"input_tokens": 0, "output_tokens": 0}
-                model_breakdown[model]["input_tokens"] += input_tokens
-                model_breakdown[model]["output_tokens"] += output_tokens
-
-            except json.JSONDecodeError:
-                continue
+        cursor = self.conn.execute(model_query, params)
+        for row in cursor.fetchall():
+            model_breakdown[row["model"]] = {"input_tokens": row["input_tokens"], "output_tokens": row["output_tokens"]}
 
         # Estimate cost (rough approximation, varies by model)
         # Using Claude Sonnet pricing as baseline: ~$15/1M input, ~$75/1M output
