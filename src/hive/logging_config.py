@@ -63,11 +63,4 @@ def _is_cli_context() -> bool:
     if os.environ.get("HIVE_ENABLE_FILE_LOGGING") == "1":
         return False
 
-    # Check if any CLI-related modules are in the call stack
-    import inspect
-
-    for frame_info in inspect.stack():
-        if "cli.py" in frame_info.filename:
-            return True
-
-    return False
+    return os.environ.get("HIVE_CLI_CONTEXT") == "1"

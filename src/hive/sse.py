@@ -1,8 +1,10 @@
 """SSE (Server-Sent Events) client for OpenCode event stream."""
 
 import asyncio
+import base64
 import inspect
 import json
+import os
 from typing import Any, Callable, Dict, Optional
 
 import aiohttp
@@ -75,9 +77,6 @@ class SSEClient:
 
         headers = {}
         if self.password:
-            import base64
-            import os
-
             username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
             credentials = f"{username}:{self.password}"
             encoded = base64.b64encode(credentials.encode()).decode()

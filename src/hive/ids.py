@@ -1,6 +1,5 @@
 """Hash-based ID generation for human-readable, collision-free identifiers."""
 
-import hashlib
 import uuid
 
 
@@ -21,5 +20,4 @@ def generate_id(prefix: str = "w") -> str:
         >>> len(id1)
         8
     """
-    raw = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-    return f"{prefix}-{raw[:6]}"
+    return f"{prefix}-{uuid.uuid4().hex[:6]}"

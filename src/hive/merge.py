@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .config import Config
+from .config import Config, WORKER_PERMISSIONS
 from .db import Database
 from .git import (
     GitWorktreeError,
@@ -530,12 +530,7 @@ class MergeProcessor:
         session = await self.opencode.create_session(
             directory=self.project_path,
             title="refinery",
-            permissions=[
-                {"permission": "*", "pattern": "*", "action": "allow"},
-                {"permission": "question", "pattern": "*", "action": "deny"},
-                {"permission": "plan_enter", "pattern": "*", "action": "deny"},
-                {"permission": "external_directory", "pattern": "*", "action": "deny"},
-            ],
+            permissions=WORKER_PERMISSIONS,
         )
         self.refinery_session_id = session["id"]
 

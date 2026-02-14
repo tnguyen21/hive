@@ -10,6 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+# Set CLI context for logging configuration
+os.environ["HIVE_CLI_CONTEXT"] = "1"
+
 from .config import Config
 from .daemon import HiveDaemon, run_daemon_foreground
 from .db import Database

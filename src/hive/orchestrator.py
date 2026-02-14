@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .config import Config
+from .config import Config, WORKER_PERMISSIONS
 from .db import Database
 from .git import create_worktree, get_commit_hash, remove_worktree
 from .merge import MergeProcessor
@@ -595,16 +595,7 @@ class Orchestrator:
             session = await self.opencode.create_session(
                 directory=worktree_path,
                 title=f"{agent_name}: {issue['title']}",
-                permissions=[
-                    {"permission": "*", "pattern": "*", "action": "allow"},
-                    {"permission": "question", "pattern": "*", "action": "deny"},
-                    {"permission": "plan_enter", "pattern": "*", "action": "deny"},
-                    {
-                        "permission": "external_directory",
-                        "pattern": "*",
-                        "action": "deny",
-                    },
-                ],
+                permissions=WORKER_PERMISSIONS,
             )
             session_id = session["id"]
 
@@ -1089,16 +1080,7 @@ class Orchestrator:
             session = await self.opencode.create_session(
                 directory=agent.worktree,
                 title=f"{agent.name}: {next_step['title']}",
-                permissions=[
-                    {"permission": "*", "pattern": "*", "action": "allow"},
-                    {"permission": "question", "pattern": "*", "action": "deny"},
-                    {"permission": "plan_enter", "pattern": "*", "action": "deny"},
-                    {
-                        "permission": "external_directory",
-                        "pattern": "*",
-                        "action": "deny",
-                    },
-                ],
+                permissions=WORKER_PERMISSIONS,
             )
             new_session_id = session["id"]
 

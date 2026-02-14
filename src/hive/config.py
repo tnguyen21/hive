@@ -38,3 +38,12 @@ class Config:
     DEFAULT_MODEL = os.environ.get("HIVE_DEFAULT_MODEL", "claude-opus-4-6")
     WORKER_MODEL = os.environ.get("HIVE_WORKER_MODEL", "claude-sonnet-4-20250514")
     REFINERY_MODEL = os.environ.get("HIVE_REFINERY_MODEL", "claude-sonnet-4-20250514")
+
+
+# Shared permission configurations
+WORKER_PERMISSIONS = [
+    {"permission": "*", "pattern": "*", "action": "allow"},
+    {"permission": "question", "pattern": "*", "action": "deny"},
+    {"permission": "plan_enter", "pattern": "*", "action": "deny"},
+    {"permission": "external_directory", "pattern": "*", "action": "deny"},
+]

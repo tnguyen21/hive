@@ -545,21 +545,20 @@ class Database:
         """Get the most recent n events, returned oldest-first."""
         if issue_id:
             cursor = self.conn.execute(
-                "SELECT * FROM events WHERE issue_id = ? ORDER BY id DESC LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events WHERE issue_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
                 (issue_id, n),
             )
         elif agent_id:
             cursor = self.conn.execute(
-                "SELECT * FROM events WHERE agent_id = ? ORDER BY id DESC LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events WHERE agent_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
                 (agent_id, n),
             )
         else:
             cursor = self.conn.execute(
-                "SELECT * FROM events ORDER BY id DESC LIMIT ?",
+                "SELECT * FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
                 (n,),
             )
         rows = [dict(row) for row in cursor.fetchall()]
-        rows.reverse()
         return rows
 
     def count_events_by_type(self, issue_id: str, event_type: str) -> int:
