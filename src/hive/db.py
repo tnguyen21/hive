@@ -3,7 +3,7 @@
 import json
 import logging
 import sqlite3
-from collections import defaultdict
+
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,49 +11,6 @@ from typing import Any, Dict, List, Optional
 from .ids import generate_id
 
 logger = logging.getLogger(__name__)
-
-
-# Stop words for keyword extraction - moved from get_agent_capability_scores
-# to avoid reconstruction on every call
-_STOP_WORDS = frozenset(
-    {
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "but",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "of",
-        "with",
-        "by",
-        "from",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "should",
-        "could",
-        "can",
-        "may",
-        "might",
-        "must",
-    }
-)
 
 
 # SQL schema definition
@@ -738,107 +695,6 @@ class Database:
             """
         )
         return [dict(row) for row in cursor.fetchall()]
-
-    def get_agent_capability_scores(self, issue_dict: Dict[str, Any]) -> Dict[str, float]:
-        """
-        Calculate capability scores for idle agents based on their track record with similar issues.
-
-        Similarity is determined by:
-        - Same project (exact match)
-        - Same issue type (task/bug/feature)
-        - Title keyword overlap (basic keyword matching)
-
-        Scoring formula:
-        Score = (same_project_completions * 3) + (same_type_completions * 2) + (keyword_overlap_completions * 1)
-
-        Args:
-            issue_dict: Issue dictionary containing 'project', 'type', 'title' fields
-
-        Returns:
-            Dict mapping agent_id to capability score (float)
-        """
-        if not self.conn:
-            raise RuntimeError("Database not connected")
-
-        # Get idle agents
-        idle_agents = self.get_idle_agents()
-        if not idle_agents:
-            return {}
-
-        # Extract issue characteristics
-        issue_project = issue_dict.get("project", "")
-        issue_type = issue_dict.get("type", "")
-        issue_title = issue_dict.get("title", "")
-
-        # Simple keyword extraction - use module-level constant to avoid per-call allocation
-        issue_keywords = set(
-            [word.lower().strip(".,!?;:()[]{}\"'") for word in issue_title.split() if len(word) > 2 and word.lower() not in _STOP_WORDS]
-        )
-
-        # Batch query: get completed issues for ALL idle agents in one query
-        idle_agent_ids = [a["id"] for a in idle_agents]
-        placeholders = ",".join("?" * len(idle_agent_ids))
-        cursor = self.conn.execute(
-            f"""SELECT DISTINCT e.agent_id, i.project, i.type, i.title
-               FROM events e JOIN issues i ON e.issue_id = i.id
-               WHERE e.agent_id IN ({placeholders})
-                 AND e.event_type IN ('done', 'finalized', 'completed')""",
-            idle_agent_ids,
-        )
-
-        # Group results by agent_id
-        agent_completed = defaultdict(list)
-        for row in cursor:
-            agent_completed[row["agent_id"]].append(dict(row))
-
-        scores = {}
-
-        # Process each idle agent using the batched data
-        for agent in idle_agents:
-            agent_id = agent["id"]
-            completed_issues = agent_completed[agent_id]
-
-            if not completed_issues:
-                # No track record, score = 0
-                scores[agent_id] = 0.0
-                continue
-
-            same_project_count = 0
-            same_type_count = 0
-            keyword_overlap_count = 0
-
-            for completed in completed_issues:
-                completed_project = completed["project"] or ""
-                completed_type = completed["type"] or ""
-                completed_title = completed["title"] or ""
-
-                # Same project check (exact match)
-                if issue_project and completed_project == issue_project:
-                    same_project_count += 1
-
-                # Same type check (exact match)
-                if issue_type and completed_type == issue_type:
-                    same_type_count += 1
-
-                # Keyword overlap check - use module-level constant
-                completed_keywords = set(
-                    [
-                        word.lower().strip(".,!?;:()[]{}\"'")
-                        for word in completed_title.split()
-                        if len(word) > 2 and word.lower() not in _STOP_WORDS
-                    ]
-                )
-
-                if issue_keywords and completed_keywords:
-                    overlap = len(issue_keywords.intersection(completed_keywords))
-                    if overlap > 0:
-                        keyword_overlap_count += 1
-
-            # Calculate final score
-            score = (same_project_count * 3.0) + (same_type_count * 2.0) + (keyword_overlap_count * 1.0)
-            scores[agent_id] = score
-
-        return scores
 
     def get_token_usage(
         self,

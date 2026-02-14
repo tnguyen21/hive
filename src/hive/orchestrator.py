@@ -430,20 +430,6 @@ class Orchestrator:
                     if msg_model and not model:
                         model = msg_model
 
-            # If no metadata, estimate from text length (1 token ≈ 4 chars)
-            if not metadata or (metadata.get("input_tokens", 0) == 0 and metadata.get("output_tokens", 0) == 0):
-                text_content = ""
-                for part in message.get("parts", []):
-                    if part.get("type") == "text":
-                        text_content += part.get("text", "")
-
-                if text_content:
-                    estimated_tokens = len(text_content) // 4  # Rough estimation
-                    if message.get("role") == "user":
-                        total_input_tokens += estimated_tokens
-                    else:
-                        total_output_tokens += estimated_tokens
-
         # Only log if we found some token usage
         if total_input_tokens > 0 or total_output_tokens > 0:
             detail = {
@@ -616,69 +602,33 @@ class Orchestrator:
     async def spawn_worker(self, issue: Dict[str, str]):
         """
         Spawn a worker to handle an issue.
-        First checks if there are idle agents with good capability scores for this issue.
-        If so, reuses the best scoring agent. Otherwise creates a new agent.
+        Always creates a new agent.
 
         Args:
             issue: Issue dict from database
         """
         issue_id = issue["id"]
+        agent_name = f"worker-{generate_id('')[2:]}"  # Strip "w-" prefix
+        model = issue.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
 
-        # Check for idle agents with capability scores
-        capability_scores = self.db.get_agent_capability_scores(issue)
-        best_agent = None
-        best_score = 0.0
+        # Create agent identity in database
+        agent_id = self.db.create_agent(
+            name=agent_name,
+            model=model,
+            metadata={"issue_id": issue_id},
+        )
 
-        # Find the best scoring idle agent if any have scores > 0
-        for agent_id, score in capability_scores.items():
-            if score > best_score:
-                best_score = score
-                agent_info = self.db.get_agent(agent_id)
-                if agent_info:
-                    best_agent = agent_info
-
-        if best_agent and best_score > 0.0:
-            # Reuse existing capable agent
-            agent_id = best_agent["id"]
-            agent_name = best_agent["name"]
-            model = issue.get("model") or best_agent.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
-
-            # Create new worktree for this task
-            try:
-                worktree_path = create_worktree(str(self.project_path), agent_name)
-            except Exception as e:
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "worktree_error",
-                    {"error": str(e)},
-                )
-                return
-        else:
-            # No capable idle agents, create new agent
-            agent_name = f"worker-{generate_id('')[2:]}"  # Strip "w-" prefix
-
-            # Resolve model: issue.model > Config.WORKER_MODEL > Config.DEFAULT_MODEL
-            model = issue.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
-
-            # Create agent identity in database
-            agent_id = self.db.create_agent(
-                name=agent_name,
-                model=model,
-                metadata={"issue_id": issue_id},
+        # Create git worktree
+        try:
+            worktree_path = create_worktree(str(self.project_path), agent_name)
+        except Exception as e:
+            self.db.log_event(
+                issue_id,
+                agent_id,
+                "worktree_error",
+                {"error": str(e)},
             )
-
-            # Create git worktree
-            try:
-                worktree_path = create_worktree(str(self.project_path), agent_name)
-            except Exception as e:
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "worktree_error",
-                    {"error": str(e)},
-                )
-                return
+            return
 
         # Atomic claim
         claimed = self.db.claim_issue(issue_id, agent_id)
@@ -756,14 +706,12 @@ class Orchestrator:
                 directory=worktree_path,
             )
 
-            # Log whether we used capability-based routing or created new agent
+            # Log worker started
             event_detail = {
                 "session_id": session_id,
                 "worktree": worktree_path,
-                "routing_method": "capability_based" if best_agent and best_score > 0.0 else "new_agent",
+                "routing_method": "new_agent",
             }
-            if best_agent and best_score > 0.0:
-                event_detail["capability_score"] = best_score
 
             self.db.log_event(
                 issue_id,
@@ -1357,7 +1305,18 @@ class Orchestrator:
         # Common connectivity issues
         if any(
             phrase in error_msg
-            for phrase in ["connection refused", "connection failed", "timeout", "server error", "5", "network", "unreachable"]
+            for phrase in [
+                "connection refused",
+                "connection failed",
+                "timeout",
+                "server error",
+                "network",
+                "unreachable",
+                "500",
+                "502",
+                "503",
+                "504",
+            ]
         ):
             return True
 
