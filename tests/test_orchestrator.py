@@ -157,7 +157,7 @@ async def test_full_worker_lifecycle(temp_db, git_repo):
 @pytest.mark.asyncio
 async def test_handle_agent_failure_retry_tier(temp_db, tmp_path):
     """Test first tier of escalation chain - retry same agent."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock
     from hive.opencode import OpenCodeClient
 
     # Create orchestrator with mock opencode
@@ -1528,3 +1528,126 @@ async def test_session_error_handler_unknown_session(temp_db, tmp_path):
 
     # Verify handle_stalled_agent was NOT called
     orch.handle_stalled_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_stalled_with_idle_session(temp_db, tmp_path):
+    """Test that idle session triggers handle_agent_complete instead of handle_stalled_agent."""
+    orch = _make_orchestrator(temp_db, tmp_path)
+
+    # Mock OpenCode client
+    orch.opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
+    orch.handle_agent_complete = AsyncMock()
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Create test agent
+    issue_id = temp_db.create_issue("Test Issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Assign agent to issue to satisfy foreign key constraint
+    temp_db.conn.execute("UPDATE agents SET current_issue = ? WHERE id = ?", (issue_id, agent_id))
+    temp_db.conn.commit()
+
+    agent = AgentIdentity(agent_id=agent_id, name="test-agent", issue_id=issue_id, worktree="/tmp/test", session_id="session-123")
+
+    await orch._handle_stalled_with_session_check(agent)
+
+    # Should call handle_agent_complete, not handle_stalled_agent
+    orch.handle_agent_complete.assert_called_once_with(agent)
+    orch.handle_stalled_agent.assert_not_called()
+
+    # Should log missed_completion event
+    events = temp_db.get_events(agent_id=agent_id, event_type="missed_completion")
+    assert len(events) == 1
+    assert events[0]["detail"] == '{"session_status": "idle", "reason": "sse_missed"}'
+
+
+@pytest.mark.asyncio
+async def test_handle_stalled_with_busy_session_extends_lease(temp_db, tmp_path):
+    """Test that busy session gets lease extension on first check."""
+    orch = _make_orchestrator(temp_db, tmp_path)
+
+    # Mock OpenCode client
+    orch.opencode.get_session_status = AsyncMock(return_value={"type": "busy"})
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Create test agent
+    issue_id = temp_db.create_issue("Test Issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Assign agent to issue to satisfy foreign key constraint
+    temp_db.conn.execute("UPDATE agents SET current_issue = ? WHERE id = ?", (issue_id, agent_id))
+    temp_db.conn.commit()
+
+    agent = AgentIdentity(agent_id=agent_id, name="test-agent", issue_id=issue_id, worktree="/tmp/test", session_id="session-123")
+
+    await orch._handle_stalled_with_session_check(agent)
+
+    # Should not call handle_stalled_agent
+    orch.handle_stalled_agent.assert_not_called()
+
+    # Should log lease_extended event
+    events = temp_db.get_events(agent_id=agent_id, event_type="lease_extended")
+    assert len(events) == 1
+
+    # Agent lease should be updated
+    cursor = temp_db.conn.execute("SELECT lease_expires_at FROM agents WHERE id = ?", (agent_id,))
+    row = cursor.fetchone()
+    assert row is not None
+
+
+@pytest.mark.asyncio
+async def test_handle_stalled_with_busy_session_already_extended(temp_db, tmp_path):
+    """Test that previously extended busy session is treated as truly stalled."""
+    orch = _make_orchestrator(temp_db, tmp_path)
+
+    # Mock OpenCode client
+    orch.opencode.get_session_status = AsyncMock(return_value={"type": "busy"})
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Create test agent
+    issue_id = temp_db.create_issue("Test Issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Assign agent to issue to satisfy foreign key constraint
+    temp_db.conn.execute("UPDATE agents SET current_issue = ? WHERE id = ?", (issue_id, agent_id))
+    temp_db.conn.commit()
+
+    # Pre-populate a lease_extended event within the lease period
+    temp_db.log_event(issue_id, agent_id, "lease_extended", {"test": "data"})
+
+    agent = AgentIdentity(agent_id=agent_id, name="test-agent", issue_id=issue_id, worktree="/tmp/test", session_id="session-123")
+
+    await orch._handle_stalled_with_session_check(agent)
+
+    # Should call handle_stalled_agent since lease was already extended
+    orch.handle_stalled_agent.assert_called_once_with(agent)
+
+
+@pytest.mark.asyncio
+async def test_handle_stalled_with_session_api_failure(temp_db, tmp_path):
+    """Test that OpenCode API failure falls back to handle_stalled_agent."""
+    orch = _make_orchestrator(temp_db, tmp_path)
+
+    # Mock OpenCode client to raise exception
+    orch.opencode.get_session_status = AsyncMock(side_effect=Exception("API Error"))
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Create test agent
+    issue_id = temp_db.create_issue("Test Issue")
+    agent_id = temp_db.create_agent("test-agent")
+
+    # Assign agent to issue to satisfy foreign key constraint
+    temp_db.conn.execute("UPDATE agents SET current_issue = ? WHERE id = ?", (issue_id, agent_id))
+    temp_db.conn.commit()
+
+    agent = AgentIdentity(agent_id=agent_id, name="test-agent", issue_id=issue_id, worktree="/tmp/test", session_id="session-123")
+
+    await orch._handle_stalled_with_session_check(agent)
+
+    # Should call handle_stalled_agent due to API failure
+    orch.handle_stalled_agent.assert_called_once_with(agent)
+
+    # Should log session_check_failed event
+    events = temp_db.get_events(agent_id=agent_id, event_type="session_check_failed")
+    assert len(events) == 1

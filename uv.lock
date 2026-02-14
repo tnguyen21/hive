@@ -368,6 +368,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "datasette" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -378,6 +379,7 @@ ui = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "datasette" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -386,6 +388,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "datasette", marker = "extra == 'dev'", specifier = ">=0.65" },
     { name = "datasette", marker = "extra == 'ui'", specifier = ">=0.65" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
@@ -396,6 +399,7 @@ provides-extras = ["ui", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "datasette", specifier = ">=0.65" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },

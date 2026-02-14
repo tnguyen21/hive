@@ -1307,6 +1307,9 @@ class Orchestrator:
         Only checks agents in self.active_agents (in-memory). This prevents
         a newly restarted daemon from interfering with stale DB rows left
         by a previous daemon instance.
+
+        Now enhanced with session status inspection to avoid false positives
+        from missed SSE events.
         """
         if not self.active_agents:
             return
@@ -1330,8 +1333,62 @@ class Orchestrator:
             except Exception:
                 pass
 
+        # For stalled agents, check OpenCode session status before handling
         for agent in stalled:
-            await self.handle_stalled_agent(agent)
+            await self._handle_stalled_with_session_check(agent)
+
+    async def _handle_stalled_with_session_check(self, agent: AgentIdentity):
+        """Handle stalled agent with OpenCode session status verification.
+
+        Checks if the session is actually idle (completion missed due to SSE failure)
+        or busy (false positive, extend lease) before falling back to handle_stalled_agent.
+        """
+        try:
+            # Query OpenCode for actual session status
+            status = await self.opencode.get_session_status(agent.session_id, directory=agent.worktree)
+
+            if status["type"] == "idle":
+                # Session finished but we missed the SSE completion event
+                self.db.log_event(agent.issue_id, agent.agent_id, "missed_completion", {"session_status": "idle", "reason": "sse_missed"})
+                await self.handle_agent_complete(agent)
+                return
+
+            elif status["type"] == "busy":
+                # Session still active - check if we've already extended the lease
+                cursor = self.db.conn.execute(
+                    """
+                    SELECT 1 FROM events 
+                    WHERE agent_id = ? AND event_type = 'lease_extended'
+                    AND created_at > datetime('now', '-{} seconds')
+                    """.format(Config.LEASE_DURATION),
+                    (agent.agent_id,),
+                )
+
+                if cursor.fetchone():
+                    # Already extended lease in current period - treat as truly stalled
+                    await self.handle_stalled_agent(agent)
+                else:
+                    # First extension - extend the lease
+                    self.db.conn.execute(
+                        "UPDATE agents SET lease_expires_at = datetime('now', '+{} seconds') WHERE id = ?".format(Config.LEASE_DURATION),
+                        (agent.agent_id,),
+                    )
+                    self.db.conn.commit()
+
+                    self.db.log_event(
+                        agent.issue_id,
+                        agent.agent_id,
+                        "lease_extended",
+                        {"session_status": "busy", "new_expires_at": "now+{}s".format(Config.LEASE_DURATION)},
+                    )
+                return
+
+        except Exception as e:
+            # OpenCode API failure - fall back to original behavior
+            self.db.log_event(agent.issue_id, agent.agent_id, "session_check_failed", {"error": str(e), "fallback": "handle_stalled_agent"})
+
+        # Default fallback behavior
+        await self.handle_stalled_agent(agent)
 
     def _on_merge_task_done(self, task: asyncio.Task):
         """Handle merge_processor_loop task completion/failure.
