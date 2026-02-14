@@ -1,7 +1,5 @@
 """Tests for prompt templates and completion assessment."""
 
-import pytest
-
 from hive.prompts import (
     assess_completion,
     build_refinery_prompt,
@@ -39,8 +37,8 @@ def test_build_worker_prompt_basic():
     assert "Escalate and Move On" in prompt
 
 
-def test_build_worker_prompt_with_molecule():
-    """Test building a worker prompt for a molecule step."""
+def test_build_worker_prompt_with_completed_steps():
+    """Test building a worker prompt for a molecule step with completed steps."""
     issue = {"title": "Step 1", "description": "First step"}
 
     prompt = build_worker_prompt(
@@ -49,14 +47,9 @@ def test_build_worker_prompt_with_molecule():
         worktree_path="/tmp/worktree",
         branch_name="agent/test-agent",
         project="test-project",
-        step_number=1,
-        total_steps=3,
-        molecule_title="Multi-step workflow",
         completed_steps=["Step 0: Setup complete"],
     )
 
-    assert "step 1 of 3" in prompt
-    assert "Multi-step workflow" in prompt
     assert "Previous Steps (already completed)" in prompt
     assert "Step 0: Setup complete" in prompt
 

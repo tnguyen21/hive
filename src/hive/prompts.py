@@ -53,9 +53,6 @@ def build_worker_prompt(
     worktree_path: str,
     branch_name: str,
     project: str,
-    step_number: Optional[int] = None,
-    total_steps: Optional[int] = None,
-    molecule_title: Optional[str] = None,
     completed_steps: Optional[List[str]] = None,
     notes: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
@@ -68,9 +65,6 @@ def build_worker_prompt(
         worktree_path: Path to the git worktree
         branch_name: Git branch name
         project: Project name
-        step_number: Step number (for molecules)
-        total_steps: Total steps (for molecules)
-        molecule_title: Molecule title (for molecules)
         completed_steps: List of completed step summaries (for molecules)
         notes: List of note dicts from other workers
 
@@ -82,9 +76,6 @@ def build_worker_prompt(
         f"- You are working in a git worktree at: {worktree_path}",
         f"- Branch: {branch_name}",
     ]
-
-    if step_number and total_steps and molecule_title:
-        context_parts.append(f'- This is step {step_number} of {total_steps} in the workflow "{molecule_title}"')
 
     context = "\n".join(context_parts)
 

@@ -28,4 +28,3 @@ class AgentIdentity:
     issue_id: str
     worktree: str
     session_id: str
-    project: str

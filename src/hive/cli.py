@@ -417,12 +417,6 @@ class HiveCLI:
                         line += f"  {event['detail']}"
                 print(line)
 
-    # ── Legacy commands kept for backward compat ─────────────────────
-
-    def close(self, issue_id: str, *, json_mode: bool = False):
-        """Mark an issue as canceled (alias for cancel)."""
-        self.cancel(issue_id, json_mode=json_mode)
-
     # ── Notes ─────────────────────────────────────────────────────────
 
     def add_note(
@@ -694,14 +688,6 @@ class HiveCLI:
                 sys.exit(1)
             else:
                 print(f"Failed to stop daemon (PID {pid})")
-
-    def daemon_start(self, foreground: bool = False, *, json_mode: bool = False):
-        """Start the orchestrator daemon (legacy, delegates to start)."""
-        self.start(foreground=foreground, json_mode=json_mode)
-
-    def daemon_stop(self, *, json_mode: bool = False):
-        """Stop the orchestrator daemon."""
-        self.stop(json_mode=json_mode)
 
     def daemon_restart(self, *, json_mode: bool = False):
         """Restart the orchestrator daemon."""
@@ -1053,10 +1039,6 @@ def main():
     events_parser.add_argument("--type", dest="event_type", help="Filter by event type")
     events_parser.add_argument("--limit", type=int, default=20, help="Number of events (default: 20)")
 
-    # close command (legacy alias for cancel)
-    close_parser = subparsers.add_parser("close", help="Close/cancel an issue (alias for cancel)")
-    close_parser.add_argument("issue_id", help="Issue ID")
-
     # logs command
     logs_parser = subparsers.add_parser("logs", help="Show event log (tail -f style)")
     logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow new events in real time")
@@ -1247,9 +1229,6 @@ def main():
                 json_mode=json_mode,
             )
 
-        elif args.command == "close":
-            cli.close(args.issue_id, json_mode=json_mode)
-
         elif args.command == "logs":
             cli.logs(
                 follow=args.follow,
@@ -1280,9 +1259,9 @@ def main():
 
         elif args.command == "daemon":
             if args.daemon_command == "start":
-                cli.daemon_start(foreground=args.foreground, json_mode=json_mode)
+                cli.start(foreground=args.foreground, json_mode=json_mode)
             elif args.daemon_command == "stop":
-                cli.daemon_stop(json_mode=json_mode)
+                cli.stop(json_mode=json_mode)
             elif args.daemon_command == "restart":
                 cli.daemon_restart(json_mode=json_mode)
             elif args.daemon_command == "status":

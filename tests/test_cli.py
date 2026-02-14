@@ -186,19 +186,6 @@ def test_cli_show_issue_json(temp_db, tmp_path, capsys):
     assert "dependents" in data
 
 
-def test_cli_close_issue(temp_db, tmp_path):
-    """Test closing an issue."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    issue_id = temp_db.create_issue("Test issue", project=tmp_path.name)
-
-    cli.close(issue_id)
-
-    # Verify issue was closed
-    issue = temp_db.get_issue(issue_id)
-    assert issue["status"] == "canceled"
-
-
 def test_cli_status(temp_db, tmp_path, capsys):
     """Test showing status."""
     cli = HiveCLI(temp_db, str(tmp_path))

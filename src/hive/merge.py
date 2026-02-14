@@ -40,7 +40,6 @@ class MergeProcessor:
         self.project_path = str(Path(project_path).resolve())
         self.project_name = project_name
         self.refinery_session_id: Optional[str] = None
-        self.running = False
 
     async def shutdown(self):
         """Clean up the refinery session on shutdown."""

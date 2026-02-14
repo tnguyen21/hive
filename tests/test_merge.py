@@ -157,41 +157,45 @@ async def test_mechanical_merge_rebase_conflict(merge_entry_with_worktree, temp_
     """Test merge with rebase conflict falls through to refinery."""
     info = merge_entry_with_worktree
 
-    # Create a conflicting commit on main
-    (info["git_repo"] / "feature.py").write_text("# conflicting\n")
-    subprocess.run(["git", "add", "."], cwd=info["git_repo"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "Conflict on main"],
-        cwd=info["git_repo"],
-        check=True,
-        capture_output=True,
-    )
-
-    # Mock refinery session
-    mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
-    mock_opencode.send_message_async = AsyncMock()
-    mock_opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
-    mock_opencode.get_messages = AsyncMock(
-        return_value=[
-            {
-                "parts": [
-                    {
-                        "type": "text",
-                        "text": """:::MERGE_RESULT
+    refinery_messages = [
+        {
+            "parts": [
+                {
+                    "type": "text",
+                    "text": """:::MERGE_RESULT
 issue_id: test
 status: rejected
 summary: Could not resolve semantic conflict
 tests_passed: false
 conflicts_resolved: 0
 :::""",
-                    }
-                ]
-            }
-        ]
-    )
+                }
+            ]
+        }
+    ]
+
+    # Mock refinery session with proper lifecycle:
+    # get_session_status: first call returns "busy" (post-send check), then "idle" (wait loop)
+    # get_messages: first call returns [] (pre-send count), then refinery result
+    mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
+    mock_opencode.send_message_async = AsyncMock()
+    mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
+    mock_opencode.get_messages = AsyncMock(side_effect=[[], refinery_messages])
+    mock_opencode.abort_session = AsyncMock()
+    mock_opencode.delete_session = AsyncMock()
 
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
-    await mp.process_queue_once()
+
+    # Patch rebase_onto_main to simulate rebase conflict
+    with patch("hive.merge.rebase_onto_main", return_value=False):
+        with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+            with patch("hive.merge.Config") as mock_config:
+                mock_config.TEST_COMMAND = None
+                mock_config.REFINERY_MODEL = "test-model"
+                mock_config.LEASE_DURATION = 30
+                mock_config.REFINERY_TOKEN_THRESHOLD = 100000
+
+                await mp.process_queue_once()
 
     # Issue should be reset to open (rejected)
     issue = temp_db.get_issue(info["issue_id"])
@@ -209,39 +213,45 @@ async def test_mechanical_merge_test_failure(merge_entry_with_worktree, temp_db,
     """Test merge with test failure falls through to refinery."""
     info = merge_entry_with_worktree
 
-    # Mock refinery (will be called after test failure)
-    mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
-    mock_opencode.send_message_async = AsyncMock()
-    mock_opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
-    mock_opencode.get_messages = AsyncMock(
-        return_value=[
-            {
-                "parts": [
-                    {
-                        "type": "text",
-                        "text": """:::MERGE_RESULT
+    refinery_messages = [
+        {
+            "parts": [
+                {
+                    "type": "text",
+                    "text": """:::MERGE_RESULT
 issue_id: test
 status: merged
 summary: Fixed test by updating import
 tests_passed: true
 conflicts_resolved: 0
 :::""",
-                    }
-                ]
-            }
-        ]
-    )
+                }
+            ]
+        }
+    ]
+
+    # Mock refinery session with proper lifecycle:
+    # get_session_status: first call returns "busy" (post-send check), then "idle" (wait loop)
+    # get_messages: first call returns [] (pre-send count), then refinery result
+    mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
+    mock_opencode.send_message_async = AsyncMock()
+    mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
+    mock_opencode.get_messages = AsyncMock(side_effect=[[], refinery_messages])
+    mock_opencode.abort_session = AsyncMock()
+    mock_opencode.delete_session = AsyncMock()
 
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
 
-    # Patch TEST_COMMAND to a failing command
-    with patch.object(type(mp), "__module__", "hive.merge"):
-        with patch("hive.merge.Config") as mock_config:
-            mock_config.TEST_COMMAND = "false"  # Will always fail
-            mock_config.REFINERY_MODEL = "test-model"
-            mock_config.LEASE_DURATION = 30
+    # Patch run_command_in_worktree to simulate test failure and Config
+    with patch("hive.merge.run_command_in_worktree", return_value=(False, "FAILED test_foo.py")):
+        with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+            with patch("hive.merge.Config") as mock_config:
+                mock_config.TEST_COMMAND = "pytest"
+                mock_config.REFINERY_MODEL = "test-model"
+                mock_config.LEASE_DURATION = 30
+                mock_config.REFINERY_TOKEN_THRESHOLD = 100000
 
-            await mp.process_queue_once()
+                await mp.process_queue_once()
 
     # Should have been dispatched to refinery and then finalized
     issue = temp_db.get_issue(info["issue_id"])
@@ -489,15 +499,16 @@ async def test_wait_for_refinery_consecutive_errors(temp_db, mock_opencode):
     # Mock get_session_status to always throw exceptions
     mock_opencode.get_session_status = AsyncMock(side_effect=Exception("Connection failed"))
 
-    # Should bail after 5 consecutive errors with short timeout
-    result = await mp._wait_for_refinery("test-session", timeout=10)
+    # Patch asyncio.sleep to be instant so the test doesn't take 25+ seconds
+    with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+        result = await mp._wait_for_refinery("test-session", timeout=60)
 
     assert result["status"] == "needs_human"
     assert "consecutive errors" in result["summary"]
     assert result["tests_passed"] is False
     assert result["conflicts_resolved"] == 0
 
-    # Verify get_session_status was called multiple times but stopped at 5 errors
+    # Verify get_session_status was called at least 5 times
     assert mock_opencode.get_session_status.call_count >= 5
 
 
@@ -636,11 +647,20 @@ async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
     """Test status verification after send_message_async detects unprocessed messages."""
     mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
 
-    # Set up merge entry
+    # Create actual DB rows so update_merge_queue_status and log_event work
+    issue_id = temp_db.create_issue(title="Test Issue", project="test")
+    agent_id = temp_db.create_agent(name="test-agent")
+    temp_db.conn.execute(
+        "INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name) VALUES (?, ?, ?, ?, ?)",
+        (issue_id, agent_id, "test", "/tmp/worktree", "test-branch"),
+    )
+    temp_db.conn.commit()
+    queue_id = temp_db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
     entry = {
-        "id": 1,
-        "issue_id": "test-issue",
-        "agent_id": "test-agent",
+        "id": queue_id,
+        "issue_id": issue_id,
+        "agent_id": agent_id,
         "branch_name": "test-branch",
         "worktree": "/tmp/worktree",
         "issue_title": "Test Issue",
@@ -671,5 +691,7 @@ async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
     mock_opencode.delete_session.assert_called()
 
     # Verify merge queue was marked failed
-    queue_entry = temp_db.get_merge_queue_entry(1)
-    assert queue_entry["status"] == "failed"
+    cursor = temp_db.conn.execute("SELECT status FROM merge_queue WHERE id = ?", (queue_id,))
+    row = cursor.fetchone()
+    assert row is not None
+    assert row["status"] == "failed"

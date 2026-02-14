@@ -35,12 +35,11 @@ def test_queen_agent_definition_references_cli():
     with open(agent_file) as f:
         content = f.read()
 
-    # Should reference key CLI commands
-    assert "hive create" in content
-    assert "hive list" in content
-    assert "hive status" in content
-    assert "hive cancel" in content
-    assert "hive finalize" in content
-    assert "hive molecule" in content
-    assert "hive dep add" in content
-    assert "--json" in content
+    # Should reference key CLI commands (queen.md uses `hive --json <cmd>` format)
+    assert "hive --json create" in content
+    assert "hive --json list" in content
+    assert "hive --json status" in content
+    assert "hive --json cancel" in content
+    assert "hive --json finalize" in content
+    assert "hive --json molecule" in content
+    assert "hive --json dep add" in content

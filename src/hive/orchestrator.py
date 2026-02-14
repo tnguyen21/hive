@@ -601,7 +601,6 @@ class Orchestrator:
                 issue_id=issue_id,
                 worktree=worktree_path,
                 session_id=session_id,
-                project=self.project_name,
             )
             self.active_agents[agent_id] = agent
 
