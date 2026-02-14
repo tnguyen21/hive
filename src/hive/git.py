@@ -43,7 +43,11 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
 
     # Retry with backoff — concurrent worktree creation can transiently fail
     # with "invalid reference: main" when git ref resolution hits contention.
-    max_retries = 3
+    # TODO: Investigate a proper fix for git ref contention instead of this
+    # sleep-and-retry hack. It's unclear whether longer sleeps actually help
+    # or if the root cause is something else entirely (e.g. packed-refs
+    # rewriting, loose ref gc, or worktree metadata races).
+    max_retries = 4
     for attempt in range(max_retries):
         try:
             subprocess.run(
@@ -66,7 +70,7 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
         except subprocess.CalledProcessError as e:
             is_transient = "invalid reference" in e.stderr or "index.lock" in e.stderr
             if is_transient and attempt < max_retries - 1:
-                time.sleep(0.5 * (attempt + 1))
+                time.sleep(1.0 * (attempt + 1))
                 continue
             raise GitWorktreeError(f"Failed to create worktree: {e.stderr}") from e
 

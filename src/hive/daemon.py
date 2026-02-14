@@ -100,7 +100,7 @@ class HiveDaemon:
         if existing_pid:
             self._remove_pid()
 
-        # Spawn a detached subprocess running `hive start --foreground`
+        # Spawn a detached subprocess running `hive daemon start --foreground`
         log_fd = open(self.log_file, "a")  # noqa: SIM115
         proc = subprocess.Popen(
             [
@@ -111,6 +111,7 @@ class HiveDaemon:
                 str(db_path),
                 "--project",
                 str(self.project_path),
+                "daemon",
                 "start",
                 "--foreground",
             ],
