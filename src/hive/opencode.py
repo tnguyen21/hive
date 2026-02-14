@@ -59,6 +59,23 @@ class OpenCodeClient:
         if self.session:
             await self.session.close()
 
+    async def list_sessions(self) -> List[Dict[str, Any]]:
+        """
+        List all sessions on the OpenCode server.
+
+        Returns:
+            List of session dicts with id, title, etc.
+        """
+        if not self.session:
+            raise RuntimeError("Client not initialized. Use async with context manager.")
+
+        headers = {**self._get_auth_header()}
+
+        url = f"{self.base_url}/session"
+        async with self.session.get(url, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
     async def create_session(
         self,
         directory: Optional[str] = None,
