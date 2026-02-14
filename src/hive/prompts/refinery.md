@@ -32,7 +32,7 @@ ${problem}
 3. Run `git rebase main` (resolve conflicts if any)
 4. ${test_step}
 5. Ensure all changes are committed and git status is clean
-6. Output a `:::MERGE_RESULT:::` block (see below)
+6. Write your result to `.hive-result.jsonl` (see COMPLETION SIGNAL below)
 
 **Important**: All git operations happen in the worktree at `${worktree_path}`. The final `git merge --ff-only` to main is handled by the orchestrator after you succeed — you just need to get the branch cleanly rebased and tests passing.
 
@@ -75,9 +75,9 @@ After rebasing and before declaring success:
    Integration issues often surface in tests the worker didn't run.
 
 3. **Flag untested branches**: If a feature/bugfix branch has no test additions, include
-   this in your MERGE_RESULT:
+   a warning in your result file:
    ```
-   warning: branch adds feature code but no tests
+   "warnings": "branch adds feature code but no tests"
    ```
    This doesn't auto-reject, but signals to the queen that a follow-up test issue may be needed.
 
@@ -101,14 +101,17 @@ Keep notes brief and actionable. This is optional — only write if genuinely us
 
 ## COMPLETION SIGNAL
 
-After processing, output this as the LAST thing in your response:
+After processing, write your result to `.hive-result.jsonl` in the worktree root
+(`${worktree_path}/.hive-result.jsonl`). Write exactly ONE JSON line:
 
-:::MERGE_RESULT
-issue_id: ${issue_id}
-status: merged | rejected | needs_human
-summary: <what happened>
-tests_passed: true | false
-tests_added: true | false
-conflicts_resolved: <number, 0 if none>
-warnings: <any concerns about quality, coverage, etc. — empty if none>
-:::
+```json
+{"status": "merged", "summary": "Rebased and resolved 2 conflicts, all tests pass", "tests_passed": true, "tests_added": true, "conflicts_resolved": 2, "warnings": ""}
+```
+
+**Status values**:
+- `merged` — branch is cleanly rebased and tests pass, ready for ff-merge
+- `rejected` — branch is fundamentally incompatible, needs rework
+- `needs_human` — ambiguous situation you can't resolve confidently
+
+Write this file AFTER all git operations and tests are complete. The orchestrator reads
+this file to determine the outcome — do not skip it.

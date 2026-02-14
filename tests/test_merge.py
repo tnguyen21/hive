@@ -158,30 +158,13 @@ async def test_mechanical_merge_rebase_conflict(merge_entry_with_worktree, temp_
     """Test merge with rebase conflict falls through to refinery."""
     info = merge_entry_with_worktree
 
-    refinery_messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": """:::MERGE_RESULT
-issue_id: test
-status: rejected
-summary: Could not resolve semantic conflict
-tests_passed: false
-conflicts_resolved: 0
-:::""",
-                }
-            ]
-        }
-    ]
-
     # Mock refinery session with proper lifecycle:
     # get_session_status: first call returns "busy" (post-send check), then "idle" (wait loop)
-    # get_messages: only called once in _wait_for_refinery to get result
+    # get_messages: returns enough messages to pass the fence check
     mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
     mock_opencode.send_message_async = AsyncMock()
     mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
-    mock_opencode.get_messages = AsyncMock(return_value=refinery_messages)
+    mock_opencode.get_messages = AsyncMock(return_value=[{"parts": [{"type": "text", "text": "done"}]}])
     mock_opencode.cleanup_session = AsyncMock()
 
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
@@ -195,7 +178,18 @@ conflicts_resolved: 0
                 mock_config.LEASE_DURATION = 30
                 mock_config.REFINERY_TOKEN_THRESHOLD = 100000
 
-                await mp.process_queue_once()
+                # Mock read_result_file to return a rejected result
+                with patch(
+                    "hive.merge.read_result_file",
+                    return_value={
+                        "status": "rejected",
+                        "summary": "Could not resolve semantic conflict",
+                        "tests_passed": False,
+                        "conflicts_resolved": 0,
+                    },
+                ):
+                    with patch("hive.merge.remove_result_file"):
+                        await mp.process_queue_once()
 
     # Issue should be reset to open (rejected)
     issue = temp_db.get_issue(info["issue_id"])
@@ -213,30 +207,13 @@ async def test_mechanical_merge_test_failure(merge_entry_with_worktree, temp_db,
     """Test merge with test failure falls through to refinery."""
     info = merge_entry_with_worktree
 
-    refinery_messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": """:::MERGE_RESULT
-issue_id: test
-status: merged
-summary: Fixed test by updating import
-tests_passed: true
-conflicts_resolved: 0
-:::""",
-                }
-            ]
-        }
-    ]
-
     # Mock refinery session with proper lifecycle:
     # get_session_status: first call returns "busy" (post-send check), then "idle" (wait loop)
-    # get_messages: only called once in _wait_for_refinery to get result
+    # get_messages: returns enough messages to pass the fence check
     mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
     mock_opencode.send_message_async = AsyncMock()
     mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
-    mock_opencode.get_messages = AsyncMock(return_value=refinery_messages)
+    mock_opencode.get_messages = AsyncMock(return_value=[{"parts": [{"type": "text", "text": "done"}]}])
     mock_opencode.cleanup_session = AsyncMock()
 
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
@@ -250,7 +227,18 @@ conflicts_resolved: 0
                 mock_config.LEASE_DURATION = 30
                 mock_config.REFINERY_TOKEN_THRESHOLD = 100000
 
-                await mp.process_queue_once()
+                # Mock read_result_file to return a merged result
+                with patch(
+                    "hive.merge.read_result_file",
+                    return_value={
+                        "status": "merged",
+                        "summary": "Fixed test by updating import",
+                        "tests_passed": True,
+                        "conflicts_resolved": 0,
+                    },
+                ):
+                    with patch("hive.merge.remove_result_file"):
+                        await mp.process_queue_once()
 
     # Should have been dispatched to refinery and then finalized
     issue = temp_db.get_issue(info["issue_id"])
@@ -482,7 +470,7 @@ async def test_wait_for_refinery_consecutive_errors(temp_db, mock_opencode):
 
     # Patch asyncio.sleep to be instant so the test doesn't take 25+ seconds
     with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
-        result = await mp._wait_for_refinery("test-session", timeout=60)
+        result = await mp._wait_for_refinery("test-session", worktree_path="/tmp/worktree", timeout=60)
 
     assert result["status"] == "needs_human"
     assert "consecutive errors" in result["summary"]
@@ -512,12 +500,19 @@ async def test_wait_for_refinery_message_count_fence(temp_db, mock_opencode):
         ]
     )
 
-    # Mock parse_merge_result
-    with patch("hive.merge.parse_merge_result") as mock_parse:
-        mock_parse.return_value = {"status": "merged", "summary": "Success"}
-
-        # Call with min_message_count=1 (fence)
-        result = await mp._wait_for_refinery("test-session", timeout=30, min_message_count=1)
+    # Mock read_result_file to return a merged result
+    with patch(
+        "hive.merge.read_result_file",
+        return_value={
+            "status": "merged",
+            "summary": "Success",
+            "tests_passed": True,
+            "conflicts_resolved": 0,
+        },
+    ):
+        with patch("hive.merge.remove_result_file"):
+            # Call with min_message_count=1 (fence)
+            result = await mp._wait_for_refinery("test-session", worktree_path="/tmp/worktree", timeout=30, min_message_count=1)
 
     assert result["status"] == "merged"
     # Should have been called twice - once for fence check, once for actual result

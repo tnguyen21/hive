@@ -5,7 +5,6 @@ from hive.prompts import (
     build_refinery_prompt,
     build_system_prompt,
     build_worker_prompt,
-    parse_merge_result,
     read_notes_file,
     remove_notes_file,
 )
@@ -123,7 +122,7 @@ def test_build_refinery_prompt_conflict():
     assert "Add auth middleware" in prompt
     assert "agent/worker-1" in prompt
     assert "conflicts detected" in prompt.lower()
-    assert "MERGE_RESULT" in prompt
+    assert ".hive-result.jsonl" in prompt
 
 
 def test_build_refinery_prompt_test_failure():
@@ -141,116 +140,6 @@ def test_build_refinery_prompt_test_failure():
     assert "TESTS FAILED" in prompt
     assert "pytest tests/" in prompt
     assert "FAILED test_login" in prompt
-
-
-def test_parse_merge_result_structured_success():
-    """Test parsing a structured merge result signal."""
-    messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": """Resolved the conflict and ran tests.
-
-:::MERGE_RESULT
-issue_id: w-abc123
-status: merged
-summary: Resolved 2 import conflicts, all tests pass
-tests_passed: true
-conflicts_resolved: 2
-:::""",
-                }
-            ]
-        }
-    ]
-
-    result = parse_merge_result(messages)
-    assert result["status"] == "merged"
-    assert result["tests_passed"] is True
-    assert result["conflicts_resolved"] == 2
-    assert "import conflicts" in result["summary"]
-
-
-def test_parse_merge_result_structured_rejected():
-    """Test parsing a rejected merge result."""
-    messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": """:::MERGE_RESULT
-issue_id: w-abc123
-status: rejected
-summary: Fundamental incompatibility with new API design
-tests_passed: false
-conflicts_resolved: 0
-:::""",
-                }
-            ]
-        }
-    ]
-
-    result = parse_merge_result(messages)
-    assert result["status"] == "rejected"
-    assert result["tests_passed"] is False
-
-
-def test_parse_merge_result_heuristic_success():
-    """Test heuristic fallback for merge success."""
-    messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": "Successfully merged the branch after resolving conflicts. All tests pass.",
-                }
-            ]
-        }
-    ]
-
-    result = parse_merge_result(messages)
-    assert result["status"] == "merged"
-    assert result["tests_passed"] is True
-
-
-def test_parse_merge_result_heuristic_rejected():
-    """Test heuristic fallback for merge rejection."""
-    messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": "Rejecting this branch — the changes are incompatible with the new architecture.",
-                }
-            ]
-        }
-    ]
-
-    result = parse_merge_result(messages)
-    assert result["status"] == "rejected"
-
-
-def test_parse_merge_result_empty():
-    """Test parse_merge_result with empty messages."""
-    result = parse_merge_result([])
-    assert result["status"] == "needs_human"
-
-
-def test_parse_merge_result_no_signal():
-    """Test parse_merge_result with no recognizable signal."""
-    messages = [
-        {
-            "parts": [
-                {
-                    "type": "text",
-                    "text": "I looked at the code but I'm not sure what to do.",
-                }
-            ]
-        }
-    ]
-
-    result = parse_merge_result(messages)
-    assert result["status"] == "needs_human"
 
 
 def test_assess_completion_no_file_result():

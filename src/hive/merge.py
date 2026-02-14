@@ -22,7 +22,7 @@ from .git import (
     run_command_in_worktree,
 )
 from .opencode import OpenCodeClient, make_model_config
-from .prompts import build_refinery_prompt, parse_merge_result
+from .prompts import build_refinery_prompt, read_notes_file, read_result_file, remove_notes_file, remove_result_file
 
 
 class MergeProcessor:
@@ -227,18 +227,23 @@ class MergeProcessor:
             },
         )
 
+        worktree_path = entry["worktree"]
+
         try:
             session_id = await self._ensure_refinery_session()
 
             # Record message count before sending (fence against stale results)
             pre_send_count = self._refinery_message_count
 
+            # Remove any stale result file before sending (belt-and-suspenders)
+            remove_result_file(worktree_path)
+
             # Build the refinery prompt
             prompt = build_refinery_prompt(
                 issue_title=entry.get("issue_title", "Unknown"),
                 issue_id=issue_id,
                 branch_name=entry["branch_name"],
-                worktree_path=entry["worktree"],
+                worktree_path=worktree_path,
                 agent_name=entry.get("agent_name"),
                 rebase_succeeded=rebase_ok,
                 test_output=test_output,
@@ -261,7 +266,7 @@ class MergeProcessor:
                 raise RuntimeError("Refinery session did not pick up the message")
 
             # Wait for refinery to finish (poll session status)
-            result = await self._wait_for_refinery(session_id, min_message_count=pre_send_count)
+            result = await self._wait_for_refinery(session_id, worktree_path=worktree_path, min_message_count=pre_send_count)
 
             # Increment counters after successful refinery processing
             self._refinery_message_count += 2  # one for the prompt sent, one for the response
@@ -298,6 +303,23 @@ class MergeProcessor:
                     {"summary": result.get("summary", "")},
                 )
 
+            # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
+            try:
+                notes_data = read_notes_file(worktree_path)
+                if notes_data:
+                    for note in notes_data:
+                        self.db.add_note(
+                            issue_id=issue_id,
+                            agent_id=agent_id,
+                            content=note.get("content", ""),
+                            category=note.get("category", "discovery"),
+                        )
+                    self.db.log_event(issue_id, agent_id, "notes_harvested", {"count": len(notes_data), "source": "refinery"})
+            except Exception:
+                pass  # Best-effort
+            finally:
+                remove_notes_file(worktree_path)
+
             # Check if refinery session should be cycled due to token usage
             await self._maybe_cycle_refinery_session()
 
@@ -312,12 +334,13 @@ class MergeProcessor:
             # Force reset refinery session so next merge gets a fresh session
             await self._force_reset_refinery_session(f"Exception in _send_to_refinery: {str(e)}")
 
-    async def _wait_for_refinery(self, session_id: str, timeout: int = None, min_message_count: int = 0) -> Dict[str, Any]:
+    async def _wait_for_refinery(self, session_id: str, worktree_path: str, timeout: int = None, min_message_count: int = 0) -> Dict[str, Any]:
         """
-        Wait for the refinery session to become idle, then parse the result.
+        Wait for the refinery session to become idle, then read result from file.
 
         Args:
             session_id: OpenCode session ID
+            worktree_path: Path to the worktree (where .hive-result.jsonl is written)
             timeout: Timeout in seconds (defaults to LEASE_DURATION)
             min_message_count: Minimum expected message count to avoid stale-result race
 
@@ -338,15 +361,32 @@ class MergeProcessor:
             try:
                 status = await self.opencode.get_session_status(session_id, directory=self.project_path)
                 if status and status.get("type") == "idle":
-                    # Session finished — get messages and parse result
+                    # Session finished — verify new messages were produced (fence against stale results)
                     messages = await self.opencode.get_messages(session_id, directory=self.project_path)
 
-                    # Check if we have enough new messages (fence against stale results)
                     if len(messages) <= min_message_count:
                         # No new messages, the prompt wasn't processed - continue waiting
                         continue
 
-                    return parse_merge_result(messages)
+                    # Read result from file
+                    file_result = read_result_file(worktree_path)
+                    remove_result_file(worktree_path)
+
+                    if file_result:
+                        return {
+                            "status": file_result.get("status", "needs_human"),
+                            "summary": file_result.get("summary", ""),
+                            "tests_passed": file_result.get("tests_passed", False),
+                            "conflicts_resolved": int(file_result.get("conflicts_resolved", 0)),
+                        }
+
+                    # No result file — refinery didn't write one
+                    return {
+                        "status": "needs_human",
+                        "summary": "Refinery did not write result file (.hive-result.jsonl)",
+                        "tests_passed": False,
+                        "conflicts_resolved": 0,
+                    }
 
                 # Reset consecutive errors on successful status check
                 consecutive_errors = 0

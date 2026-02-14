@@ -1,12 +1,9 @@
 """Prompt templates for Hive agents."""
 
 import json
-import re
 from pathlib import Path
 from string import Template
 from typing import Any, Dict, List, Optional
-
-import yaml
 
 from .models import CompletionResult
 
@@ -16,9 +13,6 @@ RESULT_FILE_NAME = ".hive-result.jsonl"
 # Filename for notes file
 NOTES_FILE_NAME = ".hive-notes.jsonl"
 
-
-# Regex for parsing merge result signal
-MERGE_RESULT_RE = re.compile(r":::MERGE_RESULT\s*\n(.*?):::", re.DOTALL)
 
 # Template cache: name -> template string
 _template_cache: Dict[str, str] = {}
@@ -309,74 +303,3 @@ def build_refinery_prompt(
         problem=problem,
         test_step=test_step,
     )
-
-
-def parse_merge_result(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Parse a :::MERGE_RESULT::: signal from session messages.
-
-    Args:
-        messages: List of message dicts from OpenCode session
-
-    Returns:
-        Dict with keys: status, summary, tests_passed, conflicts_resolved.
-        Returns a default 'needs_human' result if parsing fails.
-    """
-    default_result = {
-        "status": "needs_human",
-        "summary": "Could not parse merge result",
-        "tests_passed": False,
-        "conflicts_resolved": 0,
-    }
-
-    if not messages:
-        return default_result
-
-    # Get text from the last message
-    last = messages[-1]
-    parts = last.get("parts", [])
-    text_parts = [p.get("text", "") for p in parts if p.get("type") == "text"]
-    text = " ".join(text_parts)
-
-    # Try structured signal
-    match = MERGE_RESULT_RE.search(text)
-    if match:
-        try:
-            payload = yaml.safe_load(match.group(1))
-            return {
-                "status": payload.get("status", "needs_human"),
-                "summary": payload.get("summary", ""),
-                "tests_passed": payload.get("tests_passed", False),
-                "conflicts_resolved": int(payload.get("conflicts_resolved", 0)),
-            }
-        except (yaml.YAMLError, KeyError, TypeError, ValueError):
-            pass
-
-    # Heuristic fallback
-    text_lower = text.lower()
-
-    if any(
-        kw in text_lower
-        for kw in [
-            "successfully merged",
-            "merge complete",
-            "rebase complete",
-            "all tests pass",
-        ]
-    ):
-        return {
-            "status": "merged",
-            "summary": text[:200],
-            "tests_passed": True,
-            "conflicts_resolved": 0,
-        }
-
-    if any(kw in text_lower for kw in ["rejecting", "rejected", "incompatible", "cannot merge"]):
-        return {
-            "status": "rejected",
-            "summary": text[:200],
-            "tests_passed": False,
-            "conflicts_resolved": 0,
-        }
-
-    return default_result
