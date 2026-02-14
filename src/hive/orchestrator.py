@@ -224,28 +224,14 @@ class Orchestrator:
                     # Authoritative: we know which sessions are alive
                     if session_id in live_session_ids:
                         # Session still running — abort + delete it
-                        try:
-                            await self.opencode.abort_session(session_id, directory=worktree)
-                        except Exception:
-                            pass
-                        try:
-                            await self.opencode.delete_session(session_id, directory=worktree)
-                        except Exception:
-                            pass
+                        await self.opencode.cleanup_session(session_id, directory=worktree)
                         live_session_ids.discard(session_id)
                     else:
                         # Ghost agent — session already gone, just log
                         logger.info(f"Agent {agent_id} is a ghost (session {session_id} no longer exists)")
                 else:
                     # OpenCode unreachable — best-effort abort/delete
-                    try:
-                        await self.opencode.abort_session(session_id, directory=worktree)
-                    except Exception:
-                        pass
-                    try:
-                        await self.opencode.delete_session(session_id, directory=worktree)
-                    except Exception:
-                        pass
+                    await self.opencode.cleanup_session(session_id, directory=worktree)
 
             # Mark agent failed
             self.db.conn.execute(
@@ -311,14 +297,7 @@ class Orchestrator:
             orphans = live_session_ids - db_session_ids
             if orphans:
                 for session_id in orphans:
-                    try:
-                        await self.opencode.abort_session(session_id)
-                    except Exception:
-                        pass
-                    try:
-                        await self.opencode.delete_session(session_id)
-                    except Exception:
-                        pass
+                    await self.opencode.cleanup_session(session_id)
 
                 self.db.log_system_event("orphan_sessions_cleaned", {"count": len(orphans)})
                 logger.info(f"Cleaned up {len(orphans)} orphan session(s)")
@@ -360,14 +339,7 @@ class Orchestrator:
         logger.info(f"Shutting down {len(self.active_agents)} active session(s)")
 
         for agent_id, agent in list(self.active_agents.items()):
-            try:
-                await self.opencode.abort_session(agent.session_id, directory=agent.worktree)
-            except Exception:
-                pass
-            try:
-                await self.opencode.delete_session(agent.session_id, directory=agent.worktree)
-            except Exception:
-                pass
+            await self.opencode.cleanup_session(agent.session_id, directory=agent.worktree)
 
             # Mark agent failed in DB
             try:
@@ -464,17 +436,8 @@ class Orchestrator:
 
         logger.info(f"Canceling agent {agent.name} (session {agent.session_id}) for issue {issue_id}")
 
-        # Abort the opencode session
-        try:
-            await self.opencode.abort_session(agent.session_id, directory=agent.worktree)
-        except Exception:
-            pass  # Best-effort
-
-        # Delete the session to prevent any restart
-        try:
-            await self.opencode.delete_session(agent.session_id, directory=agent.worktree)
-        except Exception:
-            pass
+        # Abort and delete the opencode session
+        await self.opencode.cleanup_session(agent.session_id, directory=agent.worktree)
 
         # Signal the monitor_agent loop to stop waiting
         event = self.session_status_events.get(agent.session_id)
@@ -884,14 +847,7 @@ class Orchestrator:
         Called after agent completion or failure to ensure the session
         does not linger and consume tokens.
         """
-        try:
-            await self.opencode.abort_session(agent.session_id, directory=agent.worktree)
-        except Exception:
-            pass
-        try:
-            await self.opencode.delete_session(agent.session_id, directory=agent.worktree)
-        except Exception:
-            pass
+        await self.opencode.cleanup_session(agent.session_id, directory=agent.worktree)
 
     async def handle_agent_complete(
         self,

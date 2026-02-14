@@ -312,3 +312,14 @@ class OpenCodeClient:
         url = f"{self.base_url}/permission/{request_id}/reply"
         async with self.session.post(url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
+
+    async def cleanup_session(self, session_id: str, directory: Optional[str] = None):
+        """Abort and delete a session. Best-effort — exceptions are swallowed."""
+        try:
+            await self.abort_session(session_id, directory=directory)
+        except Exception:
+            pass
+        try:
+            await self.delete_session(session_id, directory=directory)
+        except Exception:
+            pass

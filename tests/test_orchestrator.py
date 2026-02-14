@@ -1055,8 +1055,7 @@ async def test_reconcile_ghost_agents(temp_db, tmp_path):
     assert agent["status"] == "failed"
 
     # Abort should NOT have been called (session doesn't exist)
-    mock_oc.abort_session.assert_not_called()
-    mock_oc.delete_session.assert_not_called()
+    mock_oc.cleanup_session.assert_not_called()
 
     # Issue should be released back to open
     issue = temp_db.get_issue(issue_id)
@@ -1068,8 +1067,7 @@ async def test_reconcile_stale_agents_with_live_sessions(temp_db, tmp_path):
     """Stale agent whose session is still alive on the server — abort + delete."""
     mock_oc = AsyncMock(spec=OpenCodeClient)
     mock_oc.list_sessions = AsyncMock(return_value=[{"id": "live-sess"}])
-    mock_oc.abort_session = AsyncMock()
-    mock_oc.delete_session = AsyncMock()
+    mock_oc.cleanup_session = AsyncMock()
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
 
     agent_id, issue_id, _ = _make_stale_agent(temp_db, session_id="live-sess")
@@ -1077,8 +1075,7 @@ async def test_reconcile_stale_agents_with_live_sessions(temp_db, tmp_path):
     await orch._reconcile_stale_agents()
 
     # Abort + delete should have been called for the live session
-    mock_oc.abort_session.assert_called_once_with("live-sess", directory="/tmp/wt")
-    mock_oc.delete_session.assert_called_once_with("live-sess", directory="/tmp/wt")
+    mock_oc.cleanup_session.assert_called_once_with("live-sess", directory="/tmp/wt")
 
     # Agent marked failed, issue released
     agent = temp_db.get_agent(agent_id)
@@ -1093,17 +1090,15 @@ async def test_reconcile_orphan_sessions(temp_db, tmp_path):
     mock_oc = AsyncMock(spec=OpenCodeClient)
     # Server has two sessions, DB knows about neither
     mock_oc.list_sessions = AsyncMock(return_value=[{"id": "orphan-1"}, {"id": "orphan-2"}])
-    mock_oc.abort_session = AsyncMock()
-    mock_oc.delete_session = AsyncMock()
+    mock_oc.cleanup_session = AsyncMock()
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
 
     # No stale agents — so Phase 1 is a no-op, Phase 2 finds orphans
     await orch._reconcile_stale_agents()
 
     # Both orphans should be aborted + deleted
-    assert mock_oc.abort_session.call_count == 2
-    assert mock_oc.delete_session.call_count == 2
-    aborted_ids = {call.args[0] for call in mock_oc.abort_session.call_args_list}
+    assert mock_oc.cleanup_session.call_count == 2
+    aborted_ids = {call.args[0] for call in mock_oc.cleanup_session.call_args_list}
     assert aborted_ids == {"orphan-1", "orphan-2"}
 
     # System event should be logged
@@ -1116,8 +1111,7 @@ async def test_reconcile_fallback_when_opencode_unreachable(temp_db, tmp_path):
     """list_sessions() throws — falls back to best-effort abort/delete."""
     mock_oc = AsyncMock(spec=OpenCodeClient)
     mock_oc.list_sessions = AsyncMock(side_effect=Exception("Connection refused"))
-    mock_oc.abort_session = AsyncMock()
-    mock_oc.delete_session = AsyncMock()
+    mock_oc.cleanup_session = AsyncMock()
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
 
     agent_id, issue_id, session_id = _make_stale_agent(temp_db, session_id="fallback-sess")
@@ -1125,8 +1119,7 @@ async def test_reconcile_fallback_when_opencode_unreachable(temp_db, tmp_path):
     await orch._reconcile_stale_agents()
 
     # Best-effort abort/delete should still be called
-    mock_oc.abort_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
-    mock_oc.delete_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
+    mock_oc.cleanup_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
 
     # Agent failed, issue released
     agent = temp_db.get_agent(agent_id)
@@ -1167,8 +1160,7 @@ async def test_reconcile_mixed_ghost_live_orphan(temp_db, tmp_path):
     mock_oc = AsyncMock(spec=OpenCodeClient)
     # Server has: live-sess (stale agent's), orphan-sess (no agent), but NOT ghost-sess
     mock_oc.list_sessions = AsyncMock(return_value=[{"id": "live-sess"}, {"id": "orphan-sess"}])
-    mock_oc.abort_session = AsyncMock()
-    mock_oc.delete_session = AsyncMock()
+    mock_oc.cleanup_session = AsyncMock()
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
 
     # Ghost agent — session not on server
@@ -1183,15 +1175,15 @@ async def test_reconcile_mixed_ghost_live_orphan(temp_db, tmp_path):
     await orch._reconcile_stale_agents()
 
     # Ghost agent: no abort/delete for ghost-sess
-    ghost_calls = [c for c in mock_oc.abort_session.call_args_list if c.args[0] == "ghost-sess"]
+    ghost_calls = [c for c in mock_oc.cleanup_session.call_args_list if c.args[0] == "ghost-sess"]
     assert len(ghost_calls) == 0
 
     # Live agent: abort + delete for live-sess
-    live_abort_calls = [c for c in mock_oc.abort_session.call_args_list if c.args[0] == "live-sess"]
+    live_abort_calls = [c for c in mock_oc.cleanup_session.call_args_list if c.args[0] == "live-sess"]
     assert len(live_abort_calls) == 1
 
     # Orphan session: abort + delete for orphan-sess
-    orphan_abort_calls = [c for c in mock_oc.abort_session.call_args_list if c.args[0] == "orphan-sess"]
+    orphan_abort_calls = [c for c in mock_oc.cleanup_session.call_args_list if c.args[0] == "orphan-sess"]
     assert len(orphan_abort_calls) == 1
 
     # Both agents should be failed
@@ -1214,8 +1206,7 @@ async def test_reconcile_no_stale_agents(temp_db, tmp_path):
     await orch._reconcile_stale_agents()
 
     # No abort/delete calls
-    mock_oc.abort_session.assert_not_called()
-    mock_oc.delete_session.assert_not_called()
+    mock_oc.cleanup_session.assert_not_called()
 
     # No orphan events
     events = temp_db.get_events(event_type="orphan_sessions_cleaned")

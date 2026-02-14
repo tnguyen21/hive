@@ -1,5 +1,7 @@
 """Git worktree management for agent sandboxes."""
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -62,60 +64,28 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
         raise GitWorktreeError(f"Failed to create worktree: {e.stderr}") from e
 
 
-def remove_worktree(worktree_path: str, force: bool = False):
-    """
-    Remove a git worktree.
-
-    Args:
-        worktree_path: Path to the worktree to remove
-        force: Force removal even if there are uncommitted changes
-
-    Raises:
-        GitWorktreeError: If worktree removal fails
-    """
-    worktree_path = Path(worktree_path).resolve()
-
-    if not worktree_path.exists():
-        # Already removed, nothing to do
-        return
-
+def remove_worktree(worktree_path: str) -> bool:
+    """Remove a git worktree."""
+    abs_path = os.path.abspath(worktree_path)
+    if not os.path.exists(abs_path):
+        return False
     try:
-        # Get the main git directory by finding the .git file in worktree
-        # (worktrees have a .git file, not directory)
-        git_file = worktree_path / ".git"
-        if git_file.is_file():
-            # Read the gitdir path from .git file
-            with open(git_file) as f:
-                gitdir_line = f.read().strip()
-                if gitdir_line.startswith("gitdir: "):
-                    # Extract main repo path from gitdir
-                    # gitdir: /path/to/main/.git/worktrees/<name>
-                    gitdir = Path(gitdir_line[8:])
-                    main_repo = gitdir.parent.parent
-
-                    cmd = ["git", "worktree", "remove", str(worktree_path)]
-                    if force:
-                        cmd.append("--force")
-
-                    subprocess.run(
-                        cmd,
-                        cwd=str(main_repo),
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    )
-                    return
-
-        # If we couldn't find main repo, try to remove directly
         subprocess.run(
-            ["git", "worktree", "remove", str(worktree_path)] + (["--force"] if force else []),
-            check=True,
+            ["git", "worktree", "remove", "--force", abs_path],
             capture_output=True,
             text=True,
+            check=True,
+            cwd=os.path.dirname(abs_path),  # any valid directory works
         )
-
-    except subprocess.CalledProcessError as e:
-        raise GitWorktreeError(f"Failed to remove worktree: {e.stderr}") from e
+        return True
+    except subprocess.CalledProcessError:
+        # Fallback: force remove if worktree is dirty
+        try:
+            shutil.rmtree(abs_path, ignore_errors=True)
+            subprocess.run(["git", "worktree", "prune"], capture_output=True, cwd=os.path.dirname(abs_path))
+            return True
+        except Exception:
+            return False
 
 
 def delete_branch(project_path: str, branch_name: str, force: bool = False):

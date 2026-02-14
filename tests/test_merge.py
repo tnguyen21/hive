@@ -102,6 +102,7 @@ def mock_opencode():
             "get_session_status",
             "get_messages",
             "abort_session",
+            "cleanup_session",
         ]
     )
     return client
@@ -181,8 +182,7 @@ conflicts_resolved: 0
     mock_opencode.send_message_async = AsyncMock()
     mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
     mock_opencode.get_messages = AsyncMock(return_value=refinery_messages)
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    mock_opencode.cleanup_session = AsyncMock()
 
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
 
@@ -237,8 +237,7 @@ conflicts_resolved: 0
     mock_opencode.send_message_async = AsyncMock()
     mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
     mock_opencode.get_messages = AsyncMock(return_value=refinery_messages)
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    mock_opencode.cleanup_session = AsyncMock()
 
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
 
@@ -342,9 +341,8 @@ async def test_refinery_session_cycling_by_token_count(temp_db, mock_opencode):
     mp._refinery_token_estimate = 120000  # Exceeds REFINERY_TOKEN_THRESHOLD (100000)
     mp._refinery_message_count = 10  # Under message threshold
 
-    # Mock abort and delete session calls
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    # Mock cleanup session call
+    mock_opencode.cleanup_session = AsyncMock()
 
     # Call the token check method
     await mp._maybe_cycle_refinery_session()
@@ -353,8 +351,7 @@ async def test_refinery_session_cycling_by_token_count(temp_db, mock_opencode):
     assert mp.refinery_session_id is None
     assert mp._refinery_token_estimate == 0
     assert mp._refinery_message_count == 0
-    mock_opencode.abort_session.assert_called_once_with("test-session-123", directory=mp.project_path)
-    mock_opencode.delete_session.assert_called_once_with("test-session-123", directory=mp.project_path)
+    mock_opencode.cleanup_session.assert_called_once_with("test-session-123", directory=mp.project_path)
 
     # Verify event was logged
     events = temp_db.get_events(None)  # Get all events
@@ -380,9 +377,8 @@ async def test_refinery_session_cycling_by_message_count(temp_db, mock_opencode)
     mp._refinery_token_estimate = 50000  # Under token threshold
     mp._refinery_message_count = 25  # More than 20 messages (our fallback threshold)
 
-    # Mock abort and delete session calls
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    # Mock cleanup session call
+    mock_opencode.cleanup_session = AsyncMock()
 
     # Call the token check method
     await mp._maybe_cycle_refinery_session()
@@ -391,8 +387,7 @@ async def test_refinery_session_cycling_by_message_count(temp_db, mock_opencode)
     assert mp.refinery_session_id is None
     assert mp._refinery_token_estimate == 0
     assert mp._refinery_message_count == 0
-    mock_opencode.abort_session.assert_called_once_with("test-session-456", directory=mp.project_path)
-    mock_opencode.delete_session.assert_called_once_with("test-session-456", directory=mp.project_path)
+    mock_opencode.cleanup_session.assert_called_once_with("test-session-456", directory=mp.project_path)
 
 
 @pytest.mark.asyncio
@@ -413,16 +408,14 @@ async def test_refinery_session_no_cycling_under_threshold(temp_db, mock_opencod
         ]
     )
 
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    mock_opencode.cleanup_session = AsyncMock()
 
     # Call the token check method
     await mp._maybe_cycle_refinery_session()
 
     # Verify session was NOT cycled
     assert mp.refinery_session_id == "test-session-789"
-    mock_opencode.abort_session.assert_not_called()
-    mock_opencode.delete_session.assert_not_called()
+    mock_opencode.cleanup_session.assert_not_called()
 
 
 # --- New tests for hardened refinery session ---
@@ -437,8 +430,7 @@ async def test_force_reset_refinery_session(temp_db, mock_opencode):
     original_session_id = "session-to-reset"
     mp.refinery_session_id = original_session_id
 
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    mock_opencode.cleanup_session = AsyncMock()
 
     # Call force reset
     reason = "Test reset"
@@ -448,8 +440,7 @@ async def test_force_reset_refinery_session(temp_db, mock_opencode):
     assert mp.refinery_session_id is None
 
     # Verify abort and delete were called
-    mock_opencode.abort_session.assert_called_once_with(original_session_id, directory=mp.project_path)
-    mock_opencode.delete_session.assert_called_once_with(original_session_id, directory=mp.project_path)
+    mock_opencode.cleanup_session.assert_called_once_with(original_session_id, directory=mp.project_path)
 
     # Verify event was logged
     events = temp_db.get_events(None)
@@ -472,15 +463,13 @@ async def test_force_reset_no_session(temp_db, mock_opencode):
     # No session set
     assert mp.refinery_session_id is None
 
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    mock_opencode.cleanup_session = AsyncMock()
 
     # Call force reset - should do nothing
     await mp._force_reset_refinery_session("No session to reset")
 
     # Verify no calls were made
-    mock_opencode.abort_session.assert_not_called()
-    mock_opencode.delete_session.assert_not_called()
+    mock_opencode.cleanup_session.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -666,8 +655,7 @@ async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
     # Mock session status to remain idle after message send (message not picked up)
     mock_opencode.get_session_status = AsyncMock(return_value={"type": "idle"})
 
-    mock_opencode.abort_session = AsyncMock()
-    mock_opencode.delete_session = AsyncMock()
+    mock_opencode.cleanup_session = AsyncMock()
 
     # Patch config
     with patch("hive.merge.Config") as mock_config:
@@ -679,8 +667,7 @@ async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
 
     # Verify session was reset due to unprocessed message
     assert mp.refinery_session_id is None
-    mock_opencode.abort_session.assert_called()
-    mock_opencode.delete_session.assert_called()
+    mock_opencode.cleanup_session.assert_called()
 
     # Verify merge queue was marked failed
     cursor = temp_db.conn.execute("SELECT status FROM merge_queue WHERE id = ?", (queue_id,))

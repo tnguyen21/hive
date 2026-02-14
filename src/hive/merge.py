@@ -46,14 +46,7 @@ class MergeProcessor:
     async def shutdown(self):
         """Clean up the refinery session on shutdown."""
         if self.refinery_session_id:
-            try:
-                await self.opencode.abort_session(self.refinery_session_id, directory=self.project_path)
-            except Exception:
-                pass
-            try:
-                await self.opencode.delete_session(self.refinery_session_id, directory=self.project_path)
-            except Exception:
-                pass
+            await self.opencode.cleanup_session(self.refinery_session_id, directory=self.project_path)
             self.refinery_session_id = None
 
     async def _force_reset_refinery_session(self, reason: str):
@@ -73,15 +66,7 @@ class MergeProcessor:
         self._refinery_token_estimate = 0
 
         # Best-effort abort and delete
-        try:
-            await self.opencode.abort_session(session_id, directory=self.project_path)
-        except Exception:
-            pass  # Best effort
-
-        try:
-            await self.opencode.delete_session(session_id, directory=self.project_path)
-        except Exception:
-            pass  # Best effort
+        await self.opencode.cleanup_session(session_id, directory=self.project_path)
 
         # Log the reset event
         self.db.log_event(
@@ -423,14 +408,7 @@ class MergeProcessor:
             agent = self.db.get_agent(agent_id)
             session_id = agent.get("session_id") if agent else None
             if session_id:
-                try:
-                    await self.opencode.abort_session(session_id, directory=entry.get("worktree"))
-                except Exception:
-                    pass
-                try:
-                    await self.opencode.delete_session(session_id, directory=entry.get("worktree"))
-                except Exception:
-                    pass
+                await self.opencode.cleanup_session(session_id, directory=entry.get("worktree"))
 
         # Remove worktree
         if entry.get("worktree"):
@@ -494,15 +472,7 @@ class MergeProcessor:
             )
 
             # Abort and delete the current session
-            try:
-                await self.opencode.abort_session(self.refinery_session_id, directory=self.project_path)
-            except Exception:
-                pass  # Best effort
-
-            try:
-                await self.opencode.delete_session(self.refinery_session_id, directory=self.project_path)
-            except Exception:
-                pass  # Best effort
+            await self.opencode.cleanup_session(self.refinery_session_id, directory=self.project_path)
 
             # Reset session ID and counters - next merge will create a fresh session
             self.refinery_session_id = None
