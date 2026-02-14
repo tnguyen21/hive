@@ -1,0 +1,48 @@
+{
+  "title": "Hive Explorer",
+  "description": "Browse Hive orchestrator data",
+  "databases": {
+    "hive": {
+      "tables": {
+        "issues": {"description": "Work units tracked by the orchestrator"},
+        "agents": {"description": "Worker agent identities and sessions"},
+        "events": {"description": "Append-only audit trail of all state changes"},
+        "notes": {"description": "Inter-worker knowledge sharing"},
+        "merge_queue": {"description": "Finalization queue for completed work"},
+        "dependencies": {"description": "DAG edges between issues"}
+      },
+      "queries": {
+        "model-performance": {
+          "sql": "SELECT json_extract(e.detail, '$.model') as model, i.status, i.type, i.tags, COUNT(DISTINCT i.id) as issue_count, SUM(CASE WHEN i.status IN ('done', 'finalized') THEN 1 ELSE 0 END) as successes, SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END) as failures, SUM(CAST(json_extract(e.detail, '$.input_tokens') AS INTEGER)) as total_input_tokens, SUM(CAST(json_extract(e.detail, '$.output_tokens') AS INTEGER)) as total_output_tokens FROM events e JOIN issues i ON e.issue_id = i.id WHERE e.event_type = 'tokens_used' AND json_extract(e.detail, '$.model') IS NOT NULL GROUP BY model, i.type ORDER BY model, i.type",
+          "title": "Model Performance by Issue Type",
+          "description": "Token usage, success rate, and failure rate broken down by model and issue type"
+        },
+        "model-costs": {
+          "sql": "SELECT json_extract(detail, '$.model') as model, COUNT(*) as events, SUM(CAST(json_extract(detail, '$.input_tokens') AS INTEGER)) as input_tokens, SUM(CAST(json_extract(detail, '$.output_tokens') AS INTEGER)) as output_tokens FROM events WHERE event_type = 'tokens_used' GROUP BY model ORDER BY output_tokens DESC",
+          "title": "Model Cost Summary",
+          "description": "Total token usage by model"
+        },
+        "issue-timeline": {
+          "sql": "SELECT i.id, i.title, i.type, i.status, i.tags, i.model, i.created_at, i.closed_at, ROUND((julianday(COALESCE(i.closed_at, datetime('now'))) - julianday(i.created_at)) * 24 * 60, 1) as duration_minutes FROM issues i ORDER BY i.created_at DESC LIMIT 100",
+          "title": "Issue Timeline",
+          "description": "Recent issues with duration"
+        },
+        "retry-analysis": {
+          "sql": "SELECT i.id, i.title, i.type, i.tags, i.model, COUNT(CASE WHEN e.event_type = 'retry' THEN 1 END) as retries, COUNT(CASE WHEN e.event_type = 'agent_switch' THEN 1 END) as agent_switches, COUNT(CASE WHEN e.event_type = 'escalated' THEN 1 END) as escalations, i.status as final_status FROM issues i LEFT JOIN events e ON i.id = e.issue_id GROUP BY i.id HAVING retries > 0 OR agent_switches > 0 OR escalations > 0 ORDER BY retries DESC",
+          "title": "Retry Analysis",
+          "description": "Issues that required retries, agent switches, or escalation"
+        },
+        "agent-activity": {
+          "sql": "SELECT a.id, a.name, a.model, a.status, COUNT(DISTINCT e.issue_id) as issues_worked, MIN(e.created_at) as first_active, MAX(e.created_at) as last_active FROM agents a LEFT JOIN events e ON a.id = e.agent_id GROUP BY a.id ORDER BY last_active DESC",
+          "title": "Agent Activity",
+          "description": "Agent work history"
+        },
+        "notes-browser": {
+          "sql": "SELECT n.id, n.category, n.content, n.created_at, i.title as issue_title, a.name as agent_name FROM notes n LEFT JOIN issues i ON n.issue_id = i.id LEFT JOIN agents a ON n.agent_id = a.id ORDER BY n.created_at DESC LIMIT 200",
+          "title": "Notes Browser",
+          "description": "All worker notes with context"
+        }
+      }
+    }
+  }
+}

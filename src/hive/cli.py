@@ -615,6 +615,43 @@ class HiveCLI:
                     total = tokens["input_tokens"] + tokens["output_tokens"]
                     print(f"{model}: {total:,} tokens")
 
+    # ── Web UI ────────────────────────────────────────────────────────
+
+    def ui(self, port: int = 8001, host: str = "127.0.0.1"):
+        """Launch datasette UI for exploring Hive data."""
+        import shutil
+
+        datasette_bin = shutil.which("datasette")
+        if not datasette_bin:
+            print("Error: datasette not installed. Install with: pip install datasette", file=sys.stderr)
+            print('Or: uv pip install "hive[ui]"', file=sys.stderr)
+            sys.exit(1)
+
+        db_path = Config.DB_PATH  # ~/.hive/hive.db
+        metadata_path = Path(__file__).parent / "datasette_metadata.json"
+
+        print(f"Launching Hive Explorer at http://{host}:{port}")
+        print(f"Database: {db_path}")
+        print("Press Ctrl+C to stop")
+
+        os.execvp(
+            datasette_bin,
+            [
+                "datasette",
+                "--immutable",
+                str(db_path),  # read-only mode — don't allow writes
+                "--metadata",
+                str(metadata_path),
+                "--host",
+                host,
+                "--port",
+                str(port),
+                "--setting",
+                "sql_time_limit_ms",
+                "5000",
+            ],
+        )
+
     # ── Daemon management ────────────────────────────────────────────
 
     def _make_daemon(self) -> HiveDaemon:
@@ -1164,6 +1201,11 @@ def main():
     )
     notes_parser.add_argument("--limit", type=int, default=20, help="Max notes to show (default: 20)")
 
+    # ui command
+    ui_parser = subparsers.add_parser("ui", help="Launch web UI to explore Hive data")
+    ui_parser.add_argument("--port", type=int, default=8001, help="Port to serve on (default: 8001)")
+    ui_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
+
     args = parser.parse_args()
 
     # ── Project auto-detection + layered config ──────────────────────
@@ -1347,6 +1389,9 @@ def main():
                 limit=args.limit,
                 json_mode=json_mode,
             )
+
+        elif args.command == "ui":
+            cli.ui(port=args.port, host=args.host)
 
         else:
             parser.print_help()
