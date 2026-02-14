@@ -4,28 +4,7 @@ _A simplified multi-agent orchestration system inspired by Gas Town, using OpenC
 
 ---
 
-## 🎯 Implementation Status
-
-**Last Updated**: 2026-02-13
-
-### ✅ Completed (Phases 1-6)
-
-- ✅ **Phase 1**: Database foundation, OpenCode client, SSE consumer, single worker loop
-- ✅ **Phase 2**: Multi-worker pool, Queen Bee TUI, session cycling, permission unblocker, daemon mode
-- ✅ **Phase 3**: Queen Bee as user-facing interface with 20+ CLI commands
-- ✅ **Phase 4**: Merge queue processor with two-tier approach (mechanical + Refinery LLM)
-- ✅ **Phase 5**: Session cleanup, triple completion detection, stale agent reconciliation, prompt templates, per-issue model config, CLI enhancements, retry escalation chain (3-tier: retry → agent switch → escalate), degraded mode with exponential backoff recovery, context cycling for Refinery sessions
-- ✅ **Phase 6**: Structured logging (rotating file handler, all print() → logger.\*), capability-based routing (project/type/keyword scoring), cost tracking (`hive costs` command with token aggregation), `hive watch <issue_id>` for live worker monitoring
-
-**Status**: Fully functional multi-agent orchestrator with 167 passing unit tests across 15 modules + 3 prompt templates
-
-See `src/hive/` directory for implementation.
-
-### ⏳ Planned (Phase 7+)
-
-- ⏳ **Phase 7**: Long-lived refinery session ✅, dead code cleanup, inter-agent knowledge transfer (Notes system), web dashboard, webhook notifications
-
----
+> **Implementation tracking** has moved to [`IMPL_PLAN.md`](IMPL_PLAN.md) (roadmap/checklist) and [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md) (delivered features, post-mortems, open questions).
 
 ## 1. Motivation
 
@@ -54,7 +33,7 @@ The result is a system that preserves Gas Town's best abstractions — the ready
         │              OpenCode Server                   │
         │                                                │
         │  ┌─────────────────────────────────────────┐   │
-        │  │ Mayor session (user-facing TUI/web)     │   │
+        │  │ Queen Bee session (user-facing TUI/web)  │   │
         │  │   ← human chats here                    │   │
         │  │   ← has tool access to `hive` CLI       │   │
         │  └────────────┬────────────────────────────┘   │
@@ -86,12 +65,12 @@ The result is a system that preserves Gas Town's best abstractions — the ready
 
 | Component           | Responsibility                                                                                                                                                                                                                                                                                                                           |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Mayor (LLM)**     | The **user-facing** strategic brain. The human chats with the Mayor in an OpenCode TUI/web session. The Mayor interprets requests, decomposes them into issues/molecules, monitors worker progress, handles escalations, and answers questions — all via tool calls to the `hive` CLI. The Mayor is the primary interface to the system. |
+| **Queen Bee (LLM)** | The **user-facing** strategic brain. The human chats with the Queen Bee in an OpenCode TUI/web session. The Queen Bee interprets requests, decomposes them into issues/molecules, monitors worker progress, handles escalations, and answers questions — all via tool calls to the `hive` CLI. The Queen Bee is the primary interface to the system. |
 | **Orchestrator**    | The **headless** worker pool manager. Polls the ready queue, spawns workers in git worktrees, monitors completion via SSE, handles permissions, processes the merge queue. Handles the _deterministic_ parts: ready queue, CAS claims, health checks, session lifecycle. The orchestrator does NOT interact with the user.               |
 | **Refinery (LLM)**  | The merge processor. Easy rebases go through mechanically. Complex merges, conflicts, and integration failures get reasoned about by the Refinery agent. A persistent OpenCode session.                                                                                                                                                  |
 | **Workers (LLM)**   | Ephemeral coding agents. One per issue. Implement, test, commit. Spawned on demand, destroyed on completion.                                                                                                                                                                                                                             |
-| **SQLite DB**       | Single source of truth for all work items, dependencies, agent state, and events. Shared by the Mayor (via CLI tools) and the orchestrator.                                                                                                                                                                                              |
-| **OpenCode Server** | Agent runtime — hosts the Mayor session (user-facing), worker sessions (headless), and refinery session.                                                                                                                                                                                                                                 |
+| **SQLite DB**       | Single source of truth for all work items, dependencies, agent state, and events. Shared by the Queen Bee (via CLI tools) and the orchestrator.                                                                                                                                                                                          |
+| **OpenCode Server** | Agent runtime — hosts the Queen Bee session (user-facing), worker sessions (headless), and refinery session.                                                                                                                                                                                                                             |
 | **Git Worktrees**   | Per-agent sandboxes, scoped via OpenCode's `X-OpenCode-Directory` header                                                                                                                                                                                                                                                                 |
 
 ### The Key Split: Deterministic vs. Ambiguous
@@ -105,10 +84,10 @@ The system has a clear separation of concerns:
 | Session lifecycle (create, abort, teardown)               | Orchestrator (HTTP)                     | Mechanical — no judgment needed                              |
 | Health checks, staleness detection                        | Orchestrator (timer + SSE)              | Threshold-based — no judgment needed                         |
 | SSE event dispatch                                        | Orchestrator (event loop)               | Routing — no judgment needed                                 |
-| "Build me an auth system" → concrete issues               | **Mayor** (LLM, via `hive create`)      | User chats with Mayor; Mayor uses CLI tools to create issues |
-| Monitoring system state and progress                      | **Mayor** (LLM, via `hive status/logs`) | Mayor proactively checks on workers, reports back to user    |
-| Prioritizing competing work items                         | **Mayor** (LLM)                         | Requires understanding urgency, dependencies, context        |
-| Handling escalations from stuck workers                   | **Mayor** (LLM, via `hive` tools)       | Reads failure details, decides to retry/rephrase/ask user    |
+| "Build me an auth system" → concrete issues               | **Queen Bee** (LLM, via `hive create`)      | User chats with Queen Bee; Queen uses CLI tools to create issues |
+| Monitoring system state and progress                      | **Queen Bee** (LLM, via `hive status/logs`) | Queen Bee proactively checks on workers, reports back to user    |
+| Prioritizing competing work items                         | **Queen Bee** (LLM)                         | Requires understanding urgency, dependencies, context            |
+| Handling escalations from stuck workers                   | **Queen Bee** (LLM, via `hive` tools)       | Reads failure details, decides to retry/rephrase/ask user        |
 | Resolving merge conflicts                                 | **Refinery** (LLM)                      | Requires understanding code semantics                        |
 | Deciding if a test failure is pre-existing vs. introduced | **Refinery** (LLM)                      | Requires reading test output and understanding context       |
 | Implementing a feature / fixing a bug                     | **Worker** (LLM)                        | The actual coding work                                       |
@@ -192,7 +171,7 @@ Every issue an agent closes is an event in the `events` table. Over time this ac
 | **Beads redirect files and worktree beads routing** | Agents don't touch the DB directly; orchestrator mediates                                                                                                                                                          |
 | **Tmux session management**                         | OpenCode HTTP API manages sessions                                                                                                                                                                                 |
 | **Witness/Deacon/Boot/Dog agent roles**             | Functions absorbed into orchestrator code (liveness → lease-based staleness, watchdog → health checks, cleanup → teardown after finalization). The roles aren't dropped — the work persists in deterministic form. |
-| **Mail protocol between agents**                    | Orchestrator mediates; Mayor/Refinery communicate via DB, not mail                                                                                                                                                 |
+| **Mail protocol between agents**                    | Orchestrator mediates; Queen Bee/Refinery communicate via DB, not mail                                                                                                                                                 |
 | **Convoy cross-rig tracking**                       | Single DB makes cross-project queries trivial                                                                                                                                                                      |
 
 ### What Gets Simpler
@@ -503,7 +482,7 @@ Each session gets its own isolated LSP server, file watcher, and tool permission
 
 ## 7. Orchestrator Design
 
-The orchestrator is a **headless** long-running daemon. It does NOT interact with the user — that's the Mayor's job. The orchestrator polls the DB for ready work (created by the Mayor via `hive create`), spawns workers, monitors them via SSE, and processes the merge queue.
+The orchestrator is a **headless** long-running daemon. It does NOT interact with the user — that's the Queen Bee's job. The orchestrator polls the DB for ready work (created by the Queen Bee via `hive create`), spawns workers, monitors them via SSE, and processes the merge queue.
 
 ### 7.1 Main Loop
 
@@ -1050,22 +1029,22 @@ The system has three kinds of LLM agent, each with a distinct lifecycle and purp
 
 | Agent        | Lifecycle                                | User-Facing?               | Purpose                                                                                                | Gas Town Equivalent |
 | ------------ | ---------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------- |
-| **Mayor**    | Persistent, user-managed session         | **Yes** — human chats here | Interpret user intent, decompose into issues via `hive` CLI tools, monitor workers, handle escalations | Mayor               |
+| **Queen Bee** | Persistent, user-managed session        | **Yes** — human chats here | Interpret user intent, decompose into issues via `hive` CLI tools, monitor workers, handle escalations | Mayor (Gas Town)    |
 | **Refinery** | Persistent session, orchestrator-managed | No                         | Process merge queue, resolve conflicts, verify integration, reason about test failures                 | Refinery            |
 | **Workers**  | Ephemeral, one per issue                 | No                         | Implement features, fix bugs, write tests — the actual coding                                          | Polecats            |
 
 ```
-Human ←→ Mayor (interactive OpenCode TUI/web session)
+Human ←→ Queen Bee (interactive OpenCode TUI/web session)
             │
             │ "build me an auth system with JWT and rate limiting"
             │
-            │ Mayor explores codebase, asks clarifying questions, then:
+            │ Queen Bee explores codebase, asks clarifying questions, then:
             │   $ hive create "Design auth middleware architecture" "..." --priority 1
             │   $ hive create "Implement JWT validation middleware" "..." --priority 2
             │   $ hive create "Add rate limiting to auth endpoints" "..." --priority 2
             │   $ hive create "Write integration tests for auth flow" "..." --priority 2
             │
-            │ Mayor confirms to human: "Created 4 issues, workers will pick them up."
+            │ Queen Bee confirms to human: "Created 4 issues, workers will pick them up."
             │
          SQLite DB (issues table)
             │
@@ -1085,9 +1064,9 @@ Orchestrator
   │ Spawns next worker (or reuses toast on next step)
   ... cycle continues ...
   ▼
-            │ Meanwhile, human asks Mayor: "how's it going?"
-            │ Mayor runs: $ hive status / $ hive logs -n 10
-            │ Mayor: "2 of 4 issues done, 1 in progress, 1 queued."
+            │ Meanwhile, human asks Queen Bee: "how's it going?"
+            │ Queen Bee runs: $ hive status / $ hive logs -n 10
+            │ Queen Bee: "2 of 4 issues done, 1 in progress, 1 queued."
             │
 Orchestrator
   │ All issues done → merge_queue entries queued
@@ -1102,13 +1081,13 @@ Refinery (headless LLM session)
 main branch updated
 ```
 
-### 10.2 The Mayor: User-Facing Strategic Brain
+### 10.2 The Queen Bee: User-Facing Strategic Brain
 
-The Mayor is a **user-facing** OpenCode session. The human interacts with hive by chatting with the Mayor in an OpenCode TUI or web session. The Mayor has tool access to the `hive` CLI, which it uses to create issues, monitor workers, check status, and manage the system.
+The Queen Bee is a **user-facing** OpenCode session. The human interacts with hive by chatting with the Queen Bee in an OpenCode TUI or web session. The Queen Bee has tool access to the `hive` CLI, which it uses to create issues, monitor workers, check status, and manage the system.
 
-This is a fundamental architectural choice: **the Mayor is the interface, not the orchestrator CLI.** The orchestrator is a headless daemon. The Mayor is where the human sits.
+This is a fundamental architectural choice: **the Queen Bee is the interface, not the orchestrator CLI.** The orchestrator is a headless daemon. The Queen Bee is where the human sits.
 
-**What the Mayor does:**
+**What the Queen Bee does:**
 
 - Chats directly with the human in a conversational OpenCode session
 - Explores the codebase to understand requests (read files, git log, etc.)
@@ -1118,16 +1097,16 @@ This is a fundamental architectural choice: **the Mayor is the interface, not th
 - Answers questions about system state by querying the DB through CLI tools
 - Cancels issues via `hive cancel`, finalizes via `hive finalize`
 
-**What the Mayor does NOT do:**
+**What the Queen Bee does NOT do:**
 
 - Write application code (workers do that)
-- BUT if the change is trivial enough (<5 minutes, then the Mayor can go ahead and make the change)
+- BUT if the change is trivial enough (<5 minutes, then the Queen Bee can go ahead and make the change)
 - Merge branches (refinery does that)
 - Manage sessions, health checks, or worker spawning (orchestrator does that)
 
 **Why tools instead of structured output?**
 
-The previous design had the Mayor emit `:::WORK_PLAN:::` blocks that the orchestrator parsed. This created a rigid, fragile interface — the Mayor had to format output perfectly, and the orchestrator had to parse it. With tool access to the CLI, the Mayor can:
+The previous design had the Queen Bee emit `:::WORK_PLAN:::` blocks that the orchestrator parsed. This created a rigid, fragile interface — the Queen Bee had to format output perfectly, and the orchestrator had to parse it. With tool access to the CLI, the Queen Bee can:
 
 - Create issues one at a time, with full control over titles and descriptions
 - Check the result of each operation (`hive show <id>`)
@@ -1135,40 +1114,40 @@ The previous design had the Mayor emit `:::WORK_PLAN:::` blocks that the orchest
 - Query system state naturally as part of the conversation
 - Handle complex workflows (molecules, dependencies) incrementally
 
-The `hive` CLI is the Mayor's API. The DB is the shared contract between Mayor and orchestrator.
+The `hive` CLI is the Queen Bee's API. The DB is the shared contract between Queen Bee and orchestrator.
 
-**Mayor Session Setup:**
+**Queen Bee Session Setup:**
 
-The Mayor session is created by the user via `opencode attach` or the web UI, **not** by the orchestrator. The orchestrator no longer owns the Mayor.
+The Queen Bee session is created by the user via `opencode attach` or the web UI, **not** by the orchestrator. The orchestrator no longer owns the Queen Bee.
 
 ```bash
-# User starts/attaches to the Mayor session
+# User starts/attaches to the Queen Bee session
 opencode attach http://localhost:4096 --dir /path/to/project
 ```
 
-The session's CLAUDE.md (or system prompt) should contain the Mayor prompt. Permissions are permissive — the Mayor is user-supervised:
+The session's CLAUDE.md (or system prompt) should contain the Queen Bee prompt. Permissions are permissive — the Queen Bee is user-supervised:
 
 ```python
-# Mayor session permissions (set at session creation or via CLAUDE.md)
-MAYOR_PERMISSIONS = [
-    # Mayor can read the codebase
+# Queen Bee session permissions (set at session creation or via CLAUDE.md)
+QUEEN_PERMISSIONS = [
+    # Queen Bee can read the codebase
     {"permission": "read", "pattern": "*", "action": "allow"},
-    # Mayor can run hive CLI, git, and other read-only commands
+    # Queen Bee can run hive CLI, git, and other read-only commands
     {"permission": "bash", "pattern": "*", "action": "allow"},
-    # Mayor can edit files if the diff is trivial (but the happy path is to defer to workers)
+    # Queen Bee can edit files if the diff is trivial (but the happy path is to defer to workers)
     {"permission": "edit", "pattern": "*", "action": "allow"},
     {"permission": "write", "pattern": "*", "action": "allow"},
-    # Mayor CAN ask the human questions (it's user-facing!)
+    # Queen Bee CAN ask the human questions (it's user-facing!)
     # (no deny rule for "question")
-    # Mayor should stay in the project directory
+    # Queen Bee should stay in the project directory
     {"permission": "external_directory", "pattern": "*", "action": "deny"},
 ]
 ```
 
-**Mayor Prompt Template (CLAUDE.md or system prompt):**
+**Queen Bee Prompt Template (CLAUDE.md or system prompt):**
 
 ```
-You are the Mayor — the strategic coordinator of a multi-agent coding system called Hive.
+You are the Queen Bee — the strategic coordinator of a multi-agent coding system called Hive.
 
 ## YOUR ROLE
 
@@ -1228,12 +1207,12 @@ The orchestrator handles dependency resolution and worker scheduling.
 - When the human asks "what's happening?", run `hive status` and `hive logs -n 10`.
 ```
 
-**The Orchestrator-Mayor Relationship:**
+**The Orchestrator-Queen Bee Relationship:**
 
-The orchestrator and Mayor are **decoupled**. They share the SQLite DB but never communicate directly:
+The orchestrator and Queen Bee are **decoupled**. They share the SQLite DB but never communicate directly:
 
 ```
-Human ←→ Mayor session (interactive chat)
+Human ←→ Queen Bee session (interactive chat)
               │
               │ hive create / hive status / hive logs (bash tool calls)
               ▼
@@ -1244,29 +1223,29 @@ Human ←→ Mayor session (interactive chat)
                       Worker sessions
 ```
 
-- The Mayor writes to the DB (via `hive create`, `hive cancel`)
+- The Queen Bee writes to the DB (via `hive create`, `hive cancel`)
 - The orchestrator reads from the DB (ready queue poll) and writes back (status updates, events)
-- The Mayor reads the orchestrator's state (via `hive status`, `hive logs`, `hive show`)
+- The Queen Bee reads the orchestrator's state (via `hive status`, `hive logs`, `hive show`)
 - No RPC, no message passing, no structured output parsing — just shared DB state
 
 This is simpler and more robust than the previous design where the orchestrator
-drove the Mayor programmatically and parsed `:::WORK_PLAN:::` blocks.
+drove the Queen Bee programmatically and parsed `:::WORK_PLAN:::` blocks.
 
 **Escalation Flow:**
 
-When workers fail, the orchestrator logs events to the DB. The Mayor sees these
+When workers fail, the orchestrator logs events to the DB. The Queen Bee sees these
 via `hive logs` or `hive show`. The human can ask "why did that fail?" and the
-Mayor diagnoses by reading the event trail. No special escalation protocol needed —
-it's just a conversation between human and Mayor, informed by DB state.
+Queen Bee diagnoses by reading the event trail. No special escalation protocol needed —
+it's just a conversation between human and Queen Bee, informed by DB state.
 
-For proactive monitoring, the Mayor can periodically run `hive status` during
+For proactive monitoring, the Queen Bee can periodically run `hive status` during
 a conversation to check on worker progress and surface issues early.
 
-**Mayor Context Management:**
+**Queen Bee Context Management:**
 
-The Mayor session is long-lived but context is finite. Since the Mayor's state
+The Queen Bee session is long-lived but context is finite. Since the Queen Bee's state
 lives in the DB (not in the conversation), the user can start a fresh session
-at any time without losing work. The Mayor just runs `hive status` to catch up.
+at any time without losing work. The Queen Bee just runs `hive status` to catch up.
 
 OpenCode's built-in context compaction also helps — the TUI will compress older
 turns automatically as the context fills up.
@@ -1401,12 +1380,12 @@ The orchestrator parses `:::MERGE_RESULT` via regex and dispatches on the status
 
 | Gas Town Role | This System                         | How                                                                              |
 | ------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
-| **Mayor**     | **Mayor LLM session (user-facing)** | User chats in OpenCode TUI/web; Mayor uses `hive` CLI tools to manage the system |
+| **Mayor**     | **Queen Bee LLM session (user-facing)** | User chats in OpenCode TUI/web; Queen Bee uses `hive` CLI tools to manage the system |
 | **Witness**   | **Orchestrator code**               | SSE event consumer + staleness checker (deterministic)                           |
 | **Deacon**    | **Orchestrator code**               | The orchestrator process itself — always running                                 |
 | **Boot**      | **Orchestrator code**               | `reconcile_on_startup()` (deterministic)                                         |
 | **Refinery**  | **Refinery LLM session**            | Persistent OpenCode session for merge processing                                 |
-| **Dogs**      | **Not needed**                      | Mayor can spawn ad-hoc issues via `hive create` for cross-cutting work           |
+| **Dogs**      | **Not needed**                      | Queen Bee can spawn ad-hoc issues via `hive create` for cross-cutting work       |
 | **Polecats**  | **Worker LLM sessions**             | Ephemeral OpenCode sessions, one per issue                                       |
 
 ### 10.5 Context Cycling Strategy
@@ -1415,7 +1394,7 @@ All three agent types need context cycling, but with different strategies:
 
 | Agent        | Cycling Trigger                                                                          | State Survives In                                                       |
 | ------------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **Mayor**    | User starts a fresh session when context feels stale; OpenCode auto-compacts older turns | DB (issues, events, agent state) — Mayor runs `hive status` to catch up |
+| **Queen Bee** | User starts a fresh session when context feels stale; OpenCode auto-compacts older turns | DB (issues, events, agent state) — Queen Bee runs `hive status` to catch up |
 | **Refinery** | Token count > threshold, or after each extraordinary merge                               | Git state + DB                                                          |
 | **Workers**  | Between molecule steps (always); mid-step if context fills                               | Git worktree (sandbox)                                                  |
 
@@ -1431,7 +1410,7 @@ async def maybe_cycle_session(agent_type: str, session_id: str):
     )
 
     threshold = {
-        "mayor": 120_000,
+        "queen": 120_000,
         "refinery": 100_000,
         "worker": 150_000,
     }[agent_type]
@@ -1447,19 +1426,19 @@ async def maybe_cycle_session(agent_type: str, session_id: str):
 
 ## 11. Escalation Protocol
 
-Gas Town has a well-defined escalation chain: Polecat → Witness → Mayor → Human. Our chain is simpler but preserves the same guarantees.
+Gas Town has a well-defined escalation chain: Polecat → Witness → Mayor → Human. Ours is simpler but preserves the same guarantees.
 
 ### 11.1 Escalation Chain
 
 ```
-Worker (blocked) → Orchestrator (deterministic) → Mayor (LLM) → Human
+Worker (blocked) → Orchestrator (deterministic) → Queen Bee (LLM) → Human
 ```
 
 1. **Worker signals blocker** via structured completion signal
 2. **Orchestrator** applies mechanical retries (same issue, fresh session)
-3. After N mechanical retries, **orchestrator escalates to Mayor**
-4. **Mayor** reasons about the failure — rephrases the issue, breaks it down, or asks the human
-5. If the Mayor can't resolve it, **Mayor asks the human** directly
+3. After N mechanical retries, **orchestrator escalates to Queen Bee**
+4. **Queen Bee** reasons about the failure — rephrases the issue, breaks it down, or asks the human
+5. If the Queen Bee can't resolve it, **Queen Bee asks the human** directly
 
 ### 11.2 Worker-Side Escalation
 
@@ -1479,7 +1458,7 @@ blockers: Docs are ambiguous about JWT vs API key. Tried both, neither works.
 ESCALATION_THRESHOLDS = {
     "max_retries": 2,          # Retry with fresh session after failure
     "max_agent_switches": 2,   # Try a different worker agent
-    "escalate_to_mayor": True, # Then hand to Mayor for reasoning
+    "escalate_to_queen": True, # Then hand to Queen Bee for reasoning
 }
 
 async def retry_or_escalate(agent, issue):
@@ -1503,23 +1482,23 @@ async def retry_or_escalate(agent, issue):
         db.update_issue(issue.id, status="failed")
         db.log_event(issue.id, agent.id, "escalated",
                      detail={"reason": "max retries exceeded"})
-        # The Mayor will see this via `hive logs` or `hive show`
+        # The Queen Bee will see this via `hive logs` or `hive show`
         # and can discuss next steps with the human
 ```
 
-### 11.4 Mayor-Side Escalation (Conversational)
+### 11.4 Queen Bee-Side Escalation (Conversational)
 
-With the Mayor as the user-facing interface, escalation is natural conversation rather than structured message passing. When a worker fails after retries:
+With the Queen Bee as the user-facing interface, escalation is natural conversation rather than structured message passing. When a worker fails after retries:
 
 1. The orchestrator marks the issue as `failed` and logs the event
-2. The Mayor sees this when checking `hive status` or `hive logs`
-3. The Mayor tells the human: "Issue w-a3f8 failed after 2 retries. Here's what happened..."
-4. The human and Mayor discuss next steps:
+2. The Queen Bee sees this when checking `hive status` or `hive logs`
+3. The Queen Bee tells the human: "Issue w-a3f8 failed after 2 retries. Here's what happened..."
+4. The human and Queen Bee discuss next steps:
    - Rephrase the issue → `hive cancel w-a3f8` + `hive create "better title" "clearer description"`
    - Break it down → create multiple smaller issues
    - Give up → `hive cancel w-a3f8`
 
-No `:::HUMAN_QUESTION:::` blocks, no special escalation protocol. The Mayor is already in conversation with the human — it just brings up the failure naturally.
+No `:::HUMAN_QUESTION:::` blocks, no special escalation protocol. The Queen Bee is already in conversation with the human — it just brings up the failure naturally.
 
 ---
 
@@ -1529,7 +1508,7 @@ No `:::HUMAN_QUESTION:::` blocks, no special escalation protocol. The Mayor is a
 
 - **WAL mode**: Multiple readers, single writer. At <30 agents, most operations are reads (checking ready queue). Writes are infrequent (claim, status transition, create).
 - **Busy timeout**: 5 seconds handles any write contention from the single orchestrator process.
-- **Two writers**: The orchestrator and the Mayor (via `hive` CLI) both write to the DB. WAL mode handles this cleanly — writes are serialized by SQLite's busy timeout. The Mayor's writes are infrequent (creating/closing issues), while the orchestrator writes more often (claiming, status transitions, events).
+- **Two writers**: The orchestrator and the Queen Bee (via `hive` CLI) both write to the DB. WAL mode handles this cleanly — writes are serialized by SQLite's busy timeout. The Queen Bee's writes are infrequent (creating/closing issues), while the orchestrator writes more often (claiming, status transitions, events).
 
 ### OpenCode Concurrency
 
@@ -1551,13 +1530,13 @@ No `:::HUMAN_QUESTION:::` blocks, no special escalation protocol. The Mayor is a
 | ------------------------------ | ------------------------------------------------ | --------------------------------------------------------------- |
 | **Worker session crashes**     | `session.error` SSE event                        | Unassign issue, retry with fresh worker                         |
 | **Worker hangs (no progress)** | Lease expiry + no progress signals (Section 7.3) | Abort session, route through escalation chain (Section 18)      |
-| **Mayor session crashes**      | `session.error` SSE event                        | Recreate Mayor session, prime with DB state                     |
+| **Queen Bee session crashes**   | `session.error` SSE event                        | Recreate Queen Bee session, prime with DB state                 |
 | **Refinery session crashes**   | `session.error` SSE event                        | Recreate Refinery session; pending merges remain in merge_queue |
 | **OpenCode server dies**       | Health check on main loop                        | Enter degraded mode; recovery loop attempts reconnect           |
 | **Orchestrator crashes**       | External process monitor (systemd, etc.)         | On restart: reconcile DB state with OpenCode sessions           |
 | **LLM rate limit**             | `session.status { type: "retry" }`               | OpenCode auto-retries; orchestrator extends leases and waits    |
-| **Worker produces bad work**   | Completion assessment or Refinery test gate      | Escalate to Mayor for re-decomposition or re-assignment         |
-| **Merge conflict (complex)**   | Refinery reports `needs_human`                   | Escalate to Mayor → human                                       |
+| **Worker produces bad work**   | Completion assessment or Refinery test gate      | Escalate to Queen Bee for re-decomposition or re-assignment     |
+| **Merge conflict (complex)**   | Refinery reports `needs_human`                   | Escalate to Queen Bee → human                                   |
 | **Permission blocks agent**    | Permission unblocker loop (Section 7.5)          | Auto-resolve via policy, or log for human review                |
 
 ### Degraded Mode
@@ -1674,106 +1653,18 @@ No special infrastructure. The CV is an emergent property of the event log.
 
 ---
 
-## 15. Implementation Results
-
-### What Was Built (Phases 1-4 + Phase 5 partial)
-
-**Implementation completed**: 2026-02-12
-**Code location**: `hive/` directory
-**Status**: Fully functional with 128 passing unit tests
-
-#### Delivered Features
-
-**Core Infrastructure** ✅
-
-- SQLite database with WAL mode (6 tables + `model` column on issues)
-- Ready queue with dependency resolution
-- OpenCode HTTP client (full API coverage)
-- SSE event stream consumer
-- Git worktree management + merge/rebase operations
-- Hash-based ID generation
-
-**Orchestration Engine** ✅
-
-- Main event loop with worker pool
-- Atomic issue claiming (CAS)
-- Lease-based staleness (15min default)
-- Permission unblocker (500ms polling)
-- Session lifecycle management (create, abort, delete, cleanup)
-- Merge queue processor (background task)
-- Triple completion detection: SSE events + file-based `.hive-result.jsonl` + session polling fallback
-- Aggressive session cleanup on cancel, shutdown, stale detection, and daemon restart
-- Stale agent reconciliation on daemon startup (abort orphaned sessions)
-- Per-issue model configuration with three-tier resolution
-
-**Agent Types** ✅
-
-- ✅ Queen Bee: Strategic decomposition (user-facing TUI)
-- ✅ Workers: Autonomous execution in git worktrees (default: Sonnet)
-- ✅ Session cycling for molecules
-- ✅ Refinery: LLM merge processor for conflicts and test failures (default: Sonnet)
-
-**Merge Pipeline** ✅
-
-- Two-tier done→finalized pipeline
-- Tier 1: Mechanical rebase + test + ff-merge (no LLM)
-- Tier 2: Refinery LLM for conflict resolution and test failure diagnosis
-- `:::MERGE_RESULT:::` structured signal parsing
-- Post-finalization worktree + branch + session teardown
-- Configurable test gate (`HIVE_TEST_COMMAND`)
-- Feature flag (`HIVE_MERGE_QUEUE_ENABLED`)
-
-**Prompt System** ✅
-
-- Prompts stored as `.md` template files in `src/hive/prompts/`
-- `string.Template` substitution (no Jinja2 dependency)
-- Templates: `worker.md`, `system.md`, `refinery.md`
-- Cached on first load for performance
-- Anti-stall behavioral conditioning ("NEVER STOP MID-WORKFLOW")
-- File-based completion signal instructions embedded in worker prompt
-
-**Human Interface** ✅
-
-- CLI: 20+ commands (create, list, ready, show, update, cancel, finalize, retry, escalate, molecule, dep, agents, agent, events, close, logs, status, merges, start, daemon, queen)
-- `hive --json logs -f` for live event tailing (JSONL in `--json` mode)
-- `hive --json logs` for machine-readable output
-- `hive list --sort --reverse --type --assignee --limit` for flexible filtering
-- `hive create --model` / `hive update --model` for per-issue model config
-- `hive --json start/stop/daemon status` for scripting
-- `hive merges` for merge queue visibility
-- `hive status` with merge queue stats
-- Real-time status monitoring
-
-**Phase 5 Resilience** ✅
-
-- Retry escalation chain: 3-tier (retry same agent up to MAX_RETRIES=2 → switch agent up to MAX_AGENT_SWITCHES=2 → escalate to human)
-- Degraded mode: `_opencode_healthy` flag, health check with exponential backoff (5s→60s cap), `log_system_event` for system-level events
-- Context cycling for Refinery: `_maybe_cycle_refinery_session()` checks token count after each merge, cycles at REFINERY_TOKEN_THRESHOLD (100K tokens) or >20 messages
-- `count_events_by_type()` helper for clean retry/switch counting
-
-**Phase 6 Operational Maturity** ✅
-
-- Structured logging: `src/hive/logging_config.py`, rotating file handler (10MB, 5 backups), HIVE_LOG_LEVEL env var, all print() converted to logger.\*
-- Capability-based routing: `get_idle_agents()`, `get_agent_capability_scores()` with project/type/keyword scoring, prefer experienced agents for similar work
-- Cost tracking: `get_token_usage()` aggregation from 'tokens_used' events, `hive costs` CLI command with --issue/--agent filters
-- `hive watch <issue_id>`: Live SSE streaming from worker sessions, formatted terminal output
-
-**Quality** ✅
-
-- 167 unit tests (100% passing)
-- 15 modules + 3 prompt templates, ~6,500 lines production code
-- 12 test files, ~4,500 lines test code
+> **Implementation results** have moved to [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md).
 
 ---
 
-## 16. Comparison with Gas Town
+## 15. Comparison with Gas Town
 
 | Dimension                 | Gas Town                          | This System                                               |
 | ------------------------- | --------------------------------- | --------------------------------------------------------- |
 | **Agent runtime**         | Claude Code in tmux               | OpenCode server (HTTP API)                                |
 | **Work queue**            | Beads (Dolt + JSONL + Git)        | Single SQLite DB                                          |
 | **Scheduling**            | `bd ready` CLI query              | Same SQL query, run by orchestrator                       |
-| **Strategic brain**       | Mayor (LLM in tmux)               | Mayor (LLM via OpenCode session)                          |
+| **Strategic brain**       | Mayor (LLM in tmux)               | Queen Bee (LLM via OpenCode session)                      |
 | **Agent monitoring**      | Witness patrol + Deacon heartbeat | Lease-based staleness + SSE events + permission unblocker |
 | **Session management**    | tmux sessions, `gt prime`         | OpenCode session lifecycle API                            |
 | **Inter-agent comms**     | Mail protocol in beads            | Orchestrator mediates via DB + structured signals         |
@@ -1785,7 +1676,7 @@ No special infrastructure. The CV is an emergent property of the event log.
 
 ### What We Gain
 
-- **Simpler infrastructure**: One process, one database, one HTTP API — but with the same strategic capabilities (Mayor + Refinery are LLMs, not stripped out)
+- **Simpler infrastructure**: One process, one database, one HTTP API — but with the same strategic capabilities (Queen Bee + Refinery are LLMs, not stripped out)
 - **Real-time observability**: SSE event stream replaces periodic tmux polling
 - **Easier debugging**: All state in one SQLite file, queryable with any SQL tool
 - **Cleaner separation of concerns**: Deterministic logic in code, ambiguity resolution in LLMs — the ZFC boundary is explicit
@@ -1801,255 +1692,11 @@ No special infrastructure. The CV is an emergent property of the event log.
 
 ---
 
-## 16. Implementation Roadmap
-
-### ✅ Phase 1: Single Worker Loop (COMPLETED)
-
-- [x] SQLite schema + migrations (including `merge_queue` table)
-- [x] ID generation (hash-based)
-- [x] Ready queue query (with `NOT IN ('done', 'finalized', 'canceled')` blocker check)
-- [x] OpenCode server startup/health check
-- [x] Single-worker loop: create worktree → create session → prompt → wait → mark done → enqueue merge
-- [x] Lease-based staleness tracking (`lease_expires_at`, `last_progress_at`)
-- [x] Basic event logging
-- [x] Worker prompt template with behavioral contract (Section 9.2)
-- [x] Structured completion signal parsing with artifacts (Section 9.5)
-
-### ✅ Phase 2: Multi-Worker + CLI (COMPLETED)
-
-- [x] Worker pool management (spawn, teardown, MAX_AGENTS)
-- [x] SSE event consumer with session dispatch (+ payload envelope fix)
-- [x] Atomic claim (CAS on issue assignment)
-- [x] Concurrent worker execution
-- [x] Permission unblocker loop — fast-poll auto-resolve (Section 7.5)
-- [x] Session cycling for molecules
-- [x] Auto-advance through molecule steps
-- [x] Human CLI: 8 commands (create, list, ready, show, close, status, logs, start)
-- [x] `hive logs -f` — live event tailing
-- [x] Model passthrough — `HIVE_DEFAULT_MODEL` sent to OpenCode on every request
-- [x] Stalled agent cleanup — agents marked `failed`, worktrees cleaned up
-
-**Note**: Phase 2 originally included an orchestrator-driven Mayor with `:::WORK_PLAN:::` parsing. This is now **deprecated** in favor of the Mayor-as-interface design (Phase 3). The orchestrator-side Mayor code (`create_mayor_session`, `send_to_mayor`, `handle_user_request`, `maybe_cycle_mayor`) still exists but will be removed in Phase 3.
-
-### ✅ Phase 3: Queen Bee as Interface (COMPLETED)
-
-The Queen Bee (formerly Mayor) is the user-facing interface via OpenCode custom agent. Completed as part of Phase 2 refactor.
-
-- [x] Queen Bee agent definition (`.opencode/agents/queen.md`) with full CLI reference
-- [x] `hive queen` launcher command
-- [x] 20+ CLI commands for Queen Bee to use
-- [x] Orchestrator is purely headless — Queen Bee drives via CLI tools
-
-### ✅ Phase 4: Merge Queue / Refinery (COMPLETED)
-
-The merge queue processor closes the loop from `done` → `finalized` → worktree cleanup.
-
-- [x] Merge queue consumer loop (background task in orchestrator, `MERGE_POLL_INTERVAL` configurable)
-- [x] Tier 1 — mechanical fast-path: `git rebase main`, run tests (`HIVE_TEST_COMMAND`), `git merge --ff-only`
-- [x] Tier 2 — Refinery LLM session for conflict resolution and test failure diagnosis
-- [x] `:::MERGE_RESULT:::` parsing with heuristic fallback
-- [x] Refinery prompt template with behavioral contract
-- [x] `done` → `finalized` status transition on successful merge
-- [x] Worktree + branch teardown after finalization (not after `done`)
-- [x] Sequential processing — one merge at a time, each rebased on latest main
-- [x] `hive merges` CLI command to view merge queue
-- [x] `hive status` enriched with merge queue stats
-- [x] `HIVE_MERGE_QUEUE_ENABLED` feature flag
-- [x] Lazy refinery session creation (only when needed)
-
-### ✅ Phase 5: Resilience (COMPLETED)
-
-- [x] Session cleanup on cancel/abort/shutdown — sessions are killed (abort + delete) in all exit paths
-- [x] Stale agent reconciliation on daemon restart — orphaned sessions aborted, agents reset
-- [x] Triple completion detection — SSE events + file-based `.hive-result.jsonl` + session polling fallback
-- [x] Anti-stall worker prompt — "NEVER STOP MID-WORKFLOW" behavioral conditioning
-- [x] Per-issue model configuration — `HIVE_WORKER_MODEL`, `HIVE_REFINERY_MODEL`, `--model` flag
-- [x] Prompt templates — `.md` files in `src/hive/prompts/` for easy hand-editing
-- [x] CLI enhancements — `--json` for logs/daemon, `--sort`/`--reverse`/`--type`/`--assignee`/`--limit` for list
-- [x] Retry escalation chain — 3-tier: retry same agent (MAX_RETRIES=2) → switch agent (MAX_AGENT_SWITCHES=2) → escalate to human
-- [x] Degraded mode — `_opencode_healthy` flag, exponential backoff health check (5s→60s), auto-recovery
-- [x] Context cycling for Refinery session — token threshold (100K) or message count (>20)
-
-**Note**: Mayor escalation is now conversational (the human is already chatting with the Mayor), so the old structured escalation chain (worker → orchestrator → Mayor → `:::HUMAN_QUESTION:::`) is no longer needed.
-
-### ✅ Phase 6: Operational Maturity (COMPLETED)
-
-- [x] Capability-based routing — `get_agent_capability_scores()` with project/type/keyword scoring, prefer experienced agents
-- [x] Structured logging — `src/hive/logging_config.py`, rotating file handler, all print() → logger.\*, HIVE_LOG_LEVEL
-- [x] Cost tracking — `get_token_usage()` aggregation, `hive costs` CLI command with --issue/--agent filters
-- [x] `hive watch <issue-id>` — live SSE streaming from worker sessions with formatted terminal output
-
-### Phase 7: Resilience & Extensions
-
-- [x] Long-lived refinery session — eager creation at startup, periodic health checks (~60s), auto-restart on task death, stale-result fence (message count), force-reset on exception, post-send status verification, consecutive error bail-out
-- [x] Dependency race fix — `claim_issue()` CAS checks unresolved blocking deps atomically; `hive create --depends-on` wires deps at creation time
-- [ ] Dead code cleanup — remove orphaned functions, unused DB tables, unused config values (in progress)
-- [x] Inter-agent knowledge transfer — Notes system: `notes` DB table, `.hive-notes.jsonl` worker file convention, orchestrator harvest/inject, `hive note`/`hive notes` CLI (see Section 19)
-- [ ] Web dashboard (read-only view of SQLite)
-- [ ] Formula/template system for reusable molecule definitions
-
-### Maybe Eventually
-
-- [ ] Multi-project support (multiple orchestrator instances sharing one OpenCode server)
+> **Implementation roadmap**: [`IMPL_PLAN.md`](IMPL_PLAN.md) | **Implementation notes, post-mortems, open questions**: [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md)
 
 ---
 
-## 17. Open Questions
-
-1. **Completion verification depth**: Section 9.5 proposes a structured completion signal. But how do we handle agents that claim success but produced incorrect output? The Refinery's test gate catches some of this, but not semantic errors. Options: secondary review agent, git diff size heuristics, mandatory test coverage.
-
-2. **Agent-to-agent knowledge transfer**: ~~Gas Town's mail protocol lets agents share findings. Our workers are more isolated — they only communicate through the orchestrator. How does worker B learn what worker A discovered?~~ **Resolved**: Notes system implemented (Section 19). Workers write `.hive-notes.jsonl` with discoveries/gotchas. Orchestrator harvests on completion, stores in `notes` table, injects relevant notes into future worker prompts. Queen can add project-wide notes via `hive note`. This is the 80/20 of Gas Town's mail system — context injection without routing/addressing/inbox complexity.
-
-3. **Mayor model selection**: ~~The Mayor reasons about architecture and decomposition — should it use a stronger model (e.g., Opus) while workers use a cheaper model (e.g., Sonnet)?~~ **Resolved**: Three-tier model configuration implemented:
-   - `HIVE_DEFAULT_MODEL` (default: `claude-opus-4-6`) — used by the Queen/Mayor
-   - `HIVE_WORKER_MODEL` (default: `claude-sonnet-4-20250514`) — used by workers (cheaper for coding tasks)
-   - `HIVE_REFINERY_MODEL` (default: `claude-sonnet-4-20250514`) — used by the merge refinery
-   - Per-issue model override via `--model` flag on `hive create` / `hive update` (stored in `issues.model` column)
-   - Resolution order: `issue.model > Config.WORKER_MODEL > Config.DEFAULT_MODEL`
-
-4. **Scale ceiling**: SQLite WAL mode is good for ~30 concurrent readers. If we need 100+ agents, when and how do we migrate to Postgres? The thin-server architecture makes this swap straightforward.
-
-5. **Cost management**: With Mayor + Refinery + N workers running concurrently, token costs can spike. OpenCode reports token usage per message. How do we implement budget caps, per-agent cost tracking, and graceful degradation when approaching limits?
-
-6. **Mayor scope**: ~~How much should the Mayor do?~~ **Resolved**: The Mayor is the user-facing interface. It does whatever the user asks — from creating issues to monitoring progress to diagnosing failures. Its scope is defined by the conversation, not by the orchestrator. Context management is handled by OpenCode's built-in compaction and the user's ability to start fresh sessions (state is in the DB, not the context).
-
-7. **Refinery worktree management**: ~~Should it have its own persistent worktree, or use temporary ones per merge?~~ **Resolved**: The Refinery session is scoped to the main project directory, but operates on worker worktrees by `cd`-ing into them. It straddles both — needs access to main (for `git merge --ff-only`) and to worktrees (for conflict resolution). No dedicated worktree needed.
-
-8. **Multiple OpenCode servers**: A single OpenCode server might bottleneck at many concurrent sessions (Mayor + Refinery + N workers). Should the orchestrator manage multiple server instances, or does OpenCode scale sufficiently within a single process?
-
----
-
-## 18. Post-Mortem: Infinite Spawn Loop (2026-02-14)
-
-### The Bug
-
-Two issues (`w-49ea04`, `w-f3c2b8`) entered an infinite loop where the orchestrator spawned a worker, the worker stalled, the orchestrator reset the issue to open, and the cycle repeated — for **11 hours**. This created 319 failed agents, consumed 636 stall/claim cycles, and burned significant API credits with no useful work produced.
-
-### Root Cause
-
-**`handle_stalled_agent` bypassed the retry escalation chain.** When a worker stalled (lease expired), the function unconditionally reset the issue to `status='open', assignee=NULL`:
-
-```python
-# THE BUG — unconditional reset, no escalation check
-UPDATE issues SET assignee = NULL, status = 'open'
-WHERE id = ? AND status = 'in_progress'
-```
-
-Meanwhile, `_handle_agent_failure` (the normal completion-failure path) had a proper 3-tier escalation chain: retry (up to MAX_RETRIES) → agent switch (up to MAX_AGENT_SWITCHES) → escalate. But stalled agents **never entered this code path**. They went straight back to the ready queue, where the orchestrator immediately picked them up again.
-
-The same unconditional-reset existed in `_reconcile_stale_agents` (daemon restart) and `_shutdown_all_sessions` (daemon shutdown), creating additional entry points for the loop to restart.
-
-### Secondary Bug
-
-`_handle_agent_failure` set the issue status to `open` for retries but **did not clear the `assignee` field**. Since `get_ready_queue` requires `assignee IS NULL`, retried issues through the normal failure path would never be picked up again. This bug was masked by the stalled path (which did clear the assignee), meaning the system only "worked" via the broken path.
-
-### The Fix
-
-1. **`handle_stalled_agent`**: Routes through `_handle_agent_failure` with a synthetic `CompletionResult` instead of unconditionally resetting. Stalls now count against the retry budget and eventually escalate.
-2. **`_handle_agent_failure`**: Clears `assignee = NULL` when setting status back to `open`, so `get_ready_queue` can actually find retried issues.
-3. **`_reconcile_stale_agents`**: Checks retry budget before resetting to open on daemon restart. Exhausted issues are marked `failed` instead of recycled.
-
-### The Fundamental Error
-
-This bug reveals a class of error that recurs in orchestration systems: **multiple code paths that transition the same state machine, with different subsets of the transition logic.**
-
-The issue status machine has a critical invariant: **every transition back to `open` must be gated by a retry budget.** But the system had three separate code paths that moved issues to `open`:
-
-| Code Path | Had Retry Check? | Result |
-|---|---|---|
-| `_handle_agent_failure` (normal failure) | Yes | Correct — escalates after MAX_RETRIES |
-| `handle_stalled_agent` (lease expiry) | **No** | **Infinite loop** |
-| `_reconcile_stale_agents` (daemon restart) | **No** | **Infinite loop across restarts** |
-
-The escalation logic was implemented correctly in one place but not applied uniformly. The design doc (Section 11.3) describes the escalation chain, but the implementation only enforced it in the normal completion-failure path. The stall path and the reconciliation path were written as separate, independent functions that happened to touch the same state — and nobody connected them to the escalation contract.
-
-### Invariants the Orchestrator Must Enforce
-
-The following invariants should be treated as **system-wide contracts**. Every code path that touches issue or agent state must respect them. When adding new code paths, verify these explicitly.
-
-#### INV-1: Retry Budget is Universal
-
-**Every transition from a non-terminal state back to `open` must check the retry budget.** There are no exceptions. This applies to:
-- Normal worker failure (`_handle_agent_failure`)
-- Worker stall/lease expiry (`handle_stalled_agent`)
-- Daemon restart reconciliation (`_reconcile_stale_agents`)
-- Daemon shutdown (`_shutdown_all_sessions`)
-- Any future code path that "releases" an issue
-
-If the retry budget is exhausted, the issue must move to a **terminal state** (`failed`, `escalated`, `canceled`) — never back to `open`.
-
-**Diagnostic query to detect violations:**
-```sql
--- Issues that are open but have exhausted their retry budget
-SELECT i.id, i.title, i.status,
-       (SELECT COUNT(*) FROM events WHERE issue_id = i.id AND event_type = 'retry') as retries,
-       (SELECT COUNT(*) FROM events WHERE issue_id = i.id AND event_type = 'stalled') as stalls
-FROM issues i
-WHERE i.status = 'open'
-  AND (SELECT COUNT(*) FROM events WHERE issue_id = i.id AND event_type = 'retry') >= 2;
-```
-
-#### INV-2: `assignee` and `status` Must Be Consistent
-
-The `assignee` field and `status` field form a coupled pair. The valid combinations are:
-
-| status | assignee | Meaning |
-|---|---|---|
-| `open` | `NULL` | Ready for claiming |
-| `open` | set | **INVALID** — will never be picked up |
-| `in_progress` | set | Being worked on |
-| `in_progress` | `NULL` | **INVALID** — work with no owner |
-| `done`/`finalized`/`failed`/`escalated`/`canceled` | any | Terminal — assignee is historical record |
-
-Any code that sets `status = 'open'` **must also set `assignee = NULL`**. Any code that sets `assignee` **must also set `status = 'in_progress'`** (or use `claim_issue` which does both atomically).
-
-**Diagnostic query:**
-```sql
--- Issues in an invalid assignee/status combination
-SELECT id, title, status, assignee FROM issues
-WHERE (status = 'open' AND assignee IS NOT NULL)
-   OR (status = 'in_progress' AND assignee IS NULL);
-```
-
-#### INV-3: No Unbounded Loops in the Orchestrator
-
-The main loop spawns workers for ready issues. If a worker fails and the issue goes back to `open`, the main loop will pick it up again on the next iteration. **Every cycle through this loop must make progress toward a terminal state.** Specifically:
-
-- Each spawn attempt must increment a counter (retry event, agent_switch event, or stalled event)
-- After a finite number of attempts, the issue must reach a terminal state
-- No code path may reset an issue to `open` without leaving an auditable event
-
-This is the liveness property: **all issues eventually terminate.**
-
-#### INV-4: State Transitions Are Funneled Through Shared Logic
-
-Do not write ad-hoc SQL to transition issue state. All "release issue back to queue" operations should go through a single function that enforces INV-1 and INV-2. Currently this is `_handle_agent_failure`. If a new code path needs to release an issue, it should call `_handle_agent_failure` (or a shared helper extracted from it) — not write its own UPDATE statement.
-
-The temptation to write a quick `UPDATE issues SET status = 'open'` in a new handler is the exact pattern that caused this bug.
-
-#### INV-5: Events Are the Source of Truth for Retry Budgets
-
-The retry budget is computed by counting events (`retry`, `agent_switch`), not by maintaining a counter column. This is intentional — it's crash-safe (events are append-only) and auditable. But it means:
-
-- Every attempt must log an event before the issue can be retried
-- The event types used for counting (`retry`, `agent_switch`) must not be logged for other purposes
-- `count_events_by_type` is the single source of truth for "how many times has this been tried?"
-
-### Recommendations for Rigor
-
-**1. Add a health-check query to the daemon startup.** Before entering the main loop, run the diagnostic queries from INV-1 and INV-2. If any issues are in an invalid state, log a warning and fix them (mark as failed, clear assignee, etc.). This catches state corruption from crashes or bugs before it causes cascading failures.
-
-**2. Add a circuit breaker to the main loop.** If the same issue appears in the ready queue N times within a short window (e.g., 5 times in 10 minutes), it's likely in a spawn loop. The orchestrator should detect this pattern and escalate the issue instead of spawning another worker.
-
-**3. Consider a `total_attempts` column on `issues`.** While events are the source of truth, a denormalized counter would make the "am I in a loop?" check O(1) instead of a COUNT query. Increment on every claim, check before every spawn. This is defense-in-depth — the event-based check is authoritative, but the column is a fast circuit breaker.
-
-**4. Integration test for the full stall→retry→escalate cycle.** The existing unit tests cover `_handle_agent_failure` in isolation, but nothing tested the `handle_stalled_agent → _handle_agent_failure` chain end-to-end. The bug survived because the stall path was tested independently from the escalation path. An integration test that runs: spawn → stall → stall → stall → verify escalation would have caught this.
-
-**5. Audit all `UPDATE issues SET status` statements.** Grep the codebase for raw SQL that touches `issues.status`. Each one is a potential bypass of the state machine. They should all go through `update_issue_status` or `_handle_agent_failure` (INV-4).
-
----
-
-## 19. Notes System (Inter-Agent Knowledge Transfer)
+## 16. Notes System (Inter-Agent Knowledge Transfer)
 
 ### Purpose
 
