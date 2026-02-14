@@ -1404,3 +1404,127 @@ async def test_handle_agent_complete_double_call_guard(temp_db, tmp_path):
     # Verify no additional events were logged
     events_after_second = len(temp_db.get_events(issue_id=issue_id))
     assert events_after_second == events_after_first
+
+
+@pytest.mark.asyncio
+async def test_session_error_handler_registration_and_trigger(temp_db, tmp_path):
+    """Test that session.error handler is registered and triggers handle_stalled_agent."""
+    # Create orchestrator with mocked SSE client and handle_stalled_agent
+    opencode = AsyncMock(spec=OpenCodeClient)
+    orch = _make_orchestrator(temp_db, tmp_path, opencode)
+
+    # Mock the SSE client
+    orch.sse_client = Mock()
+    registered_handlers = {}
+
+    def mock_on(event_type, handler):
+        registered_handlers[event_type] = handler
+
+    orch.sse_client.on = mock_on
+
+    # Mock handle_stalled_agent
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Setup SSE handlers
+    orch._setup_sse_handlers()
+
+    # Verify session.error handler is registered
+    assert "session.error" in registered_handlers
+
+    # Create a test agent and session mapping
+    issue_id = temp_db.create_issue("Test Issue")
+    agent_id = temp_db.create_agent("test-agent")
+    session_id = "test-session-123"
+
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree="/tmp/test",
+        session_id=session_id,
+    )
+
+    orch.active_agents[agent_id] = agent
+    orch._session_to_agent[session_id] = agent_id
+
+    # Trigger session error handler with error properties
+    error_properties = {"sessionID": session_id, "error": "Test error message", "code": 500}
+
+    # Call the handler
+    session_error_handler = registered_handlers["session.error"]
+    await session_error_handler(error_properties)
+
+    # Verify handle_stalled_agent was called with the correct agent
+    orch.handle_stalled_agent.assert_called_once_with(agent)
+
+    # Verify event was logged to database
+    events = temp_db.get_events(issue_id=issue_id, event_type="session_error")
+    assert len(events) == 1
+
+    event = events[0]
+    # The detail is stored as JSON string, need to parse it
+    import json
+
+    detail = json.loads(event["detail"]) if event["detail"] else {}
+    assert detail["session_id"] == session_id
+    assert detail["error"] == error_properties
+
+
+@pytest.mark.asyncio
+async def test_session_error_handler_missing_session_id(temp_db, tmp_path):
+    """Test that session.error handler ignores events without sessionID."""
+    opencode = AsyncMock(spec=OpenCodeClient)
+    orch = _make_orchestrator(temp_db, tmp_path, opencode)
+
+    # Mock the SSE client
+    orch.sse_client = Mock()
+    registered_handlers = {}
+
+    def mock_on(event_type, handler):
+        registered_handlers[event_type] = handler
+
+    orch.sse_client.on = mock_on
+
+    # Mock handle_stalled_agent
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Setup SSE handlers
+    orch._setup_sse_handlers()
+
+    # Call handler with missing sessionID
+    error_properties = {"error": "Test error message"}
+    session_error_handler = registered_handlers["session.error"]
+    await session_error_handler(error_properties)
+
+    # Verify handle_stalled_agent was NOT called
+    orch.handle_stalled_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_session_error_handler_unknown_session(temp_db, tmp_path):
+    """Test that session.error handler ignores events for unknown sessions."""
+    opencode = AsyncMock(spec=OpenCodeClient)
+    orch = _make_orchestrator(temp_db, tmp_path, opencode)
+
+    # Mock the SSE client
+    orch.sse_client = Mock()
+    registered_handlers = {}
+
+    def mock_on(event_type, handler):
+        registered_handlers[event_type] = handler
+
+    orch.sse_client.on = mock_on
+
+    # Mock handle_stalled_agent
+    orch.handle_stalled_agent = AsyncMock()
+
+    # Setup SSE handlers
+    orch._setup_sse_handlers()
+
+    # Call handler with unknown sessionID
+    error_properties = {"sessionID": "unknown-session", "error": "Test error message"}
+    session_error_handler = registered_handlers["session.error"]
+    await session_error_handler(error_properties)
+
+    # Verify handle_stalled_agent was NOT called
+    orch.handle_stalled_agent.assert_not_called()

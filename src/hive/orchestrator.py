@@ -103,6 +103,20 @@ class Orchestrator:
 
         self.sse_client.on("session.status", handle_session_status)
 
+        async def handle_session_error(properties):
+            session_id = properties.get("sessionID")
+            if not session_id:
+                return
+            agent_id = self._session_to_agent.get(session_id)
+            if not agent_id or agent_id not in self.active_agents:
+                return
+            agent = self.active_agents[agent_id]
+            logger.error(f"Session error for {agent.name}: {properties}")
+            self.db.log_event(agent.issue_id, agent.agent_id, "session_error", {"session_id": session_id, "error": properties})
+            await self.handle_stalled_agent(agent)
+
+        self.sse_client.on("session.error", handle_session_error)
+
         # Register permission event handler
         self.sse_client.on("permission.request", self._handle_permission_event)
 
