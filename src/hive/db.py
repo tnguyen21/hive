@@ -79,8 +79,6 @@ CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 CREATE INDEX IF NOT EXISTS idx_issues_assignee ON issues(assignee);
 CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project);
-CREATE INDEX IF NOT EXISTS idx_issues_tags ON issues(tags);
-
 ----------------------------------------------------------------------
 -- DEPENDENCIES: edges in the work DAG
 ----------------------------------------------------------------------
@@ -231,6 +229,10 @@ class Database:
             self.conn.execute("ALTER TABLE issues ADD COLUMN tags TEXT")
             self.conn.commit()
             logger.info("Added tags column to issues table")
+
+        # Create tags index (safe after column exists via CREATE TABLE or migration)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_tags ON issues(tags)")
+        self.conn.commit()
 
     def create_issue(
         self,
