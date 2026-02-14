@@ -528,6 +528,7 @@ class Database:
         after_id: int = 0,
         issue_id: Optional[str] = None,
         agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get events with id > after_id, ordered ascending (oldest first)."""
         conditions = ["id > ?"]
@@ -539,6 +540,9 @@ class Database:
         if agent_id:
             conditions.append("agent_id = ?")
             params.append(agent_id)
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
 
         where_clause = " AND ".join(conditions)
         query = f"SELECT * FROM events WHERE {where_clause} ORDER BY id ASC"
@@ -556,6 +560,7 @@ class Database:
         n: int = 20,
         issue_id: Optional[str] = None,
         agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get the most recent n events, returned oldest-first."""
         conditions = []
@@ -567,6 +572,9 @@ class Database:
         if agent_id:
             conditions.append("agent_id = ?")
             params.append(agent_id)
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
 
         if conditions:
             where_clause = " AND ".join(conditions)

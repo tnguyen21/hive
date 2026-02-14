@@ -90,7 +90,6 @@ See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-b
 - `hive merges` for merge queue visibility
 - `hive status` with merge queue stats
 - `hive watch <issue-id>`: Live SSE streaming from worker sessions
-- `hive ui`: Datasette integration for browsing the DB in a web UI
 
 ### Resilience
 

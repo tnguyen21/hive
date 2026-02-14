@@ -161,8 +161,7 @@ Steps JSON format for molecules:
 | `hive ready` | Show ready queue (unblocked, unassigned) |
 | `hive agents [--status S]` | List agents |
 | `hive agent <id>` | Show agent details |
-| `hive events [--issue ID] [--agent ID] [--type T] [--limit N]` | Query event log |
-| `hive logs [-f] [-n N] [--issue ID] [--agent ID]` | Tail event log |
+| `hive logs [-f] [-n N] [--issue ID] [--agent ID] [--type T]` | Event log (use `-f` to follow) |
 | `hive merges` | Show merge queue status |
 
 All commands support `--json` for machine-readable output.

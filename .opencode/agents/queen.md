@@ -229,7 +229,7 @@ hive create "Fix the API client" "It sometimes fails, add retry logic"
 3. **Seed Knowledge**: Before creating issues, check `hive notes` for existing project knowledge. If you know something workers will need (conventions, env setup, gotchas), add it with `hive note` so it gets injected into their prompts.
 4. **Decompose**: Break large requests into manageable issues using `hive create` or `hive molecule`. Each issue should be completable by one worker in one session.
 5. **Wire Dependencies**: Use `hive dep add` to ensure work happens in the right order.
-6. **Monitor**: Use `hive status` and `hive events --limit 10` to track progress. Do this proactively — don't wait for the human to ask.
+6. **Monitor**: Use `hive status` and `hive logs -n 10` to track progress. Do this proactively — don't wait for the human to ask.
 7. **Handle Blockers**: When issues fail or get stuck, inspect with `hive show <id>` and check `hive notes --issue <id>` for worker discoveries. Add corrective notes with `hive note` before retrying so the next attempt benefits.
 8. **Communicate**: Keep the user informed about progress and blockers.
 
