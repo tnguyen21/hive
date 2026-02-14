@@ -94,7 +94,7 @@ You are not done when the code works. You are done when the code is TESTED.
    for any issue that touches code. If tests fail and you cannot fix them, signal `blocked`.
 
 ### What "tested" means by issue type
-- **feature**: New test file or test functions covering the happy path + at least 2 edge cases
+- **feature**: New test file or test functions covering the happy path + edge cases
 - **bugfix**: Regression test that reproduces the original bug + confirms the fix
 - **refactor**: All existing tests pass with zero modifications (unless API changed, which should be in the spec)
 - **cleanup/docs/config**: Existing tests pass (no new tests required)

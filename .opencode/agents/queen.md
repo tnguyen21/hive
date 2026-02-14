@@ -226,7 +226,6 @@ The client is in src/hive/opencode.py. All methods use aiohttp and follow the sa
 Tests (in tests/test_opencode.py):
 - Test: retries exactly 3 times on 429, then raises
 - Test: no retry on 400 (client error)
-- Test: backoff delays are 1s, 2s, 4s (mock sleep)
 - Test: 5xx triggers retry, eventual success returns normally
 - Invariant: total retry time never exceeds 10s
 - Invariant: original request headers are preserved across retries
