@@ -3,6 +3,7 @@
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -40,28 +41,34 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
     # Branch name: agent/<agent_name>
     branch_name = f"agent/{agent_name}"
 
-    try:
-        # Create worktree with a new branch
-        subprocess.run(
-            [
-                "git",
-                "worktree",
-                "add",
-                "-b",
-                branch_name,
-                str(worktree_dir),
-                base_branch,
-            ],
-            cwd=str(project_path),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    # Retry with backoff — concurrent worktree creation can transiently fail
+    # with "invalid reference: main" when git ref resolution hits contention.
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            subprocess.run(
+                [
+                    "git",
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch_name,
+                    str(worktree_dir),
+                    base_branch,
+                ],
+                cwd=str(project_path),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return str(worktree_dir)
 
-        return str(worktree_dir)
-
-    except subprocess.CalledProcessError as e:
-        raise GitWorktreeError(f"Failed to create worktree: {e.stderr}") from e
+        except subprocess.CalledProcessError as e:
+            is_transient = "invalid reference" in e.stderr or "index.lock" in e.stderr
+            if is_transient and attempt < max_retries - 1:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise GitWorktreeError(f"Failed to create worktree: {e.stderr}") from e
 
 
 def remove_worktree(worktree_path: str) -> bool:
