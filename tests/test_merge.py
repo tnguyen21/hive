@@ -672,6 +672,90 @@ async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
 
 
 @pytest.mark.asyncio
+async def test_send_to_refinery_harvests_notes(tmp_path, temp_db, mock_opencode):
+    """Test that _send_to_refinery harvests notes from the worktree after refinery completes."""
+    worktree_path = str(tmp_path / "worktree")
+    Path(worktree_path).mkdir()
+
+    # Write a notes file in the worktree
+    notes_file = Path(worktree_path) / ".hive-notes.jsonl"
+    notes_file.write_text(
+        '{"category": "gotcha", "content": "Import block conflicts with worker-2"}\n'
+        '{"category": "pattern", "content": "Tests require DB fixtures to be reset"}\n'
+    )
+
+    # Create DB rows
+    issue_id = temp_db.create_issue(title="Test Issue", project="test")
+    agent_id = temp_db.create_agent(name="test-agent")
+    temp_db.conn.execute(
+        "INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name) VALUES (?, ?, ?, ?, ?)",
+        (issue_id, agent_id, "test", worktree_path, "test-branch"),
+    )
+    temp_db.conn.commit()
+    queue_id = temp_db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    entry = {
+        "id": queue_id,
+        "issue_id": issue_id,
+        "agent_id": agent_id,
+        "branch_name": "test-branch",
+        "worktree": worktree_path,
+        "issue_title": "Test Issue",
+    }
+
+    # Mock refinery session lifecycle
+    mock_opencode.create_session = AsyncMock(return_value={"id": "test-session"})
+    mock_opencode.send_message_async = AsyncMock()
+    mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
+    mock_opencode.get_messages = AsyncMock(return_value=[{"parts": [{"type": "text", "text": "done"}]}])
+    mock_opencode.cleanup_session = AsyncMock()
+
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+        with patch("hive.merge.Config") as mock_config:
+            mock_config.TEST_COMMAND = None
+            mock_config.REFINERY_MODEL = "test-model"
+            mock_config.LEASE_DURATION = 30
+            mock_config.REFINERY_TOKEN_THRESHOLD = 100000
+
+            with patch(
+                "hive.merge.read_result_file",
+                return_value={
+                    "status": "rejected",
+                    "summary": "Conflicts too complex",
+                    "tests_passed": False,
+                    "conflicts_resolved": 0,
+                },
+            ):
+                with patch("hive.merge.remove_result_file"):
+                    await mp._send_to_refinery(entry)
+
+    # Verify notes were saved to DB
+    notes = temp_db.get_notes()
+    assert len(notes) == 2
+    contents = [n["content"] for n in notes]
+    assert "Import block conflicts with worker-2" in contents
+    assert "Tests require DB fixtures to be reset" in contents
+    categories = [n["category"] for n in notes]
+    assert "gotcha" in categories
+    assert "pattern" in categories
+
+    # Verify notes_harvested event was logged with refinery source
+    events = temp_db.get_events(issue_id)
+    harvest_events = [e for e in events if e["event_type"] == "notes_harvested"]
+    assert len(harvest_events) == 1
+    import json
+
+    detail = json.loads(harvest_events[0]["detail"])
+    assert detail["count"] == 2
+    assert detail["source"] == "refinery"
+
+    # Verify notes file was cleaned up
+    assert not notes_file.exists()
+
+
+@pytest.mark.asyncio
 async def test_finalize_issue_molecule_completion(temp_db, mock_opencode, git_repo):
     """Test that finalizing all steps of a molecule marks the parent as done."""
     # Create a parent molecule issue
