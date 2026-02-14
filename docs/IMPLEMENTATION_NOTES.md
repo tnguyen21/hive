@@ -19,7 +19,7 @@ _Living document tracking implementation status, delivered features, post-mortem
 - **Phase 7**: Long-lived refinery session, dependency race fix, inter-agent knowledge transfer (Notes system), bidirectional reconciliation on startup, O(1) reverse lookup maps for session/issue routing, local counter tracking for refinery sessions
 - **Phase 8** (complexity cleanup): Full audit of 11 unnecessary complexity items from `docs/COMPLEXITY.md` — all resolved. Removed ToolExecutor indirection (544 lines deleted), simplified completion detection (removed triple detection and heuristic fallbacks in favor of file-based + SSE), deduplicated session cleanup pattern, removed agent capability scoring, fixed error detection (`'5' in error_msg` bug), removed token estimation fallback, removed duplicate CLI entry points, DRY'd repetitive query patterns
 
-**Status**: Fully functional multi-agent orchestrator with 231 passing unit tests across 15 modules + 3 prompt templates
+**Status**: Fully functional multi-agent orchestrator with 250 passing unit tests across 15 modules + 3 prompt templates
 
 See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-by-phase roadmap checklist.
 
@@ -64,7 +64,7 @@ See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-b
 - Two-tier done→finalized pipeline
 - Tier 1: Mechanical rebase + test + ff-merge (no LLM)
 - Tier 2: Refinery LLM for conflict resolution and test failure diagnosis
-- `:::MERGE_RESULT:::` structured signal parsing
+- File-based `.hive-result.jsonl` result signaling (same mechanism as workers)
 - Post-finalization worktree + branch + session teardown
 - Configurable test gate (`HIVE_TEST_COMMAND`)
 - Feature flag (`HIVE_MERGE_QUEUE_ENABLED`)
@@ -111,7 +111,7 @@ See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-b
 
 ### Quality
 
-- 231 unit tests (100% passing, 13 deselected integration tests)
+- 250 unit tests (100% passing, 13 deselected integration tests)
 - 15 modules + 3 prompt templates, ~6,500 lines production code
 - 13 test files, ~5,300 lines test code
 - Lint-clean with `ruff` (line-length=144)
@@ -243,6 +243,6 @@ A full audit of the codebase (documented in `docs/COMPLEXITY.md`) identified 11 
 |--------|--------|-------|
 | `tools.py` | 544 lines | Deleted |
 | `cli.py` | ~1200 lines (+ tools.py dispatch) | ~1820 lines (self-contained) |
-| Test count | 167 passing | 231 passing |
+| Test count | 167 passing | 250 passing |
 | Test files | 12 | 13 |
 | Production code | ~6,500 lines | ~6,500 lines (net neutral: deleted tools.py, expanded cli.py) |

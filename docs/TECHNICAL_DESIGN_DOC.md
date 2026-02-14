@@ -942,11 +942,11 @@ Completion detection uses a **triple detection strategy** to ensure no worker co
 
 1. **SSE events** (real-time): The orchestrator listens for `session.status → idle` events via the global SSE stream. This is the fastest path — sub-second detection.
 
-2. **File-based signaling** (deterministic): Workers write a `.hive-result.jsonl` file to their worktree root before emitting the `:::COMPLETION` text signal. The `monitor_agent` loop polls for this file on every `check_interval` timeout. This is the most reliable path — filesystem-based, no dependency on SSE or session status APIs.
+2. **File-based signaling** (deterministic): Workers write a `.hive-result.jsonl` file to their worktree root as the sole completion signal. The `monitor_agent` loop polls for this file on every `check_interval` timeout. This is the most reliable path — filesystem-based, no dependency on SSE or session status APIs.
 
 3. **Session polling fallback** (catch-all): On every `check_interval` timeout, the orchestrator also calls `get_session_status()` directly to check if the session went idle. This catches cases where the SSE event was missed due to reconnect gaps.
 
-The `monitor_agent` loop runs all three in parallel. Whichever fires first breaks the loop and triggers `handle_agent_complete()`. File-based results take priority over message-parsing heuristics in `assess_completion()`.
+The `monitor_agent` loop runs all three in parallel. Whichever fires first breaks the loop and triggers `handle_agent_complete()`. `assess_completion()` reads the file-based result directly — no message parsing or heuristics.
 
 **File-based result format** (`.hive-result.jsonl`):
 
@@ -961,68 +961,39 @@ The `monitor_agent` loop runs all three in parallel. Whichever fires first break
 }
 ```
 
-### 9.5 Structured Completion Signal (Recommended)
+### 9.5 File-Based Completion Signal
 
-Rather than parsing natural language, instruct agents to emit a structured completion block with **artifacts** — machine-readable records of what was produced:
+All agents (workers and refinery) use the same file-based completion mechanism: write a `.hive-result.jsonl` file to the worktree root. This is the **sole** completion signal — no text-embedded signals, no regex parsing, no heuristic fallbacks.
 
-```
-When you are finished, output a completion signal as the LAST thing in your response:
+**Worker result schema:**
 
-:::COMPLETION
-status: success | blocked | failed
-summary: <one-line summary of what was done>
-files_changed: <number of files modified>
-tests_run: <yes/no>
-blockers: <description if blocked, otherwise "none">
-artifacts:
-  - type: git_commit
-    value: <sha>
-  - type: test_command
-    value: <command-run>
-  - type: test_result
-    value: pass | fail | unknown
-:::
+```json
+{"status": "success", "summary": "Added auth middleware", "files_changed": ["src/auth.py"], "tests_added": ["tests/test_auth.py::test_login"], "tests_run": true, "test_command": "pytest tests/", "blockers": [], "artifacts": [{"type": "git_commit", "value": "abc1234"}]}
 ```
 
-The `artifacts` section provides structured data the orchestrator and refinery can use downstream: commit SHAs for merge queue processing, test commands for re-verification, and test results for the verification gate.
+**Refinery result schema:**
 
-**Completion detection with artifact parsing:**
+```json
+{"status": "merged", "summary": "Rebased and resolved 2 conflicts, all tests pass", "tests_passed": true, "tests_added": true, "conflicts_resolved": 2, "warnings": ""}
+```
+
+**Completion assessment** reads the file directly — no message parsing:
 
 ```python
-import re, yaml
-
-COMPLETION_RE = re.compile(r":::COMPLETION\s*\n(.*?):::", re.DOTALL)
-
-def assess_completion(messages) -> CompletionResult:
-    """Parse structured completion signal. Fall back to heuristics."""
-    last = messages[-1]
-    text = " ".join(p["text"] for p in last["parts"] if p["type"] == "text")
-
-    match = COMPLETION_RE.search(text)
-    if match:
-        payload = yaml.safe_load(match.group(1))
+def assess_completion(messages, file_result=None) -> CompletionResult:
+    """Assess completion based on file-based result only."""
+    if file_result is not None:
         return CompletionResult(
-            success=(payload.get("status") == "success"),
-            reason=payload.get("blockers"),
-            summary=payload.get("summary"),
-            artifacts=payload.get("artifacts", []),
+            success=(file_result.get("status") == "success"),
+            reason=...,
+            summary=file_result.get("summary", ""),
+            artifacts=...,
         )
-
-    # Fallback: heuristic assessment (no structured signal found)
-    blocker_signals = ["blocked by", "cannot proceed", "need help",
-                       "unable to", "escalating", "stuck on"]
-    if any(signal in text.lower() for signal in blocker_signals):
-        return CompletionResult(success=False, reason=text)
-
-    tool_errors = [p for p in last["parts"]
-                   if p["type"] == "tool" and p["state"]["status"] == "error"]
-    if tool_errors:
-        return CompletionResult(success=False, reason="Tool errors in final turn")
-
-    return CompletionResult(success=True)
+    # No file result = worker didn't write completion signal = failure
+    return CompletionResult(success=False, reason="Worker did not write completion signal")
 ```
 
-If no `:::COMPLETION` block is found, the orchestrator falls back to heuristic assessment. In propulsive mode, the finalizer can also **reprompt** the worker with a corrective prompt demanding the structured signal — no indefinite waiting.
+This consolidation eliminates the previous `:::COMPLETION` and `:::MERGE_RESULT:::` text-embedded signals, the YAML-in-free-text regex parsing, and the heuristic fallback code. One mechanism, one file name, deterministic parsing.
 
 ---
 
@@ -1276,7 +1247,7 @@ The merge queue is a dedicated table (`merge_queue`) populated by `handle_agent_
 
 If all three succeed — done. Issue finalized, worktree torn down, branch deleted. No LLM cost.
 
-**Tier 2: Refinery LLM (when mechanical fails).** If rebase has conflicts or tests fail, the merge is handed to the Refinery session. The Refinery gets a prompt explaining the branch, the problem (conflicts or test failures), and instructions to resolve and emit a `:::MERGE_RESULT` signal with `merged`, `rejected`, or `needs_human`.
+**Tier 2: Refinery LLM (when mechanical fails).** If rebase has conflicts or tests fail, the merge is handed to the Refinery session. The Refinery gets a prompt explaining the branch, the problem (conflicts or test failures), and instructions to resolve and write a `.hive-result.jsonl` file with status `merged`, `rejected`, or `needs_human`.
 
 #### Session Lifecycle
 
@@ -1296,7 +1267,7 @@ merge_processor_loop (background asyncio task, every MERGE_POLL_INTERVAL):
   │       ├─ build_refinery_prompt()      # Context about the branch + problem
   │       ├─ send_message_async()         # New message in existing conversation
   │       ├─ Post-send status check (0.5s — verify session became active)
-  │       ├─ _wait_for_refinery()         # Poll until idle, parse :::MERGE_RESULT
+  │       ├─ _wait_for_refinery()         # Poll until idle, read .hive-result.jsonl
   │       ├─ Process result:
   │       │   merged     → _finalize_issue()
   │       │   rejected   → reopen issue for rework
@@ -1331,7 +1302,7 @@ The refinery session has seven protections against failure modes:
 
 The session accumulates context with each merge. `_maybe_cycle_refinery_session()` runs after each successful merge and checks:
 - Token usage from message metadata (if available)
-- Message count (>20 as a heuristic proxy when token metadata isn't available)
+- Message count (>20 as a fallback threshold)
 
 If usage exceeds `Config.REFINERY_TOKEN_THRESHOLD` (100K tokens), the session is killed and the next merge creates a fresh one. Each merge is independent (state lives in git, not in the context), so cycling is safe.
 
@@ -1377,9 +1348,11 @@ The prompt instructs the Refinery to:
 1. Check worktree state, abort any in-progress rebase
 2. Run `git rebase main` and resolve conflicts
 3. Run tests
-4. Emit a `:::MERGE_RESULT` block with status, summary, and conflict count
+4. Write a `.hive-result.jsonl` file with status, summary, and conflict count
 
-The orchestrator parses `:::MERGE_RESULT` via regex and dispatches on the status field. The actual `git merge --ff-only` to main is done by the orchestrator after the Refinery succeeds — the Refinery just gets the branch into a mergeable state.
+The orchestrator reads `.hive-result.jsonl` (via `read_result_file()`) and dispatches on the status field. This is the same file-based mechanism used by workers — one unified inter-agent signal pattern. The actual `git merge --ff-only` to main is done by the orchestrator after the Refinery succeeds — the Refinery just gets the branch into a mergeable state.
+
+After reading the result, the orchestrator also harvests any `.hive-notes.jsonl` the Refinery wrote (conflict patterns, integration gotchas) and saves them to the notes DB for future workers.
 
 ### 10.4 Gas Town Role Mapping (Updated)
 
@@ -1447,14 +1420,10 @@ Worker (blocked) → Orchestrator (deterministic) → Queen Bee (LLM) → Human
 
 ### 11.2 Worker-Side Escalation
 
-Workers signal blockers via the structured completion signal (Section 9.5):
+Workers signal blockers via `.hive-result.jsonl` (Section 9.5):
 
-```
-:::COMPLETION
-status: blocked
-summary: Cannot determine correct auth token format
-blockers: Docs are ambiguous about JWT vs API key. Tried both, neither works.
-:::
+```json
+{"status": "blocked", "summary": "Cannot determine correct auth token format", "blockers": ["Docs are ambiguous about JWT vs API key. Tried both, neither works."], "files_changed": [], "tests_run": false, "artifacts": []}
 ```
 
 ### 11.3 Orchestrator-Side Escalation (Deterministic)
