@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import subprocess
+import shlex
 import sys
 import time
 from datetime import datetime
@@ -404,6 +405,17 @@ class HiveCLI:
                 raise ValueError(f"Issue not found: {issue_id}")
 
             self.db.update_issue_status(issue_id, "finalized")
+            # If this issue was sitting in the merge queue (manual review mode),
+            # mark those entries complete so they don't get processed later.
+            self.db.conn.execute(
+                """
+                UPDATE merge_queue
+                SET status = 'merged', completed_at = datetime('now')
+                WHERE issue_id = ? AND status IN ('queued', 'running')
+                """,
+                (issue_id,),
+            )
+            self.db.conn.commit()
             self.db.log_event(issue_id, None, "finalized", {"resolution": resolution})
 
             result = {
@@ -419,6 +431,91 @@ class HiveCLI:
             print(json.dumps(result, default=str))
         else:
             print(result.get("message", f"Finalized issue {issue_id}"))
+
+    def review(self, limit: int = 20, *, json_mode: bool = False):
+        """List done issues that are pending finalization with review hints."""
+        try:
+            cursor = self.db.conn.execute(
+                """
+                SELECT
+                    i.id,
+                    i.title,
+                    i.updated_at,
+                    i.assignee,
+                    mq.status AS merge_status,
+                    mq.branch_name,
+                    mq.worktree,
+                    mq.enqueued_at
+                FROM issues i
+                LEFT JOIN merge_queue mq
+                    ON mq.id = (
+                        SELECT mq2.id
+                        FROM merge_queue mq2
+                        WHERE mq2.issue_id = i.id
+                        ORDER BY mq2.id DESC
+                        LIMIT 1
+                    )
+                WHERE i.project = ? AND i.status = 'done'
+                ORDER BY i.updated_at DESC
+                LIMIT ?
+                """,
+                (self.project_name, limit),
+            )
+
+            rows = []
+            project_q = shlex.quote(str(self.project_path))
+            for row in cursor.fetchall():
+                item = dict(row)
+                branch = item.get("branch_name")
+                worktree = item.get("worktree")
+                issue_id = item["id"]
+
+                item["diff_hint"] = None
+                item["merge_hint"] = None
+                item["finalize_hint"] = f'hive finalize {issue_id} --resolution "manual review complete"'
+
+                if branch:
+                    branch_q = shlex.quote(branch)
+                    item["diff_hint"] = f"git -C {project_q} diff main...{branch_q}"
+                    item["merge_hint"] = f"git -C {project_q} merge --ff-only {branch_q}"
+                if worktree:
+                    item["worktree_hint"] = f"git -C {shlex.quote(worktree)} log --oneline -n 5"
+                else:
+                    item["worktree_hint"] = None
+
+                rows.append(item)
+
+            result = {"count": len(rows), "review": rows}
+        except Exception as e:
+            self._error(str(e), json_mode=json_mode)
+
+        if json_mode:
+            print(json.dumps(result, default=str))
+            return
+
+        rows = result["review"]
+        if not rows:
+            print("No done issues pending review.")
+            return
+
+        print(f"\n{'Issue':<14} {'Merge':<10} {'Assignee':<16} {'Title':<40}")
+        print("-" * 88)
+        for item in rows:
+            merge_state = item.get("merge_status") or "-"
+            assignee = item.get("assignee") or "-"
+            print(f"{item['id']:<14} {merge_state:<10} {assignee:<16} {item['title'][:40]}")
+
+        print(f"\nTotal: {len(rows)} issue(s) pending finalization")
+        print("\nPer-issue review commands:")
+        for item in rows:
+            print(f"\n{item['id']}:")
+            if item.get("diff_hint"):
+                print(f"  Diff:     {item['diff_hint']}")
+            if item.get("worktree_hint"):
+                print(f"  Worktree: {item['worktree_hint']}")
+            if item.get("merge_hint"):
+                print(f"  Merge:    {item['merge_hint']}")
+            print(f"  Finalize: {item['finalize_hint']}")
 
     def retry(self, issue_id: str, notes: str = "", *, json_mode: bool = False):
         """Retry a failed/blocked issue."""
@@ -1210,7 +1307,107 @@ class HiveCLI:
     def _make_daemon(self) -> HiveDaemon:
         return HiveDaemon(self.project_name, str(self.project_path))
 
-    def start(self, foreground: bool = False, *, json_mode: bool = False):
+    @staticmethod
+    def _print_cost_preview():
+        print("\nCost preview:")
+        print(f"  You're about to run up to {Config.MAX_AGENTS} concurrent workers.")
+        print("  On Claude Pro/Max, this draws from your included credits.")
+        print("  Rough estimate: ~$0.50-2.00 per issue (varies by complexity).")
+        print("  Tip: start with 3 workers while validating your workflow.")
+
+    @staticmethod
+    def _elapsed_from(ts: str | None) -> str:
+        if not ts:
+            return "-"
+        try:
+            then = datetime.fromisoformat(ts)
+        except ValueError:
+            return "-"
+        delta = max(0, int((datetime.now() - then).total_seconds()))
+        if delta < 60:
+            return f"{delta}s"
+        if delta < 3600:
+            return f"{delta // 60}m {delta % 60}s"
+        hours = delta // 3600
+        minutes = (delta % 3600) // 60
+        return f"{hours}h {minutes}m"
+
+    def _print_dashboard_once(self):
+        status_rows = self.db.conn.execute(
+            """
+            SELECT
+                i.id,
+                i.title,
+                i.status,
+                i.updated_at,
+                COALESCE(a.name, '-') AS agent_name
+            FROM issues i
+            LEFT JOIN agents a ON i.assignee = a.id
+            WHERE i.project = ? AND i.status IN ('in_progress', 'blocked', 'open', 'done')
+            ORDER BY
+                CASE i.status
+                    WHEN 'in_progress' THEN 0
+                    WHEN 'blocked' THEN 1
+                    WHEN 'open' THEN 2
+                    WHEN 'done' THEN 3
+                    ELSE 4
+                END,
+                i.updated_at DESC
+            LIMIT 8
+            """,
+            (self.project_name,),
+        ).fetchall()
+
+        merge_stats = self.db.get_merge_queue_stats()
+
+        recent_events = self.db.conn.execute(
+            """
+            SELECT e.created_at, e.event_type, e.issue_id
+            FROM events e
+            JOIN issues i ON i.id = e.issue_id
+            WHERE i.project = ?
+            ORDER BY e.id DESC
+            LIMIT 8
+            """,
+            (self.project_name,),
+        ).fetchall()
+
+        print(f"\nHive — {self.project_name} ({datetime.now().strftime('%H:%M:%S')})")
+        print(f"Workers: {len(self.db.get_active_agents())}/{Config.MAX_AGENTS}")
+        print(
+            f"Merge queue: {merge_stats.get('queued', 0)} queued, "
+            f"{merge_stats.get('running', 0)} running, "
+            f"{merge_stats.get('merged', 0)} merged, "
+            f"{merge_stats.get('failed', 0)} failed"
+        )
+
+        print(f"\n{'ISSUE':<14} {'STATUS':<12} {'AGENT':<16} {'ELAPSED':<10} TITLE")
+        print("-" * 90)
+        if not status_rows:
+            print("— no issues yet —")
+        for row in status_rows:
+            elapsed = self._elapsed_from(row["updated_at"])
+            print(f"{row['id']:<14} {row['status']:<12} {row['agent_name']:<16} {elapsed:<10} {row['title'][:38]}")
+
+        print("\nRecent events:")
+        if not recent_events:
+            print("  (none)")
+        else:
+            for event in reversed(recent_events):
+                issue = event["issue_id"] or "-"
+                ts = event["created_at"][-8:] if event["created_at"] else "--:--:--"
+                print(f"  [{ts}] {event['event_type']:<22} issue={issue}")
+
+    def _watch_dashboard(self, refresh_seconds: float = 2.0):
+        print("\nLive dashboard (Ctrl+C to exit; daemon keeps running)")
+        try:
+            while True:
+                self._print_dashboard_once()
+                time.sleep(refresh_seconds)
+        except KeyboardInterrupt:
+            print("\nStopped live dashboard. Daemon is still running.")
+
+    def start(self, foreground: bool = False, detach: bool = False, *, json_mode: bool = False):
         """Start the hive daemon."""
         if foreground:
             # Internal-only: used by the background daemon subprocess.
@@ -1229,9 +1426,15 @@ class HiveCLI:
             else:
                 print(f"Hive daemon already running (PID {status['pid']})")
                 print(f"  Log file: {status.get('log_file', 'N/A')}")
-                print("\n  hive stop        — stop the daemon")
-                print("  hive daemon logs — view daemon logs")
+                if detach:
+                    print("\n  hive stop        — stop the daemon")
+                    print("  hive daemon logs — view daemon logs")
+                else:
+                    self._watch_dashboard()
             return
+
+        if not json_mode:
+            self._print_cost_preview()
 
         # Start daemon as a detached subprocess
         started = daemon.start(db_path=self.db.db_path)
@@ -1243,9 +1446,12 @@ class HiveCLI:
             else:
                 print(f"Hive daemon started (PID {ds['pid']})")
                 print(f"  Log file: {ds.get('log_file', 'N/A')}")
-                print("\n  hive status      — check system status")
-                print("  hive stop        — stop the daemon")
-                print("  hive daemon logs — view daemon logs")
+                if detach:
+                    print("\n  hive status      — check system status")
+                    print("  hive stop        — stop the daemon")
+                    print("  hive daemon logs — view daemon logs")
+                else:
+                    self._watch_dashboard()
         else:
             if json_mode:
                 print(json.dumps({"error": "Failed to start daemon"}))
@@ -1332,6 +1538,18 @@ class HiveCLI:
 
     def queen(self, *, backend: str | None = None):
         """Launch Queen Bee TUI using the configured backend."""
+        daemon = self._make_daemon()
+        daemon_status = daemon.status()
+        if not daemon_status["running"]:
+            print("Starting daemon... ", end="", flush=True)
+            daemon.start(db_path=self.db.db_path)
+            daemon_status = daemon.status()
+            if daemon_status["running"]:
+                print(f"done (PID {daemon_status['pid']})")
+            else:
+                print("failed")
+                self._error("Failed to start daemon. Check `hive daemon logs`.")
+
         effective = backend or Config.BACKEND
         if effective == "claude":
             self._queen_claude()
@@ -1596,7 +1814,28 @@ class HiveCLI:
             sse_client.stop()
 
 
-def _do_setup(project_path: Path, project_name: str, *, json_mode: bool = False):
+def _read_prompt(prompt: str, default: str = "") -> str:
+    try:
+        raw = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    return raw if raw else default
+
+
+def _read_yes_no(prompt: str, default: bool) -> bool:
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    raw = _read_prompt(prompt + suffix, "").lower()
+    if not raw:
+        return default
+    if raw in ("y", "yes"):
+        return True
+    if raw in ("n", "no"):
+        return False
+    return default
+
+
+def _do_setup(project_path: Path, project_name: str, *, db: Database | None = None, json_mode: bool = False):
     """Interactive setup wizard for new Hive projects."""
     import shutil
 
@@ -1610,7 +1849,7 @@ def _do_setup(project_path: Path, project_name: str, *, json_mode: bool = False)
             "config_exists": target.exists(),
         }
         if not checks["config_exists"]:
-            target.write_text(f'[project]\nname = "{project_name}"\n\n[hive]\nbackend = "claude"\n')
+            target.write_text(f'[project]\nname = "{project_name}"\n\n[hive]\nbackend = "claude"\nmerge_queue_enabled = false\n')
             checks["config_created"] = str(target)
         print(json.dumps(checks))
         return
@@ -1635,32 +1874,57 @@ def _do_setup(project_path: Path, project_name: str, *, json_mode: bool = False)
         print("  Not a git repository — Hive requires git for worktrees")
         print("    Run: git init")
 
+    HiveCLI._print_cost_preview()
+
     print()
 
     # Check if config already exists
+    test_cmd = ""
+    lint_cmd = ""
+    conventions = ""
+    auto_merge = False
+
     if target.exists():
         print(f"  {target} already exists, skipping config creation.")
     else:
-        # Ask for test command
-        test_cmd = ""
-        try:
-            test_cmd = input("Test command (leave blank to skip): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
+        test_cmd = _read_prompt("Test command (leave blank to skip): ", "")
+        auto_merge = _read_yes_no("Enable auto-merge to main?", False)
+        lint_cmd = _read_prompt("Lint/format command (optional): ", "")
+        conventions = _read_prompt("Repo conventions note (optional): ", "")
 
         # Write config
         lines = [f'[project]\nname = "{project_name}"\n', '\n[hive]\nbackend = "claude"\n']
+        lines.append(f"merge_queue_enabled = {'true' if auto_merge else 'false'}\n")
         if test_cmd:
             lines.append(f'test_command = "{test_cmd}"\n')
         target.write_text("".join(lines))
         print(f"\n  Created {target}")
 
+    # Optional project-wide context note for workers
+    should_seed_note = _read_yes_no("Seed a project context note for workers?", True)
+    if should_seed_note and db is not None:
+        if not lint_cmd:
+            lint_cmd = _read_prompt("Lint/format command (optional): ", "")
+        if not conventions:
+            conventions = _read_prompt("Repo conventions note (optional): ", "")
+        note_lines = [f"Project: {project_name}"]
+        if test_cmd:
+            note_lines.append(f"Test command: {test_cmd}")
+        if lint_cmd:
+            note_lines.append(f"Lint command: {lint_cmd}")
+        if conventions:
+            note_lines.append(f"Conventions: {conventions}")
+        note_content = "\n".join(note_lines)
+        note_id = db.add_note(issue_id=None, agent_id=None, category="context", content=note_content)
+        print(f"  Added project context note #{note_id}")
+
     # Next steps
     print("\nNext steps:")
-    print("  1. hive create 'title' 'description'   — create an issue")
-    print("  2. hive start                           — start the daemon")
-    print("  3. hive status                          — check progress")
-    print("  4. hive queen                           — launch Queen Bee TUI")
+    print("  1. hive note 'shared context'          — add project guidance")
+    print("  2. hive create 'title' 'description'   — create an issue")
+    print("  3. hive start                           — start daemon + live dashboard")
+    print("  4. hive review                          — review done issues before finalize")
+    print("  5. hive queen                           — launch Queen Bee TUI")
 
 
 def _smart_noargs(cli: HiveCLI, project_path: Path, project_name: str, *, json_mode: bool = False):
@@ -1687,14 +1951,14 @@ def _smart_noargs(cli: HiveCLI, project_path: Path, project_name: str, *, json_m
             if not (project_path / ".hive.toml").exists():
                 print("  Get started:")
                 print("    1. hive setup                           — configure this project")
-                print("    2. hive create 'title' 'description'   — create an issue")
-                print("    3. hive start                           — start the daemon")
-                print("    4. hive status                          — check progress")
+                print("    2. hive note 'shared context'          — seed worker context")
+                print("    3. hive create 'title' 'description'   — create an issue")
+                print("    4. hive start                           — start daemon + dashboard")
             else:
                 print("  No issues yet. Get started:")
-                print("    1. hive create 'title' 'description'   — create an issue")
-                print("    2. hive start                           — start the daemon")
-                print("    3. hive status                          — check progress")
+                print("    1. hive note 'shared context'          — share repo conventions")
+                print("    2. hive create 'title' 'description'   — create an issue")
+                print("    3. hive start                           — start daemon + dashboard")
             print()
             print("  Run hive -h for all commands.")
         return
@@ -1711,31 +1975,46 @@ def _smart_noargs(cli: HiveCLI, project_path: Path, project_name: str, *, json_m
 _EPILOG = """\
 advanced commands:
   update, cancel, finalize, retry, escalate, molecule, dep, ready,
-  agents, agent, events, logs, merges, costs, stats, metrics,
-  daemon, watch, note, notes, ui
+  agent, costs, stats, metrics, daemon, note, notes, ui
 
 Run `hive <command> -h` for details on any command.
 """
 
 # Commands shown in `hive -h`
-_ESSENTIAL_COMMANDS = {"setup", "create", "list", "show", "status", "start", "stop", "queen", "doctor"}
+_ESSENTIAL_COMMANDS = {"setup", "create", "list", "show", "status", "review", "start", "stop", "queen", "doctor"}
+_MONITORING_COMMANDS = {"logs", "watch", "events", "agents", "merges"}
+
+
+_MONITORING_HELP = {
+    "logs": "Show event log (use -f to follow)",
+    "watch": "Watch a worker in real time",
+    "events": "Query event history",
+    "agents": "List agents and their status",
+    "merges": "Show merge queue",
+}
 
 
 class _HiveHelpFormatter(argparse.RawDescriptionHelpFormatter):
-    """Custom formatter that hides non-essential subcommands."""
+    """Custom formatter that shows essential + monitoring commands, hides the rest."""
 
     def _format_action(self, action):
         if isinstance(action, argparse._SubParsersAction):
-            # Filter choices to only essential commands
             orig_choices = action._choices_actions
+
+            # Essential commands only
             action._choices_actions = [a for a in orig_choices if a.dest in _ESSENTIAL_COMMANDS]
             result = super()._format_action(action)
             action._choices_actions = orig_choices
+
+            # Append monitoring section manually
+            lines = ["\nmonitoring:"]
+            for cmd in ("logs", "watch", "events", "agents", "merges"):
+                lines.append(f"    {cmd:<16s} {_MONITORING_HELP.get(cmd, '')}")
+            result += "\n".join(lines) + "\n"
             return result
         return super()._format_action(action)
 
     def _format_usage(self, usage, actions, groups, prefix):
-        # Override usage to not list all subcommand choices
         return super()._format_usage(usage, actions, groups, prefix)
 
 
@@ -1820,6 +2099,10 @@ def main():
     # show command
     show_parser = subparsers.add_parser("show", help="Show issue details")
     show_parser.add_argument("issue_id", help="Issue ID")
+
+    # review command
+    review_parser = subparsers.add_parser("review", help="Review done issues before finalizing")
+    review_parser.add_argument("--limit", type=int, default=20, help="Max issues to show (default: 20)")
 
     # update command (hidden — advanced)
     update_parser = subparsers.add_parser("update", help=argparse.SUPPRESS)
@@ -1959,7 +2242,13 @@ def main():
     )
 
     # top-level start/stop aliases (delegate to daemon start/stop)
-    subparsers.add_parser("start", help="Start the hive daemon")
+    start_parser = subparsers.add_parser("start", help="Start hive (live dashboard by default)")
+    start_parser.add_argument(
+        "-d",
+        "--detach",
+        action="store_true",
+        help="Run daemon in background and return immediately",
+    )
     subparsers.add_parser("stop", help="Stop the hive daemon")
 
     # queen command
@@ -2024,9 +2313,15 @@ def main():
     # Ensure ~/.hive/ directory exists
     Config.HIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Handle setup/init before DB (they don't need one)
+    # Handle setup/init with DB available for optional context note seeding.
     if args.command in ("setup", "init"):
-        _do_setup(project_path, project_name, json_mode=args.json_mode)
+        db_path = args.db or Config.DB_PATH
+        db = Database(db_path)
+        db.connect()
+        try:
+            _do_setup(project_path, project_name, db=db, json_mode=args.json_mode)
+        finally:
+            db.close()
         return
 
     # Resolve DB path: CLI flag > config
@@ -2070,6 +2365,9 @@ def main():
 
         elif args.command == "show":
             cli.show(args.issue_id, json_mode=json_mode)
+
+        elif args.command == "review":
+            cli.review(limit=args.limit, json_mode=json_mode)
 
         elif args.command == "update":
             cli.update(
@@ -2163,7 +2461,7 @@ def main():
             cli.metrics(model=args.model, tag=args.tag, issue_type=args.issue_type, json_mode=json_mode)
 
         elif args.command == "start":
-            cli.start(json_mode=json_mode)
+            cli.start(detach=args.detach, json_mode=json_mode)
 
         elif args.command == "stop":
             cli.stop(json_mode=json_mode)

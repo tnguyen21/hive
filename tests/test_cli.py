@@ -310,6 +310,76 @@ def test_cli_finalize_json(temp_db, tmp_path, capsys):
     assert data["status"] == "finalized"
 
 
+def test_cli_finalize_marks_merge_queue_merged(temp_db, tmp_path):
+    """Manual finalize should close queued merge entries for the issue."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue_id = temp_db.create_issue("To finalize", project=tmp_path.name)
+    temp_db.update_issue_status(issue_id, "done")
+    temp_db.conn.execute(
+        """
+        INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name, status)
+        VALUES (?, ?, ?, ?, ?, 'queued')
+        """,
+        (issue_id, "agent-1", tmp_path.name, str(tmp_path / ".worktrees" / "agent-1"), "agent/agent-1"),
+    )
+    temp_db.conn.commit()
+
+    cli.finalize(issue_id, resolution="manual review")
+
+    row = temp_db.conn.execute("SELECT status, completed_at FROM merge_queue WHERE issue_id = ?", (issue_id,)).fetchone()
+    assert row is not None
+    assert row["status"] == "merged"
+    assert row["completed_at"] is not None
+
+
+def test_cli_review_lists_done_issues(temp_db, tmp_path, capsys):
+    """Review command should show done issues with actionable git/finalize hints."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue_id = temp_db.create_issue("Ready for review", project=tmp_path.name)
+    temp_db.update_issue_status(issue_id, "done")
+    temp_db.conn.execute(
+        """
+        INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name, status)
+        VALUES (?, ?, ?, ?, ?, 'queued')
+        """,
+        (issue_id, "agent-2", tmp_path.name, str(tmp_path / ".worktrees" / "agent-2"), "agent/agent-2"),
+    )
+    temp_db.conn.commit()
+
+    cli.review()
+
+    captured = capsys.readouterr()
+    assert "Ready for review" in captured.out
+    assert "git -C" in captured.out
+    assert "hive finalize" in captured.out
+
+
+def test_cli_review_json(temp_db, tmp_path, capsys):
+    """Review command should support JSON output."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue_id = temp_db.create_issue("JSON review", project=tmp_path.name)
+    temp_db.update_issue_status(issue_id, "done")
+    temp_db.conn.execute(
+        """
+        INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name, status)
+        VALUES (?, ?, ?, ?, ?, 'queued')
+        """,
+        (issue_id, "agent-3", tmp_path.name, str(tmp_path / ".worktrees" / "agent-3"), "agent/agent-3"),
+    )
+    temp_db.conn.commit()
+
+    cli.review(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["count"] == 1
+    assert data["review"][0]["id"] == issue_id
+    assert "finalize_hint" in data["review"][0]
+
+
 def test_cli_retry(temp_db, tmp_path, capsys):
     """Test retrying a failed issue."""
     cli = HiveCLI(temp_db, str(tmp_path))
@@ -871,6 +941,7 @@ def test_setup_creates_config(tmp_path, capsys):
 
     config = (tmp_path / ".hive.toml").read_text()
     assert 'backend = "claude"' in config
+    assert "merge_queue_enabled = false" in config
     assert tmp_path.name in config
 
 
@@ -898,13 +969,23 @@ def test_setup_interactive_with_test_command(tmp_path, capsys, monkeypatch):
     # Make it look like a git repo
     (tmp_path / ".git").mkdir()
 
-    monkeypatch.setattr("builtins.input", lambda prompt: "pytest tests/")
+    responses = iter(
+        [
+            "pytest tests/",  # test command
+            "y",  # auto-merge enabled
+            "ruff check src tests",  # lint command
+            "Prefer typed functions",  # conventions
+            "n",  # don't seed note in this test
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
 
     _do_setup(tmp_path, tmp_path.name)
 
     config = (tmp_path / ".hive.toml").read_text()
     assert 'test_command = "pytest tests/"' in config
     assert 'backend = "claude"' in config
+    assert "merge_queue_enabled = true" in config
 
     captured = capsys.readouterr()
     assert "Next steps:" in captured.out
@@ -915,49 +996,49 @@ def test_setup_interactive_no_test_command(tmp_path, capsys, monkeypatch):
     """Test interactive setup with blank test command."""
     from hive.cli import _do_setup
 
-    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    responses = iter(
+        [
+            "",  # test command
+            "",  # auto-merge default (no)
+            "",  # lint command
+            "",  # conventions
+            "n",  # skip note
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
 
     _do_setup(tmp_path, tmp_path.name)
 
     config = (tmp_path / ".hive.toml").read_text()
     assert "test_command" not in config
     assert 'backend = "claude"' in config
+    assert "merge_queue_enabled = false" in config
+
+
+def test_setup_interactive_seeds_context_note(temp_db, tmp_path, monkeypatch):
+    """Setup can seed a project-wide context note used by workers."""
+    from hive.cli import _do_setup
+
+    responses = iter(
+        [
+            "pytest -q",  # test command
+            "",  # auto-merge default (no)
+            "ruff check src tests",  # lint command
+            "Run tests before commit",  # conventions
+            "y",  # seed context note
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+
+    _do_setup(tmp_path, tmp_path.name, db=temp_db)
+
+    notes = temp_db.get_notes(category="context")
+    assert len(notes) == 1
+    assert "Test command: pytest -q" in notes[0]["content"]
+    assert "Lint command: ruff check src tests" in notes[0]["content"]
 
 
 # ── Two-tier help tests ─────────────────────────────────────────
-
-
-def test_help_shows_essential_commands(capsys):
-    """Test that hive -h shows only essential commands."""
-
-    with pytest.raises(SystemExit) as exc_info:
-        from hive.cli import main
-
-        import sys
-
-        sys.argv = ["hive", "-h"]
-        main()
-
-    assert exc_info.value.code == 0
-    captured = capsys.readouterr()
-
-    # Essential commands should be visible
-    for cmd in ("setup", "create", "list", "show", "status", "start", "stop", "queen", "doctor"):
-        assert cmd in captured.out
-
-    # Hidden commands should NOT appear in the main listing
-    # (they're only in the epilog)
-    lines = captured.out.split("\n")
-    main_section = []
-    for line in lines:
-        if "advanced commands:" in line:
-            break
-        main_section.append(line)
-    main_text = "\n".join(main_section)
-
-    for cmd in ("molecule", "agents", "merges", "costs", "metrics"):
-        # These should only appear in the epilog, not in the main command listing
-        assert cmd not in main_text or cmd in ("status",)  # status is essential
 
 
 def test_hidden_commands_in_epilog(capsys):
@@ -973,6 +1054,85 @@ def test_hidden_commands_in_epilog(capsys):
     captured = capsys.readouterr()
     assert "advanced commands:" in captured.out
     assert "hive <command> -h" in captured.out
+
+
+def test_help_shows_review_and_monitoring(capsys):
+    """Main help should include review and monitoring commands."""
+    with pytest.raises(SystemExit):
+        import sys
+
+        sys.argv = ["hive", "-h"]
+        from hive.cli import main
+
+        main()
+
+    captured = capsys.readouterr()
+    assert "review" in captured.out
+    assert "monitoring:" in captured.out
+    assert "logs" in captured.out
+    assert "watch" in captured.out
+
+
+def test_start_detach_does_not_attach_dashboard(temp_db, tmp_path):
+    """`hive start -d` should not attach live dashboard."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    daemon = unittest.mock.Mock()
+    daemon.status.side_effect = [
+        {"running": False, "pid": None},
+        {"running": True, "pid": 1234, "log_file": "/tmp/hive.log"},
+    ]
+    daemon.start.return_value = True
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=daemon),
+        unittest.mock.patch.object(cli, "_watch_dashboard") as watch_dashboard,
+    ):
+        cli.start(detach=True)
+
+    daemon.start.assert_called_once()
+    watch_dashboard.assert_not_called()
+
+
+def test_start_default_attaches_dashboard(temp_db, tmp_path):
+    """`hive start` should attach live dashboard by default."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    daemon = unittest.mock.Mock()
+    daemon.status.side_effect = [
+        {"running": False, "pid": None},
+        {"running": True, "pid": 5678, "log_file": "/tmp/hive.log"},
+    ]
+    daemon.start.return_value = True
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=daemon),
+        unittest.mock.patch.object(cli, "_watch_dashboard") as watch_dashboard,
+    ):
+        cli.start()
+
+    watch_dashboard.assert_called_once()
+
+
+def test_queen_auto_starts_daemon(temp_db, tmp_path):
+    """`hive queen` should start daemon when not running."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    daemon = unittest.mock.Mock()
+    daemon.status.side_effect = [
+        {"running": False, "pid": None},
+        {"running": True, "pid": 9012},
+    ]
+    daemon.start.return_value = True
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=daemon),
+        unittest.mock.patch.object(cli, "_queen_claude") as queen_claude,
+    ):
+        cli.queen(backend="claude")
+
+    daemon.start.assert_called_once()
+    queen_claude.assert_called_once()
 
 
 # ── Smart no-args tests ────────────────────────────────────────

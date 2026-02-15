@@ -1,250 +1,147 @@
-# Hive: Lightweight Multi-Agent Orchestrator
+# Hive: Multi-Agent Coding Orchestrator
 
-A multi-agent orchestration system that coordinates parallel AI coding agents using SQLite as the work queue. Uses Claude Code CLI with your Pro/Max subscription — no API key needed.
+Hive coordinates parallel coding workers against a shared issue queue, then helps you review and finalize work.
 
-## Quick Start
+## Quick Start (5 minutes)
 
 ```bash
 # Install
-cd your-project && pip install -e path/to/hive
-
-# Set up and run
-hive setup                                          # configure project
-hive create "Add user auth" "Implement JWT login"   # create an issue
-hive start                                          # start the daemon
-hive status                                         # check progress
-```
-
-The daemon spawns worker agents that implement tasks in isolated git worktrees, then merges results back to main.
-
-## Overview
-
-Hive coordinates multiple AI coding agents working concurrently on a codebase. It handles:
-
-- **Strategic decomposition**: The Queen Bee agent breaks down user requests into concrete work items
-- **Parallel execution**: Multiple worker agents execute tasks concurrently in isolated git worktrees
-- **Dependency management**: Issues are queued and dispatched based on dependency resolution
-- **Multi-step workflows**: Molecules enable sequential workflows where one agent handles multiple related steps
-- **Autonomous operation**: Permission unblocker keeps workers running without human intervention
-- **Merge pipeline**: Two-tier done→finalized pipeline (mechanical fast-path + Refinery LLM for conflicts)
-- **Three-tier model config**: Queen (Opus), Workers (Sonnet), Refinery (Sonnet), with per-issue overrides
-
-## Architecture
-
-```
-Human ←→ Queen Bee TUI (interactive Claude CLI session, Opus)
-              ↓ (hive CLI commands)
-         SQLite DB ←── Issues, deps, events, model config
-              ↓
-         Daemon (orchestrator loop)
-              ↓ pluggable backend:
-              ↓   claude (default): WebSocket to Claude CLI processes (subscription billing)
-              ↓   opencode: HTTP/SSE to OpenCode server (API billing)
-              ↓
-         Worker Sessions (Sonnet) → git worktrees
-              ↓
-         Merge Queue → Mechanical rebase/merge OR Refinery LLM (Sonnet) → main branch
-```
-
-### Key Components
-
-| Component | Role |
-|-----------|------|
-| **Queen Bee** | Interactive Claude CLI session that decomposes user requests into issues via `hive` CLI |
-| **Daemon** | Background orchestrator that polls the ready queue, spawns workers, detects completion, processes merges |
-| **Workers** | Ephemeral coding agents (Sonnet by default) that implement features, fix bugs, write tests |
-| **Refinery** | LLM merge processor (Sonnet) for conflict resolution and test failure diagnosis |
-| **SQLite DB** | Single source of truth for issues, dependencies, agents, events |
-| **Git Worktrees** | Per-agent sandboxes for isolated development |
-
-## Installation
-
-### Prerequisites
-
-1. **Git 2.20+** — worktrees require a reasonably modern git
-2. **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** with an active Pro/Max subscription
-3. **Python 3.12+** and [uv](https://docs.astral.sh/uv/) (recommended)
-4. **A git repository** to run Hive in
-
-```bash
-# Install Claude Code (if you haven't already)
-# Native installer (recommended):
-curl -fsSL https://claude.ai/install.sh | bash
-# Or via npm: npm install -g @anthropic-ai/claude-code
-```
-
-### Install Hive
-
-```bash
 cd hive
-
-# Install with uv (recommended)
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -e ".[dev]"
+
+# In your project repo
+hive setup
+hive create "Add user auth" "Implement JWT login flow"
+hive start            # live dashboard by default
 ```
 
-## Usage
-
-### Launch the Queen Bee
-
-The Queen Bee is an interactive session that decomposes your requests into issues, wires dependencies, and monitors progress:
+If you prefer background mode:
 
 ```bash
-hive queen
+hive start -d
 ```
 
-### Or manage issues directly
+## When To Use Hive vs Claude Code
+
+| Task | Just use Claude Code | Use Hive |
+|---|---|---|
+| Small bug fix in one area | Yes | - |
+| Single focused feature | Yes | - |
+| Feature + tests + docs + migration | - | Yes |
+| Refactor across multiple modules | - | Yes |
+| Spec that naturally splits into subtasks | - | Yes |
+
+Rule of thumb: if you would split the work anyway, Hive is usually the better fit.
+
+## Three Core Concepts
+
+| Concept | What it means |
+|---|---|
+| Queen | Your project manager session (`hive queen`) |
+| Workers | Parallel implementers running in isolated worktrees |
+| Issues | The task board stored in SQLite |
+
+You can ignore deeper internals on day one.
+
+## Setup Defaults (Safety First)
+
+`hive setup` now guides you through:
+
+- test command for merge/review validation
+- auto-merge setting (`merge_queue_enabled`), defaulting to manual review mode
+- optional project context note seeding (test command, lint command, repo conventions)
+
+Manual review mode keeps completed issues in `done` until you explicitly finalize.
+
+## Core Workflow
 
 ```bash
-# Create issues
-hive create "Add user authentication" "Implement JWT-based auth" --priority 1
-hive create "Write auth tests" --priority 2
+# create work
+hive create "Title" "Description"
 
-# Wire dependencies
-hive dep add <test-issue-id> <auth-issue-id>
+# run orchestrator
+hive start          # foreground live dashboard
+hive start -d       # detached background daemon
 
-# Monitor
+# inspect progress
 hive status
-hive list
-hive logs -f
+hive review         # done but not finalized, with diff/merge/finalize hints
+hive finalize <issue-id> --resolution "manual review complete"
+
+# optional Queen workflow
+hive queen          # auto-starts daemon if needed
 ```
 
-The daemon picks up ready issues automatically and assigns them to workers.
+## Notes Are First-Class Context
 
-## CLI Reference
+Use notes to encode project conventions for all future workers:
 
-Essential commands (run `hive <command> -h` for details on any command):
-
-| Command | Description |
-|---------|-------------|
-| `hive setup` | Interactive project setup wizard |
-| `hive create <title> [desc]` | Create a new issue |
-| `hive list [--status S]` | List issues with sorting/filtering |
-| `hive show <id>` | Show issue details, deps, and events |
-| `hive status` | System overview (issue counts, workers, queues) |
-| `hive start` | Start the hive daemon |
-| `hive stop` | Stop the hive daemon |
-| `hive queen` | Launch Queen Bee interactive session |
-| `hive doctor` | Run system health checks |
-
-### Global Options
-
-```
---db PATH          Database path (default: ~/.hive/hive.db)
---project PATH     Project directory (auto-detected from git)
---json             Output JSON (for programmatic use)
+```bash
+hive note "Run ruff check and pytest before committing" --category context
+hive notes
 ```
 
-### Advanced Commands
+Workers automatically receive relevant project notes in their prompt context.
 
-All commands below are fully functional — they're just not shown in `hive -h` to keep it clean:
+## Cost Visibility
 
-`update`, `cancel`, `finalize`, `retry`, `escalate`, `molecule`, `dep`, `ready`, `agents`, `agent`, `events`, `logs`, `merges`, `costs`, `stats`, `metrics`, `daemon`, `watch`, `note`, `notes`, `ui`
+Before startup, Hive shows a short cost preview based on your configured worker concurrency.
+
+Guideline for first runs:
+
+- start with lower concurrency (for example, 3 workers)
+- validate your workflow and review loop
+- then scale up
+
+## Essential Commands
+
+- `hive setup` - interactive setup wizard
+- `hive create` - create an issue
+- `hive list` - list issues
+- `hive show` - show issue details
+- `hive status` - system overview
+- `hive review` - review done issues before finalize
+- `hive start` - start daemon + live dashboard
+- `hive stop` - stop daemon
+- `hive queen` - launch Queen session
+- `hive doctor` - health checks
+
+Monitoring commands are also visible in `hive -h`: `logs`, `watch`, `events`, `agents`, `merges`.
 
 ## Configuration
 
-```bash
-# Backend selection (default: claude)
-export HIVE_BACKEND=claude                 # "claude" (default) or "opencode"
+Configuration resolution order:
 
-# Concurrency
-export HIVE_MAX_AGENTS=10                  # Max concurrent workers (default: 10)
+1. built-in defaults
+2. `~/.hive/config.toml`
+3. `.hive.toml`
+4. environment variables
 
-# Claude backend
-export HIVE_CLAUDE_WS_HOST=127.0.0.1      # WS server bind address (default: 127.0.0.1)
-export HIVE_CLAUDE_WS_PORT=8765           # WS server port (default: 8765)
-export HIVE_CLAUDE_WS_MAX_CONCURRENT=3    # Max concurrent CLI processes (default: 3)
+Key settings:
 
-# Models (three-tier)
-export HIVE_DEFAULT_MODEL=claude-opus-4-6              # Queen/system (default)
-export HIVE_WORKER_MODEL=claude-sonnet-4-5-20250929    # Workers
-export HIVE_REFINERY_MODEL=claude-opus-4-6             # Merge refinery
+- `HIVE_BACKEND` (`claude` or `opencode`)
+- `HIVE_MAX_AGENTS`
+- `HIVE_TEST_COMMAND`
+- `HIVE_MERGE_QUEUE_ENABLED`
+- model settings (`HIVE_DEFAULT_MODEL`, `HIVE_WORKER_MODEL`, `HIVE_REFINERY_MODEL`)
 
-# Per-issue override (via CLI)
-# hive create "title" "desc" --model claude-opus-4-6
+Global DB default remains `~/.hive/hive.db` unless overridden.
 
-# Merge queue
-export HIVE_TEST_COMMAND="pytest tests/"   # Test command for merge gate (optional)
-export HIVE_MERGE_QUEUE_ENABLED=true       # Enable/disable merge queue
-```
+## Architecture And Internals
 
-Configuration is layered: defaults → `~/.hive/config.toml` → `.hive.toml` → environment variables. Use `hive setup` to create a project config, or set env vars for quick overrides.
+For deep internals, orchestration design, schema, and implementation details, see:
 
-### Alternative: OpenCode Backend
-
-For API billing via an OpenCode server instead of subscription credits:
-
-```bash
-export HIVE_BACKEND=opencode
-export OPENCODE_URL=http://127.0.0.1:4096
-export OPENCODE_SERVER_PASSWORD=secret     # if auth enabled
-
-# Start OpenCode server first, then:
-hive start
-```
-
-## How It Works
-
-### Workflow
-
-1. **User talks to the Queen Bee** (or creates issues directly via CLI)
-2. **Queen Bee decomposes requests** into issues with dependencies using `hive` CLI commands
-3. **Daemon polls ready queue** for issues with no unresolved dependencies
-4. **Worker spawned** for each ready issue:
-   - Creates git worktree (`.worktrees/<agent-name>`)
-   - Spawns Claude CLI process connected via WebSocket
-   - Sends worker prompt with task description
-5. **Worker executes autonomously**:
-   - Reads code, makes changes, runs tests
-   - Commits work to branch (`agent/<agent-name>`)
-   - Writes `.hive-result.jsonl` file to worktree root (structured completion data)
-6. **Daemon detects completion** (dual strategy):
-   - WS event: `session.status → idle` (sub-second)
-   - Session polling: fallback (catches missed events)
-7. **Daemon assesses and merges**:
-   - Reads `.hive-result.jsonl` for structured completion data
-   - Success: marks issue `done`, enqueues to merge queue
-   - Merge queue: mechanical rebase → test → ff-merge, or Refinery LLM for conflicts
-   - On merge success: issue → `finalized`, worktree cleaned up, session killed
-   - Failure: marks `failed`, retries or escalates
-8. **Session cycling for molecules**:
-   - After completing a step, checks for next ready step
-   - Auto-advances through sequential workflow
-
-### Issue States
-
-```
-open → in_progress → done → finalized
-                      ↓
-                    failed (retryable)
-
-Special states:
-- blocked: Waiting on dependencies
-- escalated: Human intervention needed
-- canceled: Abandoned
-```
+- `docs/TECHNICAL_DESIGN_DOC.md`
 
 ## Development
 
-### Setup
-
 ```bash
-uv venv --python 3.12
-source .venv/bin/activate
-uv pip install -e ".[dev]"
-```
+# tests
+uv run pytest
 
-### Running Tests
-
-```bash
-uv run pytest                  # unit tests
-uv run pytest -m integration   # integration tests (requires backend)
-```
-
-### Linting & Formatting
-
-```bash
+# lint + format
 uvx ruff check src/ tests/
 uvx ruff format --line-length 144 src/ tests/
 ```
