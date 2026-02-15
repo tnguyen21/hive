@@ -41,6 +41,16 @@
           "sql": "SELECT n.id, n.category, n.content, n.created_at, i.title as issue_title, a.name as agent_name FROM notes n LEFT JOIN issues i ON n.issue_id = i.id LEFT JOIN agents a ON n.agent_id = a.id ORDER BY n.created_at DESC LIMIT 200",
           "title": "Notes Browser",
           "description": "All worker notes with context"
+        },
+        "agent-runs-metrics": {
+          "sql": "SELECT ar.model, ar.issue_type, ar.outcome, COUNT(*) as run_count, ROUND(AVG(ar.duration_s), 1) as avg_duration_s, ROUND(AVG(ar.retry_count), 1) as avg_retries, ROUND(AVG(ar.notes_injected), 1) as avg_notes_injected, ROUND(AVG(ar.notes_produced), 1) as avg_notes_produced FROM agent_runs ar GROUP BY ar.model, ar.issue_type, ar.outcome ORDER BY ar.model, ar.issue_type, ar.outcome",
+          "title": "Agent Runs Metrics",
+          "description": "Aggregated metrics per model, issue type, and outcome from agent_runs view"
+        },
+        "agent-runs-recent": {
+          "sql": "SELECT ar.agent_id, ar.issue_id, ar.model, ar.issue_type, ar.outcome, ar.duration_s, ar.retry_count, ar.notes_injected, ar.notes_produced, ar.started_at, ar.ended_at FROM agent_runs ar ORDER BY ar.started_at DESC LIMIT 100",
+          "title": "Recent Agent Runs",
+          "description": "Most recent 100 agent runs with full details"
         }
       }
     }

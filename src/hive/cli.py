@@ -1079,6 +1079,66 @@ class HiveCLI:
                 f"{model_name:<35} {group_val:<15} {r.get('issue_count', 0):>6} {r.get('successes', 0):>4} {r.get('failures', 0):>4} {r.get('total_retries', 0):>7} {r.get('avg_duration_minutes', 0):>8}"
             )
 
+    def metrics(self, model=None, tag=None, issue_type=None, json_mode=False):
+        """Show aggregated agent run metrics."""
+        results = self.db.get_metrics(model=model, tag=tag, issue_type=issue_type)
+
+        if json_mode:
+            # Calculate summary stats for JSON output
+            total_runs = sum(r["runs"] for r in results)
+            total_escalations = sum(r["escalated_count"] for r in results)
+            escalation_rate = round(100.0 * total_escalations / total_runs, 1) if total_runs > 0 else 0
+
+            # Calculate mean time to resolution (weighted average by run count)
+            total_duration_weighted = sum(r["avg_duration_s"] * r["runs"] for r in results if r["avg_duration_s"])
+            mean_duration_s = total_duration_weighted / total_runs if total_runs > 0 else 0
+            mean_duration_m = round(mean_duration_s / 60, 1)
+
+            output = {
+                "metrics": results,
+                "summary": {
+                    "escalation_rate": escalation_rate,
+                    "mean_time_to_resolution_minutes": mean_duration_m,
+                    "total_runs": total_runs,
+                },
+            }
+            print(json.dumps(output, default=str))
+            return
+
+        if not results:
+            print("No metrics data yet.")
+            return
+
+        # Format duration in minutes for display
+        for r in results:
+            if r["avg_duration_s"]:
+                r["avg_duration_m"] = round(r["avg_duration_s"] / 60, 1)
+            else:
+                r["avg_duration_m"] = 0
+
+        print(f"{'Model':<35} {'Runs':>5} {'Success%':>9} {'Avg Duration':>12} {'Avg Retries':>12} {'Merge Health':>12}")
+        print("-" * 95)
+        for r in results:
+            model_name = (r.get("model") or "unknown")[:34]
+            success_pct = f"{r.get('success_rate', 0):.1f}%"
+            avg_dur = f"{r.get('avg_duration_m', 0):.1f}m"
+            avg_ret = f"{r.get('avg_retries', 0):.1f}"
+            merge_health = f"{r.get('merge_health', 0):.1f}%" if r.get("merge_health") is not None else "N/A"
+            print(f"{model_name:<35} {r.get('runs', 0):>5} {success_pct:>9} {avg_dur:>12} {avg_ret:>12} {merge_health:>12}")
+
+        # Summary line
+        total_runs = sum(r["runs"] for r in results)
+        total_escalations = sum(r["escalated_count"] for r in results)
+        escalation_rate = round(100.0 * total_escalations / total_runs, 1) if total_runs > 0 else 0
+
+        # Calculate mean time to resolution (weighted average by run count)
+        total_duration_weighted = sum(r["avg_duration_s"] * r["runs"] for r in results if r["avg_duration_s"])
+        mean_duration_s = total_duration_weighted / total_runs if total_runs > 0 else 0
+        mean_duration_m = round(mean_duration_s / 60, 1)
+
+        print()
+        print(f"Escalation rate: {escalation_rate}% | Mean time to resolution: {mean_duration_m}m")
+
     # ── Web UI ────────────────────────────────────────────────────────
 
     def ui(self, port: int = 8001, host: str = "127.0.0.1"):
@@ -1638,6 +1698,12 @@ def main():
     stats_parser.add_argument("--tag", type=str, help="Filter by tag")
     stats_parser.add_argument("--by-type", action="store_true", help="Group by issue type instead of tag")
 
+    # metrics command
+    metrics_parser = subparsers.add_parser("metrics", help="Show agent run metrics")
+    metrics_parser.add_argument("--model", type=str, help="Filter by model name")
+    metrics_parser.add_argument("--tag", type=str, help="Filter by tag")
+    metrics_parser.add_argument("--type", dest="issue_type", type=str, help="Filter by issue type")
+
     # daemon command
     daemon_parser = subparsers.add_parser("daemon", help="Manage orchestrator daemon")
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", help="Daemon command")
@@ -1862,6 +1928,9 @@ def main():
         elif args.command == "stats":
             group_by = "type" if args.by_type else "tag"
             cli.stats(model=args.model, tag=args.tag, group_by=group_by, json_mode=json_mode)
+
+        elif args.command == "metrics":
+            cli.metrics(model=args.model, tag=args.tag, issue_type=args.issue_type, json_mode=json_mode)
 
         elif args.command == "start":
             cli.start(json_mode=json_mode)

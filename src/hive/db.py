@@ -163,6 +163,35 @@ CREATE INDEX IF NOT EXISTS idx_mq_status ON merge_queue(status);
 CREATE INDEX IF NOT EXISTS idx_mq_project ON merge_queue(project);
 
 ----------------------------------------------------------------------
+-- AGENT_RUNS: Materialized view over events for per-agent-run metrics
+----------------------------------------------------------------------
+CREATE VIEW IF NOT EXISTS agent_runs AS
+SELECT
+    e_start.agent_id,
+    e_start.issue_id,
+    i.type as issue_type,
+    COALESCE(i.model, 'unknown') as model,
+    i.tags,
+    CASE
+        WHEN e_done.id IS NOT NULL THEN 'done'
+        WHEN e_fail.id IS NOT NULL THEN 'failed'
+        WHEN e_esc.id IS NOT NULL THEN 'escalated'
+        ELSE 'unknown'
+    END as outcome,
+    ROUND((julianday(COALESCE(e_done.created_at, e_fail.created_at, e_esc.created_at)) - julianday(e_start.created_at)) * 86400, 1) as duration_s,
+    (SELECT COUNT(*) FROM events er WHERE er.issue_id = e_start.issue_id AND er.event_type = 'retry') as retry_count,
+    (SELECT COUNT(*) FROM events en WHERE en.agent_id = e_start.agent_id AND en.event_type = 'notes_harvested') as notes_produced,
+    (SELECT COUNT(*) FROM events eni WHERE eni.agent_id = e_start.agent_id AND eni.event_type = 'notes_injected') as notes_injected,
+    e_start.created_at as started_at,
+    COALESCE(e_done.created_at, e_fail.created_at, e_esc.created_at) as ended_at
+FROM events e_start
+JOIN issues i ON e_start.issue_id = i.id
+LEFT JOIN events e_done ON e_start.agent_id = e_done.agent_id AND e_done.event_type = 'completed'
+LEFT JOIN events e_fail ON e_start.agent_id = e_fail.agent_id AND e_fail.event_type IN ('status_failed')
+LEFT JOIN events e_esc ON e_start.issue_id = e_esc.issue_id AND e_esc.event_type = 'escalated'
+WHERE e_start.event_type = 'worker_started';
+
+----------------------------------------------------------------------
 
 """
 
@@ -249,6 +278,36 @@ class Database:
             except sqlite3.Error as e:
                 if "duplicate column name" not in str(e).lower():
                     raise
+
+        # Create agent_runs view (views aren't created by executescript on all SQLite versions)
+        self.conn.execute("""
+CREATE VIEW IF NOT EXISTS agent_runs AS
+SELECT
+    e_start.agent_id,
+    e_start.issue_id,
+    i.type as issue_type,
+    COALESCE(i.model, 'unknown') as model,
+    i.tags,
+    CASE
+        WHEN e_done.id IS NOT NULL THEN 'done'
+        WHEN e_fail.id IS NOT NULL THEN 'failed'
+        WHEN e_esc.id IS NOT NULL THEN 'escalated'
+        ELSE 'unknown'
+    END as outcome,
+    ROUND((julianday(COALESCE(e_done.created_at, e_fail.created_at, e_esc.created_at)) - julianday(e_start.created_at)) * 86400, 1) as duration_s,
+    (SELECT COUNT(*) FROM events er WHERE er.issue_id = e_start.issue_id AND er.event_type = 'retry') as retry_count,
+    (SELECT COUNT(*) FROM events en WHERE en.agent_id = e_start.agent_id AND en.event_type = 'notes_harvested') as notes_produced,
+    (SELECT COUNT(*) FROM events eni WHERE eni.agent_id = e_start.agent_id AND eni.event_type = 'notes_injected') as notes_injected,
+    e_start.created_at as started_at,
+    COALESCE(e_done.created_at, e_fail.created_at, e_esc.created_at) as ended_at
+FROM events e_start
+JOIN issues i ON e_start.issue_id = i.id
+LEFT JOIN events e_done ON e_start.agent_id = e_done.agent_id AND e_done.event_type = 'completed'
+LEFT JOIN events e_fail ON e_start.agent_id = e_fail.agent_id AND e_fail.event_type IN ('status_failed')
+LEFT JOIN events e_esc ON e_start.issue_id = e_esc.issue_id AND e_esc.event_type = 'escalated'
+WHERE e_start.event_type = 'worker_started'
+        """)
+        self.conn.commit()
 
     def create_issue(
         self,
@@ -1128,3 +1187,96 @@ class Database:
 
         cursor = self.conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_metrics(
+        self,
+        model: Optional[str] = None,
+        tag: Optional[str] = None,
+        issue_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get aggregated metrics from agent_runs view.
+
+        Args:
+            model: Filter to a specific model name.
+            tag: Filter to issues containing this tag.
+            issue_type: Filter to a specific issue type.
+
+        Returns:
+            List of dicts with aggregated metrics per model:
+            - model: Model name
+            - runs: Total number of runs
+            - success_count: Number of successful runs
+            - failed_count: Number of failed runs
+            - escalated_count: Number of escalated runs
+            - success_rate: Success percentage
+            - avg_duration_s: Average duration in seconds
+            - avg_retries: Average retry count
+            - merge_health: Percentage of runs with clean merge (tests_passed / (tests_passed + test_failure + rebase_conflict))
+        """
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
+        query = """
+            SELECT
+                ar.model,
+                COUNT(*) as runs,
+                SUM(CASE WHEN ar.outcome = 'done' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN ar.outcome = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                SUM(CASE WHEN ar.outcome = 'escalated' THEN 1 ELSE 0 END) as escalated_count,
+                ROUND(100.0 * SUM(CASE WHEN ar.outcome = 'done' THEN 1 ELSE 0 END) / COUNT(*), 1) as success_rate,
+                ROUND(AVG(ar.duration_s), 1) as avg_duration_s,
+                ROUND(AVG(ar.retry_count), 1) as avg_retries
+            FROM agent_runs ar
+            WHERE 1=1
+        """
+        params: list = []
+
+        if model:
+            query += " AND ar.model = ?"
+            params.append(model)
+        if tag:
+            query += " AND ar.tags LIKE ?"
+            params.append(f'%"{tag}"%')
+        if issue_type:
+            query += " AND ar.issue_type = ?"
+            params.append(issue_type)
+
+        query += " GROUP BY ar.model ORDER BY runs DESC"
+
+        cursor = self.conn.execute(query, params)
+        results = [dict(row) for row in cursor.fetchall()]
+
+        # Add merge health calculation per model
+        for result in results:
+            model_name = result["model"]
+            # Count merge-related events for issues run by this model
+            merge_query = """
+                SELECT
+                    SUM(CASE WHEN e.event_type = 'tests_passed' THEN 1 ELSE 0 END) as tests_passed,
+                    SUM(CASE WHEN e.event_type = 'test_failure' THEN 1 ELSE 0 END) as test_failure,
+                    SUM(CASE WHEN e.event_type = 'rebase_conflict' THEN 1 ELSE 0 END) as rebase_conflict
+                FROM events e
+                JOIN agent_runs ar ON e.issue_id = ar.issue_id
+                WHERE ar.model = ?
+            """
+            merge_params = [model_name]
+            if tag:
+                merge_query += " AND ar.tags LIKE ?"
+                merge_params.append(f'%"{tag}"%')
+            if issue_type:
+                merge_query += " AND ar.issue_type = ?"
+                merge_params.append(issue_type)
+
+            cursor = self.conn.execute(merge_query, merge_params)
+            merge_row = cursor.fetchone()
+            tests_passed = merge_row["tests_passed"] or 0
+            test_failure = merge_row["test_failure"] or 0
+            rebase_conflict = merge_row["rebase_conflict"] or 0
+            total_merge_events = tests_passed + test_failure + rebase_conflict
+
+            if total_merge_events > 0:
+                result["merge_health"] = round(100.0 * tests_passed / total_merge_events, 1)
+            else:
+                result["merge_health"] = None
+
+        return results

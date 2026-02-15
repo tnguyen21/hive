@@ -700,6 +700,8 @@ class Orchestrator:
 
             # Gather notes for worker context
             worker_notes = self._gather_notes_for_worker(issue_id)
+            if worker_notes:
+                self.db.log_event(issue_id, agent_id, "notes_injected", {"count": len(worker_notes)})
 
             # Build retry context
             retry_context = build_retry_context(self.db, issue_id)
@@ -1286,6 +1288,8 @@ class Orchestrator:
 
             # Gather notes and completed steps for context
             worker_notes = self._gather_notes_for_worker(next_step["id"])
+            if worker_notes:
+                self.db.log_event(next_step["id"], agent.agent_id, "notes_injected", {"count": len(worker_notes)})
             completed_steps = None
             if next_step.get("parent_id"):
                 completed_issues = self.db.get_completed_molecule_steps(next_step["parent_id"])
