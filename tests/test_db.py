@@ -1040,3 +1040,92 @@ def test_notes_database_not_connected_error(temp_db):
 
     with pytest.raises(RuntimeError, match="Database not connected"):
         temp_db.get_recent_project_notes()
+
+
+# --- Model performance tests ---
+
+
+@pytest.fixture
+def db_with_model_events(temp_db):
+    """Create a DB with issues and model events for performance testing."""
+    db = temp_db
+
+    # Issue 1: completed with sonnet, tagged python+bugfix
+    id1 = db.create_issue(title="Fix login", project="test", issue_type="bug", tags=["python", "bugfix"])
+    db.log_event(id1, None, "worker_started", {"model": "claude-sonnet-4-5-20250929"})
+    db.log_event(id1, None, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
+    db.log_event(id1, None, "completed", {"model": "claude-sonnet-4-5-20250929"})
+    db.conn.execute("UPDATE issues SET status = 'done' WHERE id = ?", (id1,))
+
+    # Issue 2: failed with opus, tagged javascript+feature
+    id2 = db.create_issue(title="Add dashboard", project="test", issue_type="feature", tags=["javascript", "feature"])
+    db.log_event(id2, None, "worker_started", {"model": "claude-opus-4-6"})
+    db.log_event(id2, None, "tokens_used", {"input_tokens": 2000, "output_tokens": 800})
+    db.log_event(id2, None, "incomplete", {"model": "claude-opus-4-6"})
+    db.conn.execute("UPDATE issues SET status = 'failed' WHERE id = ?", (id2,))
+
+    # Issue 3: completed with sonnet, tagged javascript
+    id3 = db.create_issue(title="Fix button", project="test", issue_type="bug", tags=["javascript"])
+    db.log_event(id3, None, "worker_started", {"model": "claude-sonnet-4-5-20250929"})
+    db.log_event(id3, None, "completed", {"model": "claude-sonnet-4-5-20250929"})
+    db.conn.execute("UPDATE issues SET status = 'done' WHERE id = ?", (id3,))
+
+    # Issue 4: no tags
+    id4 = db.create_issue(title="Misc task", project="test", issue_type="task")
+    db.log_event(id4, None, "worker_started", {"model": "claude-opus-4-6"})
+    db.log_event(id4, None, "completed", {"model": "claude-opus-4-6"})
+    db.conn.execute("UPDATE issues SET status = 'done' WHERE id = ?", (id4,))
+
+    db.conn.commit()
+    return db
+
+
+def test_model_performance_extracts_model_from_events(db_with_model_events):
+    """Model should come from events, not the (ephemeral) agents table."""
+    results = db_with_model_events.get_model_performance(group_by="type")
+    models = {r["model"] for r in results}
+    assert "claude-sonnet-4-5-20250929" in models
+    assert "claude-opus-4-6" in models
+    assert None not in models
+
+
+def test_model_performance_group_by_tag(db_with_model_events):
+    """Default grouping should be by tag, with json_each explosion."""
+    results = db_with_model_events.get_model_performance(group_by="tag")
+    tags = {r["tag"] for r in results}
+    assert "python" in tags
+    assert "javascript" in tags
+    assert "bugfix" in tags
+    assert "feature" in tags
+    assert "untagged" in tags
+
+
+def test_model_performance_group_by_type(db_with_model_events):
+    """group_by='type' should group by issue type."""
+    results = db_with_model_events.get_model_performance(group_by="type")
+    types = {r["type"] for r in results}
+    assert "bug" in types
+    assert "feature" in types
+
+
+def test_model_performance_filter_by_model(db_with_model_events):
+    """Filtering by model should only return matching rows."""
+    results = db_with_model_events.get_model_performance(model="claude-opus-4-6", group_by="type")
+    assert all(r["model"] == "claude-opus-4-6" for r in results)
+    assert len(results) >= 1
+
+
+def test_model_performance_filter_by_tag(db_with_model_events):
+    """Filtering by tag should only return issues containing that tag."""
+    results = db_with_model_events.get_model_performance(tag="python", group_by="tag")
+    assert len(results) >= 1
+    # The python-tagged issue was completed by sonnet
+    sonnet_python = [r for r in results if r["tag"] == "python" and r["model"] == "claude-sonnet-4-5-20250929"]
+    assert len(sonnet_python) == 1
+    assert sonnet_python[0]["successes"] >= 1
+
+
+def test_model_performance_empty(temp_db):
+    """Should return empty list when no issues exist."""
+    results = temp_db.get_model_performance()
+    assert results == []

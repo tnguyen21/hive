@@ -1063,17 +1063,41 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_model_performance(self, model: Optional[str] = None, tag: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_model_performance(self, model: Optional[str] = None, tag: Optional[str] = None, group_by: str = "tag") -> List[Dict[str, Any]]:
         """Get model performance stats, optionally filtered by model or tag.
 
-        Returns aggregated stats: model, success count, failure count, retry count,
-        avg tokens, and tags breakdown.
+        Args:
+            model: Filter to a specific model name.
+            tag: Filter to issues containing this tag.
+            group_by: "tag" (default) groups by model × tag, "type" groups by model × type.
+
+        Returns aggregated stats: model, group label, success/failure counts, retries, tokens, duration.
         """
-        query = """
-            SELECT 
-                a.model,
-                i.tags,
-                i.type,
+        model_subquery = """COALESCE(
+            (SELECT json_extract(em.detail, '$.model')
+             FROM events em
+             WHERE em.issue_id = i.id
+               AND em.event_type IN ('completed', 'incomplete', 'worker_started', 'tokens_used')
+               AND json_extract(em.detail, '$.model') IS NOT NULL
+             ORDER BY em.id DESC LIMIT 1),
+            i.model)"""
+
+        if group_by == "tag":
+            group_col = "COALESCE(jt.value, 'untagged')"
+            group_alias = "tag"
+            from_clause = """FROM issues i
+            LEFT JOIN json_each(i.tags) jt ON 1=1
+            LEFT JOIN events e ON i.id = e.issue_id AND e.event_type = 'tokens_used'"""
+        else:
+            group_col = "i.type"
+            group_alias = "type"
+            from_clause = """FROM issues i
+            LEFT JOIN events e ON i.id = e.issue_id AND e.event_type = 'tokens_used'"""
+
+        query = f"""
+            SELECT
+                {model_subquery} as model,
+                {group_col} as {group_alias},
                 COUNT(DISTINCT i.id) as issue_count,
                 SUM(CASE WHEN i.status IN ('done', 'finalized') THEN 1 ELSE 0 END) as successes,
                 SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END) as failures,
@@ -1084,28 +1108,18 @@ class Database:
                 ROUND(AVG(
                     (julianday(COALESCE(i.closed_at, datetime('now'))) - julianday(i.created_at)) * 24 * 60
                 ), 1) as avg_duration_minutes
-            FROM issues i
-            LEFT JOIN agents a ON i.assignee = a.id
-            LEFT JOIN events e ON i.id = e.issue_id AND e.event_type = 'tokens_used'
+            {from_clause}
             WHERE i.type != 'molecule'
         """
-        params = []
+        params: list = []
         if model:
-            query += " AND a.model = ?"
+            query += f" AND {model_subquery} = ?"
             params.append(model)
         if tag:
-            query += " AND i.tags LIKE '%" + '"' + tag + '"' + "%'"
+            query += " AND i.tags LIKE ?"
+            params.append(f'%"{tag}"%')
 
-        query += " GROUP BY a.model, i.type ORDER BY issue_count DESC"
+        query += f" GROUP BY model, {group_alias} ORDER BY issue_count DESC"
 
         cursor = self.conn.execute(query, params)
-        results = []
-        for row in cursor.fetchall():
-            r = dict(row)
-            if r.get("tags"):
-                try:
-                    r["tags"] = json.loads(r["tags"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            results.append(r)
-        return results
+        return [dict(row) for row in cursor.fetchall()]

@@ -1017,8 +1017,8 @@ class HiveCLI:
                     total = tokens["input_tokens"] + tokens["output_tokens"]
                     print(f"{model}: {total:,} tokens")
 
-    def stats(self, model=None, tag=None, json_mode=False):
-        results = self.db.get_model_performance(model=model, tag=tag)
+    def stats(self, model=None, tag=None, group_by="tag", json_mode=False):
+        results = self.db.get_model_performance(model=model, tag=tag, group_by=group_by)
         if json_mode:
             print(json.dumps(results, default=str))
             return
@@ -1027,12 +1027,15 @@ class HiveCLI:
             print("No performance data yet.")
             return
 
-        print(f"{'Model':<35} {'Type':<10} {'Issues':>6} {'OK':>4} {'Fail':>4} {'Retries':>7} {'Avg Min':>8}")
-        print("-" * 80)
+        group_label = "Tag" if group_by == "tag" else "Type"
+        group_key = "tag" if group_by == "tag" else "type"
+        print(f"{'Model':<35} {group_label:<15} {'Issues':>6} {'OK':>4} {'Fail':>4} {'Retries':>7} {'Avg Min':>8}")
+        print("-" * 85)
         for r in results:
             model_name = (r.get("model") or "unknown")[:34]
+            group_val = str(r.get(group_key, ""))[:14]
             print(
-                f"{model_name:<35} {r.get('type', ''):<10} {r.get('issue_count', 0):>6} {r.get('successes', 0):>4} {r.get('failures', 0):>4} {r.get('total_retries', 0):>7} {r.get('avg_duration_minutes', 0):>8}"
+                f"{model_name:<35} {group_val:<15} {r.get('issue_count', 0):>6} {r.get('successes', 0):>4} {r.get('failures', 0):>4} {r.get('total_retries', 0):>7} {r.get('avg_duration_minutes', 0):>8}"
             )
 
     # ── Web UI ────────────────────────────────────────────────────────
@@ -1592,6 +1595,7 @@ def main():
     stats_parser = subparsers.add_parser("stats", help="Show model performance statistics")
     stats_parser.add_argument("--model", type=str, help="Filter by model name")
     stats_parser.add_argument("--tag", type=str, help="Filter by tag")
+    stats_parser.add_argument("--by-type", action="store_true", help="Group by issue type instead of tag")
 
     # daemon command
     daemon_parser = subparsers.add_parser("daemon", help="Manage orchestrator daemon")
@@ -1812,7 +1816,8 @@ def main():
             cli.status(json_mode=json_mode)
 
         elif args.command == "stats":
-            cli.stats(model=args.model, tag=args.tag, json_mode=json_mode)
+            group_by = "type" if args.by_type else "tag"
+            cli.stats(model=args.model, tag=args.tag, group_by=group_by, json_mode=json_mode)
 
         elif args.command == "start":
             cli.start(json_mode=json_mode)
