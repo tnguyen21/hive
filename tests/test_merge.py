@@ -273,10 +273,9 @@ async def test_finalize_issue(merge_entry_with_worktree, temp_db, mock_opencode)
     # Worktree should be cleaned up
     assert not Path(info["worktree_path"]).exists()
 
-    # Agent should be idle
+    # Agent should be deleted
     agent = temp_db.get_agent(info["agent_id"])
-    assert agent["status"] == "idle"
-    assert agent["current_issue"] is None
+    assert agent is None
 
 
 @pytest.mark.asyncio
@@ -294,9 +293,18 @@ async def test_teardown_after_finalize(merge_entry_with_worktree, temp_db, mock_
     # Worktree gone
     assert not Path(info["worktree_path"]).exists()
 
-    # Agent idle
+    # Agent deleted
     agent = temp_db.get_agent(info["agent_id"])
-    assert agent["status"] == "idle"
+    assert agent is None
+
+    # But related records with agent_id still exist as correlation keys
+    cursor = temp_db.conn.execute("SELECT * FROM events WHERE agent_id = ?", (info["agent_id"],))
+    events = cursor.fetchall()
+    assert len(events) > 0  # Events should still exist
+
+    cursor = temp_db.conn.execute("SELECT * FROM merge_queue WHERE agent_id = ?", (info["agent_id"],))
+    merge_entries = cursor.fetchall()
+    assert len(merge_entries) > 0  # Merge queue entries should still exist
 
 
 @pytest.mark.asyncio

@@ -1217,6 +1217,43 @@ async def test_reconcile_no_stale_agents(temp_db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_purges_idle_and_failed_agents(temp_db, tmp_path):
+    """Test that Phase 3 of reconciliation purges idle and failed agents from previous runs."""
+    # Create some agents with different statuses
+    idle_agent_id = temp_db.create_agent(name="idle_agent")
+    failed_agent_id = temp_db.create_agent(name="failed_agent")
+    working_agent_id = temp_db.create_agent(name="working_agent")
+
+    # Set their statuses
+    temp_db.conn.execute("UPDATE agents SET status = 'idle' WHERE id = ?", (idle_agent_id,))
+    temp_db.conn.execute("UPDATE agents SET status = 'failed' WHERE id = ?", (failed_agent_id,))
+    temp_db.conn.execute("UPDATE agents SET status = 'working' WHERE id = ?", (working_agent_id,))
+    temp_db.conn.commit()
+
+    # Verify they exist
+    assert temp_db.get_agent(idle_agent_id) is not None
+    assert temp_db.get_agent(failed_agent_id) is not None
+    assert temp_db.get_agent(working_agent_id) is not None
+
+    # Mock opencode client to return no live sessions
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.list_sessions = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # Run reconciliation
+    await orch._reconcile_stale_agents()
+
+    # Idle and failed agents should be purged
+    assert temp_db.get_agent(idle_agent_id) is None
+    assert temp_db.get_agent(failed_agent_id) is None
+
+    # Working agent should still exist (but will be reconciled to ghost status due to no live sessions)
+    working_agent = temp_db.get_agent(working_agent_id)
+    assert working_agent is not None
+    assert working_agent["status"] == "ghost"  # Phase 1 reconciliation sets this
+
+
+@pytest.mark.asyncio
 async def test_check_opencode_health_uses_list_sessions(temp_db, tmp_path):
     """Verify _check_opencode_health delegates to list_sessions."""
     mock_oc = AsyncMock(spec=OpenCodeClient)

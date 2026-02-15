@@ -210,10 +210,11 @@ class Orchestrator:
     async def _reconcile_stale_agents(self):
         """Bidirectional reconciliation on startup.
 
-        Three phases:
+        Four phases:
         - Phase 0: Fetch live sessions from OpenCode server
         - Phase 1: Reconcile DB agents with status='working' (ghost + live)
         - Phase 2: Clean up orphan sessions (alive on server, no DB agent)
+        - Phase 3: Purge idle/failed agents (leftovers from previous runs)
         """
         # Phase 0 — Fetch live sessions
         live_session_ids: set | None = None
@@ -326,6 +327,16 @@ class Orchestrator:
 
                 self.db.log_system_event("orphan_sessions_cleaned", {"count": len(orphans)})
                 logger.info(f"Cleaned up {len(orphans)} orphan session(s)")
+
+        # Phase 3: Purge idle/failed agents (leftovers from previous runs)
+        cursor = self.db.conn.execute("SELECT COUNT(*) FROM agents WHERE status IN ('idle', 'failed')")
+        count = cursor.fetchone()[0]
+        if count > 0:
+            self.db.conn.execute("PRAGMA foreign_keys = OFF")
+            self.db.conn.execute("DELETE FROM agents WHERE status IN ('idle', 'failed')")
+            self.db.conn.execute("PRAGMA foreign_keys = ON")
+            self.db.conn.commit()
+            logger.info(f"Purged {count} idle/failed agent(s) from previous runs")
 
     def _rebuild_reverse_maps(self):
         """Rebuild reverse lookup maps from current active_agents.
@@ -636,17 +647,21 @@ class Orchestrator:
                 "worktree_error",
                 {"error": str(e)},
             )
-            # Mark the orphaned agent as failed so it doesn't linger in 'idle'
-            self.db.conn.execute("UPDATE agents SET status = 'failed' WHERE id = ?", (agent_id,))
+            # Delete the orphaned agent
+            self.db.conn.execute("PRAGMA foreign_keys = OFF")
+            self.db.conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+            self.db.conn.execute("PRAGMA foreign_keys = ON")
             self.db.conn.commit()
             return
 
         # Atomic claim
         claimed = self.db.claim_issue(issue_id, agent_id)
         if not claimed:
-            # Someone else claimed it first, clean up worktree and mark agent failed
+            # Someone else claimed it first, clean up worktree and delete agent
             await remove_worktree_async(worktree_path)
-            self.db.conn.execute("UPDATE agents SET status = 'failed' WHERE id = ?", (agent_id,))
+            self.db.conn.execute("PRAGMA foreign_keys = OFF")
+            self.db.conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+            self.db.conn.execute("PRAGMA foreign_keys = ON")
             self.db.conn.commit()
             return
 

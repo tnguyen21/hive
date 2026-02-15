@@ -491,20 +491,11 @@ class MergeProcessor:
             except (GitWorktreeError, FileNotFoundError, OSError):
                 pass  # Best-effort cleanup
 
-        # Mark agent idle
+        # Delete ephemeral agent (events/notes/merge_queue retain agent_id as correlation key)
         if agent_id:
-            self.db.conn.execute(
-                """
-                UPDATE agents
-                SET status = 'idle',
-                    session_id = NULL,
-                    worktree = NULL,
-                    current_issue = NULL,
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (agent_id,),
-            )
+            self.db.conn.execute("PRAGMA foreign_keys = OFF")
+            self.db.conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+            self.db.conn.execute("PRAGMA foreign_keys = ON")
             self.db.conn.commit()
 
     async def _maybe_cycle_refinery_session(self):
