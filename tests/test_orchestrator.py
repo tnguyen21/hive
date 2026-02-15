@@ -1,6 +1,7 @@
 """Tests for orchestrator."""
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
@@ -1657,3 +1658,206 @@ async def test_handle_stalled_with_session_api_failure(temp_db, tmp_path):
     # Should log session_check_failed event
     events = temp_db.get_events(agent_id=agent_id, event_type="session_check_failed")
     assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_started_event_contains_model(temp_db, tmp_path):
+    """Test that worker_started events contain the model field."""
+    from unittest.mock import AsyncMock, patch
+    from hive.opencode import OpenCodeClient
+
+    # Mock OpenCode client
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.create_session.return_value = {"id": "session-123"}
+    mock_opencode.send_message_async.return_value = None
+
+    # Create orchestrator
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+    # Mock worktree creation
+    test_model = "claude-sonnet-4"
+    with patch("hive.orchestrator.create_worktree_async", return_value=str(tmp_path)):
+        # Create issue with specific model (status defaults to "open")
+        issue_id = temp_db.create_issue("Test task", "Do something", model=test_model)
+        issue = temp_db.get_issue(issue_id)
+
+        await orch.spawn_worker(issue)
+
+    # Verify worker_started event has model field
+    events = temp_db.get_events(issue_id=issue_id, event_type="worker_started")
+    assert len(events) == 1
+    event = events[0]
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+    assert "model" in detail
+    assert detail["model"] == test_model
+
+
+@pytest.mark.asyncio
+async def test_completed_event_contains_model(temp_db, tmp_path):
+    """Test that completed events contain the model field."""
+    from unittest.mock import AsyncMock, patch
+    from hive.opencode import OpenCodeClient
+
+    # Mock OpenCode client
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages.return_value = []
+
+    # Create orchestrator
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+    # Create issue and agent
+    test_model = "claude-sonnet-4"
+    issue_id = temp_db.create_issue("Test task", "Do something")
+    agent_id = temp_db.create_agent("test-agent", model=test_model)
+
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-123",
+    )
+
+    # Add agent to active_agents
+    orch.active_agents[agent_id] = agent
+
+    # Create success result in file format
+    file_result = {
+        "status": "success",
+        "summary": "Task completed successfully",
+        "files_changed": [],
+        "tests_added": [],
+        "tests_run": True,
+        "test_command": "echo test",
+        "blockers": [],
+        "artifacts": [{"type": "git_commit", "value": "abc123"}],
+    }
+
+    # Mock various methods to skip git operations
+    with (
+        patch("hive.orchestrator.remove_result_file"),
+        patch("hive.orchestrator.read_notes_file", return_value=None),
+        patch("hive.orchestrator.remove_notes_file"),
+        patch("hive.orchestrator.read_result_file"),
+        patch("hive.orchestrator.get_commit_hash", return_value="abc123"),
+    ):
+        await orch.handle_agent_complete(agent, file_result=file_result)
+
+    # Verify completed event has model field
+    events = temp_db.get_events(issue_id=issue_id, event_type="completed")
+    assert len(events) == 1
+    event = events[0]
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+    assert "model" in detail
+    assert detail["model"] == test_model
+
+
+@pytest.mark.asyncio
+async def test_incomplete_event_contains_model(temp_db, tmp_path):
+    """Test that incomplete events contain the model field."""
+    from unittest.mock import AsyncMock
+    from hive.opencode import OpenCodeClient
+
+    # Create orchestrator with mock opencode
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+    # Create issue and agent
+    test_model = "claude-sonnet-4"
+    issue_id = temp_db.create_issue("Test task", "Do something")
+    agent_id = temp_db.create_agent("test-agent", model=test_model)
+
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-123",
+    )
+
+    # Create failure result
+    result = CompletionResult(
+        success=False,
+        reason="Test failure",
+        summary="Agent failed for testing",
+    )
+
+    await orch._handle_agent_failure(agent, result)
+
+    # Verify incomplete event has model field
+    events = temp_db.get_events(issue_id=issue_id, event_type="incomplete")
+    assert len(events) == 1
+    event = events[0]
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+    assert "model" in detail
+    assert detail["model"] == test_model
+
+
+@pytest.mark.asyncio
+async def test_agent_switch_event_contains_model(temp_db, tmp_path):
+    """Test that agent_switch events contain the model field."""
+    from unittest.mock import AsyncMock
+    from hive.opencode import OpenCodeClient
+
+    # Create orchestrator with mock opencode
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+    # Create issue and agent
+    test_model = "claude-sonnet-4"
+    issue_id = temp_db.create_issue("Test task", "Do something")
+    agent_id = temp_db.create_agent("test-agent", model=test_model)
+
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-123",
+    )
+
+    # Pre-populate with max retries to trigger agent switch
+    for i in range(Config.MAX_RETRIES):
+        temp_db.log_event(issue_id, agent_id, "retry", {"attempt": i + 1})
+
+    # Create failure result
+    result = CompletionResult(
+        success=False,
+        reason="Test failure after retries",
+        summary="Agent still failed after retries",
+    )
+
+    # Should trigger agent switch
+    await orch._handle_agent_failure(agent, result)
+
+    # Verify agent_switch event has model field
+    events = temp_db.get_events(issue_id=issue_id, event_type="agent_switch")
+    assert len(events) == 1
+    event = events[0]
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+    assert "model" in detail
+    assert detail["model"] == test_model

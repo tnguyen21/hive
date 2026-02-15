@@ -726,6 +726,7 @@ class Orchestrator:
                 "worktree": worktree_path,
                 "routing_method": "new_agent",
                 "prompt_version": get_prompt_version("worker"),
+                "model": model,
             }
 
             self.db.log_event(
@@ -1022,6 +1023,10 @@ class Orchestrator:
                     )
                     self.db.conn.commit()
 
+                    # Get agent model from database
+                    agent_row = self.db.get_agent(agent.agent_id)
+                    model = agent_row["model"] if agent_row else None
+
                     self.db.log_event(
                         agent.issue_id,
                         agent.agent_id,
@@ -1030,6 +1035,7 @@ class Orchestrator:
                             "summary": result.summary,
                             "commit": commit_hash,
                             "artifacts": result.artifacts,
+                            "model": model,
                         },
                     )
 
@@ -1091,12 +1097,16 @@ class Orchestrator:
         retry_count = self.db.count_events_by_type(issue_id, "retry")
         agent_switch_count = self.db.count_events_by_type(issue_id, "agent_switch")
 
+        # Get agent model from database
+        agent_row = self.db.get_agent(agent.agent_id)
+        model = agent_row["model"] if agent_row else None
+
         # Log the failure first
         self.db.log_event(
             issue_id,
             agent.agent_id,
             "incomplete",
-            {"reason": result.reason, "summary": result.summary},
+            {"reason": result.reason, "summary": result.summary, "model": model},
         )
 
         # Anomaly detection: auto-escalate if too many failures in a short window
@@ -1142,7 +1152,7 @@ class Orchestrator:
                 issue_id,
                 agent.agent_id,
                 "agent_switch",
-                {"switch_count": agent_switch_count + 1, "reason": result.reason, "previous_agent": agent.name},
+                {"switch_count": agent_switch_count + 1, "reason": result.reason, "previous_agent": agent.name, "model": model},
             )
             logger.info(f"Switching agent for issue {issue_id} (switch {agent_switch_count + 1}/{Config.MAX_AGENT_SWITCHES})")
 
