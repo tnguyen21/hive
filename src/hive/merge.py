@@ -200,6 +200,16 @@ class MergeProcessor:
         worker_test_cmd = entry.get("test_command")
         global_test_cmd = Config.TEST_COMMAND
 
+        # Helper to create rejection note on test failure
+        def _log_test_rejection(cmd, output):
+            truncated_output = output[:500] if output else ""
+            self.db.add_note(
+                issue_id=issue_id,
+                agent_id=agent_id,
+                category="rejection",
+                content=f"[Test failure] Tests failed after rebase.\nCommand: {cmd}\n```\n{truncated_output}\n```",
+            )
+
         # If both worker and global test commands exist: run worker first (fast), then global (comprehensive)
         if worker_test_cmd and global_test_cmd:
             # Run worker-specific tests first (timeout 120s)
@@ -211,6 +221,7 @@ class MergeProcessor:
                     "test_failure",
                     {"command": worker_test_cmd, "type": "worker", "output": worker_output[:2000]},
                 )
+                _log_test_rejection(worker_test_cmd, worker_output)
                 return (False, worker_output)
 
             self.db.log_event(issue_id, agent_id, "tests_passed", {"command": worker_test_cmd, "type": "worker"})
@@ -224,6 +235,7 @@ class MergeProcessor:
                     "test_failure",
                     {"command": global_test_cmd, "type": "global", "output": global_output[:2000]},
                 )
+                _log_test_rejection(global_test_cmd, global_output)
                 return (False, global_output)
 
             self.db.log_event(issue_id, agent_id, "tests_passed", {"command": global_test_cmd, "type": "global"})
@@ -238,16 +250,7 @@ class MergeProcessor:
                     "test_failure",
                     {"command": worker_test_cmd, "type": "worker", "output": test_output[:2000]},
                 )
-
-                # Create structured rejection note for test failure
-                truncated_output = test_output[:500] if test_output else ""
-                self.db.add_note(
-                    issue_id=issue_id,
-                    agent_id=agent_id,
-                    category="rejection",
-                    content=f"[Test failure] Tests failed after rebase.\nCommand: {Config.TEST_COMMAND}\n```\n{truncated_output}\n```",
-                )
-
+                _log_test_rejection(worker_test_cmd, test_output)
                 return (False, test_output)
 
             self.db.log_event(issue_id, agent_id, "tests_passed", {"command": worker_test_cmd, "type": "worker"})
@@ -262,6 +265,7 @@ class MergeProcessor:
                     "test_failure",
                     {"command": global_test_cmd, "type": "global", "output": test_output[:2000]},
                 )
+                _log_test_rejection(global_test_cmd, test_output)
                 return (False, test_output)
 
             self.db.log_event(issue_id, agent_id, "tests_passed", {"command": global_test_cmd, "type": "global"})
