@@ -502,13 +502,19 @@ class Orchestrator:
         """Start the orchestrator."""
         self.running = True
         self._setup_sse_handlers()
+
+        # Start SSE/WS server in background FIRST — other init steps may need
+        # to create sessions (e.g. eager refinery), which requires the server.
+        sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
+
+        # If the backend has a server_ready gate, wait for it before proceeding
+        if hasattr(self.sse_client, "server_ready"):
+            await self.sse_client.server_ready.wait()
+
         await self._reconcile_stale_agents()
 
         # Initialize merge processor (eager refinery session creation)
         await self.merge_processor.initialize()
-
-        # Start SSE event consumer in background
-        sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
 
         # Start permission unblocker in background
         permission_task = asyncio.create_task(self.permission_unblocker_loop())
