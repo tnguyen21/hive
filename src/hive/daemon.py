@@ -246,19 +246,36 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
     """
     import asyncio
 
-    from .opencode import OpenCodeClient
     from .orchestrator import Orchestrator
 
     async def main():
-        async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as opencode:
-            orchestrator = Orchestrator(
-                db=db,
-                opencode_client=opencode,
-                project_path=project_path,
-                project_name=project_name,
-            )
+        if Config.BACKEND == "claude-ws":
+            from .claude_ws import ClaudeWSBackend
 
-            await orchestrator.start()
+            backend = ClaudeWSBackend(
+                host=Config.CLAUDE_WS_HOST,
+                port=Config.CLAUDE_WS_PORT,
+            )
+            async with backend:
+                orchestrator = Orchestrator(
+                    db=db,
+                    opencode_client=backend,
+                    project_path=project_path,
+                    project_name=project_name,
+                    sse_client=backend,
+                )
+                await orchestrator.start()
+        else:
+            from .opencode import OpenCodeClient
+
+            async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as opencode:
+                orchestrator = Orchestrator(
+                    db=db,
+                    opencode_client=opencode,
+                    project_path=project_path,
+                    project_name=project_name,
+                )
+                await orchestrator.start()
 
     try:
         asyncio.run(main())

@@ -37,15 +37,17 @@ class Orchestrator:
         opencode_client: OpenCodeClient,
         project_path: str,
         project_name: str = "default",
+        sse_client: Optional[SSEClient] = None,
     ):
         """
         Initialize orchestrator.
 
         Args:
             db: Database instance
-            opencode_client: OpenCode HTTP client
+            opencode_client: OpenCode HTTP client (or ClaudeWSBackend)
             project_path: Path to the project repository
             project_name: Name of the project
+            sse_client: Optional SSE client override (e.g. ClaudeWSBackend serves both roles)
         """
         self.db = db
         self.opencode = opencode_client
@@ -68,7 +70,7 @@ class Orchestrator:
         self._issue_to_agent: dict[str, str] = {}  # issue_id -> agent_id
 
         # SSE client for event monitoring
-        self.sse_client = SSEClient(
+        self.sse_client = sse_client or SSEClient(
             base_url=Config.OPENCODE_URL,
             password=Config.OPENCODE_PASSWORD,
             global_events=True,
