@@ -1,7 +1,6 @@
 """Tests for SSE client."""
 
 import asyncio
-import json
 
 import pytest
 

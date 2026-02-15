@@ -2,11 +2,8 @@
 
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
-
-from hive.db import Database
 
 
 def test_database_connection(temp_db):
@@ -760,7 +757,7 @@ def test_get_notes_filter_by_category(temp_db):
     # Create notes with different categories
     discovery_id = temp_db.add_note(issue_id=issue_id, agent_id=agent_id, content="Discovery note", category="discovery")
     gotcha_id = temp_db.add_note(issue_id=issue_id, agent_id=agent_id, content="Gotcha note", category="gotcha")
-    pattern_id = temp_db.add_note(issue_id=issue_id, agent_id=agent_id, content="Pattern note", category="pattern")
+    temp_db.add_note(issue_id=issue_id, agent_id=agent_id, content="Pattern note", category="pattern")
 
     # Filter by gotcha category
     notes = temp_db.get_notes(category="gotcha")

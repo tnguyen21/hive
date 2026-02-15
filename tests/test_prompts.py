@@ -379,7 +379,6 @@ def test_get_prompt_version_deterministic():
 def test_get_prompt_version_changes_with_content():
     """Test get_prompt_version returns different hashes for different content."""
     import unittest.mock
-    from hive.prompts import _load_template
 
     # Mock _load_template to return different content
     with unittest.mock.patch("hive.prompts._load_template") as mock_load:

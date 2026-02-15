@@ -572,7 +572,6 @@ async def test_degraded_mode_recovery(temp_db, tmp_path):
 
     # Start in degraded mode
     await orch._enter_degraded_mode("Connection refused")
-    original_degraded_time = orch._degraded_since
 
     # Mock successful health check recovery
     with patch.object(orch, "_check_opencode_health") as mock_health:

@@ -2,8 +2,6 @@
 
 import pytest
 
-from hive.db import Database
-
 
 def test_get_next_ready_step(temp_db):
     """Test getting next ready step in a molecule."""
@@ -54,7 +52,7 @@ def test_get_next_ready_step_no_dependencies(temp_db):
 
     # Create independent steps
     step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test")
-    step2 = temp_db.create_issue("Step 2", issue_type="step", parent_id=parent, project="test")
+    temp_db.create_issue("Step 2", issue_type="step", parent_id=parent, project="test")
 
     # First step should be step1 (oldest by created_at)
     next_step = temp_db.get_next_ready_step(parent)
@@ -178,8 +176,8 @@ async def test_session_cycling(temp_db, git_repo):
         await asyncio.sleep(5)
 
         # Check if step1 is done and step2 is claimed
-        step1_issue = temp_db.get_issue(step1)
-        step2_issue = temp_db.get_issue(step2)
+        temp_db.get_issue(step1)
+        temp_db.get_issue(step2)
 
         # Clean up - get agent and delete sessions
         agents = temp_db.get_active_agents()

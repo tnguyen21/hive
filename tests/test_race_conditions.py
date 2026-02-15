@@ -5,13 +5,11 @@ The test is designed to FAIL against the old code and PASS against the fix.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from hive.config import Config
-from hive.db import Database
-from hive.models import AgentIdentity, CompletionResult
+from hive.models import AgentIdentity
 from hive.opencode import OpenCodeClient
 from hive.orchestrator import Orchestrator
 from hive.sse import SSEClient
@@ -121,9 +119,7 @@ async def test_bug1_monitor_agent_preserves_new_session_event_after_cycling(temp
     )
 
     # The old session's event should be cleaned up
-    assert old_session_id not in orch.session_status_events, (
-        "Old session's event should have been cleaned up by monitor_agent's finally block"
-    )
+    assert old_session_id not in orch.session_status_events, "Old session's event should have been cleaned up by monitor_agent's finally block"
 
 
 # =============================================================================
@@ -198,10 +194,7 @@ async def test_bug2_event_loop_not_blocked_during_worktree_creation(tmp_path):
     await task
 
     # If the event loop was blocked, counter would be 0 or very low
-    assert counter > 0, (
-        "Counter didn't increment during async worktree creation — "
-        "event loop was blocked by synchronous subprocess call"
-    )
+    assert counter > 0, "Counter didn't increment during async worktree creation — event loop was blocked by synchronous subprocess call"
 
 
 # =============================================================================
@@ -235,8 +228,7 @@ async def test_bug3_agent_marked_failed_on_worktree_error(temp_db, tmp_path):
 
     agent = dict(agents[0])
     assert agent["status"] == "failed", (
-        f"Agent status is '{agent['status']}' but should be 'failed'. "
-        "Orphan agent left in DB after worktree creation failure."
+        f"Agent status is '{agent['status']}' but should be 'failed'. Orphan agent left in DB after worktree creation failure."
     )
 
     # Issue should NOT be claimed (should still be open)
@@ -285,8 +277,7 @@ async def test_dc2_handling_guard_prevents_concurrent_processing(temp_db, tmp_pa
     # No additional events should have been logged
     events_after_second = temp_db.get_events(issue_id=agent.issue_id)
     assert len(events_after_second) == first_call_count, (
-        "Second concurrent call to handle_agent_complete logged additional events — "
-        "_handling_agents guard failed to prevent double processing"
+        "Second concurrent call to handle_agent_complete logged additional events — _handling_agents guard failed to prevent double processing"
     )
 
     orch._handling_agents.discard(agent.agent_id)
@@ -306,8 +297,7 @@ async def test_dc2_handling_guard_cleanup_on_exception(temp_db, tmp_path):
 
     # Guard should be cleaned up after exception
     assert agent.agent_id not in orch._handling_agents, (
-        "_handling_agents not cleaned up after exception — "
-        "future calls for this agent will be permanently blocked"
+        "_handling_agents not cleaned up after exception — future calls for this agent will be permanently blocked"
     )
 
 
@@ -362,8 +352,7 @@ async def test_dc4_stop_not_defeated_by_connect():
 
     # Critical: running should still be False after connect() returns
     assert client.running is False, (
-        "SSE client running flag was reset to True by connect()! "
-        "This means stop() is unreliable — the client will keep reconnecting."
+        "SSE client running flag was reset to True by connect()! This means stop() is unreliable — the client will keep reconnecting."
     )
 
 
@@ -428,8 +417,7 @@ async def test_sa2_initialize_resets_stuck_running_merges(temp_db, tmp_path):
     # Verify it's been reset to 'queued'
     cursor = temp_db.conn.execute("SELECT status FROM merge_queue WHERE issue_id = ?", (issue_id,))
     assert cursor.fetchone()["status"] == "queued", (
-        "Stuck 'running' merge entry was not reset to 'queued' on startup — "
-        "this merge will be permanently stuck after a daemon crash"
+        "Stuck 'running' merge entry was not reset to 'queued' on startup — this merge will be permanently stuck after a daemon crash"
     )
 
     # System event should be logged
