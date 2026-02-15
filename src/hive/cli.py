@@ -170,6 +170,7 @@ class HiveCLI:
             issues = result.get("issues", [])
             if not issues:
                 print("No issues found.")
+                print("  Create one with: hive create 'title' 'description'")
                 return
             print(f"\n{'ID':<12} {'Status':<12} {'Pri':<4} {'Type':<10} {'Title':<40}")
             print("-" * 80)
@@ -283,6 +284,9 @@ class HiveCLI:
             ready = result.get("ready_issues", [])
             if not ready:
                 print("No ready issues.")
+                daemon = self._make_daemon()
+                if not daemon.status()["running"]:
+                    print("  Daemon is not running. Start it with: hive start")
                 return
             print(f"\n{'ID':<12} {'Priority':<8} {'Title':<50}")
             print("-" * 70)
@@ -693,6 +697,9 @@ class HiveCLI:
                 print(f"Merge queue: {', '.join(parts) if parts else 'empty'}")
             else:
                 print(f"Merge queue: {mq} pending")
+            total = result.get("total_issues", 0)
+            if total == 0:
+                print("\n  No issues yet. Create one with: hive create 'title' 'description'")
 
     def list_agents(self, status: Optional[str] = None, *, json_mode: bool = False):
         """List agents."""

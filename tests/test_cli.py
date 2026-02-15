@@ -1029,3 +1029,46 @@ def test_smart_noargs_json_new_project(temp_db, tmp_path, capsys):
     data = json.loads(captured.out)
     assert data["state"] == "new_project"
     assert data["total_issues"] == 0
+
+
+# ── Smart empty state tests ────────────────────────────────────
+
+
+def test_list_empty_suggests_create(temp_db, tmp_path, capsys):
+    """Test that empty list suggests hive create."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    cli.list_issues()
+
+    captured = capsys.readouterr()
+    assert "No issues found." in captured.out
+    assert "hive create" in captured.out
+
+
+def test_ready_empty_suggests_start(temp_db, tmp_path, capsys):
+    """Test that empty ready queue mentions daemon when not running."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    cli.show_ready()
+
+    captured = capsys.readouterr()
+    assert "No ready issues." in captured.out
+    assert "hive start" in captured.out
+
+
+def test_status_no_issues_suggests_create(temp_db, tmp_path, capsys):
+    """Test that status with 0 issues suggests hive create."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    cli.status()
+
+    captured = capsys.readouterr()
+    assert "No issues yet" in captured.out
+    assert "hive create" in captured.out
+
+
+def test_status_with_issues_no_hint(temp_db, tmp_path, capsys):
+    """Test that status with issues does NOT show create hint."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    temp_db.create_issue("Existing issue", project=tmp_path.name)
+    cli.status()
+
+    captured = capsys.readouterr()
+    assert "No issues yet" not in captured.out
