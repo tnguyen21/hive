@@ -619,11 +619,14 @@ class Orchestrator:
         # Atomic claim
         claimed = self.db.claim_issue(issue_id, agent_id)
         if not claimed:
-            # Someone else claimed it first, clean up
+            # Someone else claimed it first, clean up worktree and mark agent failed
             await remove_worktree_async(worktree_path)
+            self.db.conn.execute("UPDATE agents SET status = 'failed' WHERE id = ?", (agent_id,))
+            self.db.conn.commit()
             return
 
         # Create OpenCode session
+        session_id = None  # Track for cleanup on failure
         try:
             session = await self.opencode.create_session(
                 directory=worktree_path,
@@ -717,7 +720,19 @@ class Orchestrator:
                 "spawn_error",
                 {"error": str(e)},
             )
-            # Clean up
+            # Clean up the OpenCode session if it was created
+            if session_id:
+                await self.opencode.cleanup_session(session_id, directory=worktree_path)
+            # Clean up in-memory tracking (if agent was registered)
+            if agent_id in self.active_agents:
+                self._unregister_agent(agent_id)
+            # Mark agent as failed in DB
+            self.db.conn.execute(
+                "UPDATE agents SET status = 'failed', session_id = NULL, current_issue = NULL WHERE id = ?",
+                (agent_id,),
+            )
+            self.db.conn.commit()
+            # Clean up worktree and mark issue failed
             await remove_worktree_async(worktree_path)
             self.db.update_issue_status(issue_id, "failed")
 
@@ -1087,8 +1102,8 @@ class Orchestrator:
             agent: Current agent identity
             next_step: Next step issue dict
         """
-        # Abort current session
-        await self.opencode.abort_session(agent.session_id, directory=agent.worktree)
+        # Abort and delete current session (not just abort — delete prevents leaked sessions)
+        await self.opencode.cleanup_session(agent.session_id, directory=agent.worktree)
 
         # Claim the next step
         claimed = self.db.claim_issue(next_step["id"], agent.agent_id)
@@ -1102,6 +1117,7 @@ class Orchestrator:
         model = next_step.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
 
         # Create new session (same worktree)
+        new_session_id = None  # Track for cleanup on failure
         try:
             session = await self.opencode.create_session(
                 directory=agent.worktree,
@@ -1198,6 +1214,9 @@ class Orchestrator:
                 "session_cycle_error",
                 {"error": str(e)},
             )
+            # Clean up the new session if it was created
+            if new_session_id:
+                await self.opencode.cleanup_session(new_session_id, directory=agent.worktree)
             # Release agent
             if agent.agent_id in self.active_agents:
                 self._unregister_agent(agent.agent_id)

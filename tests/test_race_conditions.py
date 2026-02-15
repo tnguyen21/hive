@@ -453,3 +453,209 @@ async def test_sa2_initialize_ignores_queued_entries(temp_db, tmp_path):
     # No stuck_merges_reset event (nothing was stuck)
     events = temp_db.get_events(event_type="stuck_merges_reset")
     assert len(events) == 0
+
+
+# =============================================================================
+# NEW-1: Session leak in spawn_worker exception handler
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_new1_spawn_worker_cleans_up_session_on_post_creation_failure(temp_db, tmp_path):
+    """Verify that when spawn_worker fails AFTER session creation, the session
+    is cleaned up (abort+delete), the agent is marked failed, and in-memory
+    tracking is cleared.
+
+    Before the fix, the except block only removed the worktree and marked the
+    issue failed — it leaked the OpenCode session, left the agent in
+    active_agents, and didn't clean up reverse lookup maps.
+    """
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.create_session = AsyncMock(return_value={"id": "leaked-session-999"})
+    # Make send_message_async fail to trigger the except block AFTER session creation
+    mock_oc.send_message_async = AsyncMock(side_effect=Exception("network timeout"))
+
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # Create an issue to work on
+    issue_id = temp_db.create_issue("Spawn failure task", project="test")
+    issue = temp_db.get_issue(issue_id)
+
+    # Patch create_worktree_async to succeed (returns a fake path)
+    fake_worktree = str(tmp_path / "fake-worktree")
+    with patch("hive.orchestrator.create_worktree_async", new_callable=AsyncMock, return_value=fake_worktree):
+        with patch("hive.orchestrator.remove_worktree_async", new_callable=AsyncMock):
+            await orch.spawn_worker(issue)
+
+    # Session should have been cleaned up (abort + delete)
+    mock_oc.cleanup_session.assert_called_once_with("leaked-session-999", directory=fake_worktree)
+
+    # active_agents should be empty (agent was unregistered)
+    assert len(orch.active_agents) == 0, f"active_agents has {len(orch.active_agents)} entries — agent was not unregistered after spawn failure"
+
+    # Reverse lookup maps should be empty
+    assert len(orch._session_to_agent) == 0, "Session-to-agent map not cleaned up after spawn failure"
+    assert len(orch._issue_to_agent) == 0, "Issue-to-agent map not cleaned up after spawn failure"
+
+    # Agent DB record should be marked failed
+    cursor = temp_db.conn.execute("SELECT status, session_id FROM agents")
+    agents = cursor.fetchall()
+    assert len(agents) == 1
+    agent = dict(agents[0])
+    assert agent["status"] == "failed", f"Agent status is '{agent['status']}', expected 'failed'"
+    assert agent["session_id"] is None, "Agent session_id should be NULL after cleanup"
+
+
+@pytest.mark.asyncio
+async def test_new1_spawn_worker_no_session_cleanup_when_creation_fails(temp_db, tmp_path):
+    """Verify that when session creation itself fails (before session_id is set),
+    cleanup_session is NOT called (there's nothing to clean up).
+    """
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    # Session creation itself fails
+    mock_oc.create_session = AsyncMock(side_effect=Exception("OpenCode unreachable"))
+
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    issue_id = temp_db.create_issue("Session creation failure", project="test")
+    issue = temp_db.get_issue(issue_id)
+
+    fake_worktree = str(tmp_path / "fake-worktree")
+    with patch("hive.orchestrator.create_worktree_async", new_callable=AsyncMock, return_value=fake_worktree):
+        with patch("hive.orchestrator.remove_worktree_async", new_callable=AsyncMock):
+            await orch.spawn_worker(issue)
+
+    # cleanup_session should NOT have been called (session_id was None)
+    mock_oc.cleanup_session.assert_not_called()
+
+    # Agent should still be marked failed
+    cursor = temp_db.conn.execute("SELECT status FROM agents")
+    agent = dict(cursor.fetchone())
+    assert agent["status"] == "failed"
+
+
+# =============================================================================
+# NEW-2: Session not deleted in cycle_agent_to_next_step
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_new2_cycle_agent_deletes_old_session(temp_db, tmp_path):
+    """Verify that cycle_agent_to_next_step uses cleanup_session (abort+delete)
+    for the old session, not just abort_session.
+
+    Before the fix, only abort_session was called, leaving the old session
+    object lingering on the OpenCode server.
+    """
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.create_session = AsyncMock(return_value={"id": "new-session-456"})
+    mock_oc.send_message_async = AsyncMock()
+
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    old_session_id = "old-session-123"
+    agent = _make_agent(temp_db, orch, session_id=old_session_id, worktree=str(tmp_path))
+
+    # Mark the agent's issue as in_progress
+    temp_db.conn.execute("UPDATE issues SET status = 'in_progress', assignee = ? WHERE id = ?", (agent.agent_id, agent.issue_id))
+    temp_db.conn.execute("UPDATE agents SET status = 'working', current_issue = ? WHERE id = ?", (agent.issue_id, agent.agent_id))
+    temp_db.conn.commit()
+
+    # Create a next step issue
+    next_step_id = temp_db.create_issue("Step 2", project="test")
+    next_step = temp_db.get_issue(next_step_id)
+
+    await orch.cycle_agent_to_next_step(agent, next_step)
+
+    # cleanup_session should have been called on the OLD session (abort + delete)
+    mock_oc.cleanup_session.assert_called_once_with(old_session_id, directory=str(tmp_path))
+
+    # abort_session should NOT have been called separately (cleanup_session does both)
+    mock_oc.abort_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new2_cycle_agent_cleans_up_new_session_on_failure(temp_db, tmp_path):
+    """Verify that when cycle_agent_to_next_step fails AFTER creating the new
+    session, the new session is cleaned up.
+
+    Before the fix, the except block only unregistered the agent but didn't
+    clean up the newly created OpenCode session.
+    """
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    mock_oc.create_session = AsyncMock(return_value={"id": "new-session-leaked"})
+    # Make send_message_async fail AFTER session creation
+    mock_oc.send_message_async = AsyncMock(side_effect=Exception("send failed"))
+
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent = _make_agent(temp_db, orch, session_id="old-session-123", worktree=str(tmp_path))
+
+    # Set up agent DB state
+    temp_db.conn.execute("UPDATE issues SET status = 'in_progress', assignee = ? WHERE id = ?", (agent.agent_id, agent.issue_id))
+    temp_db.conn.execute("UPDATE agents SET status = 'working', current_issue = ? WHERE id = ?", (agent.issue_id, agent.agent_id))
+    temp_db.conn.commit()
+
+    next_step_id = temp_db.create_issue("Step 2", project="test")
+    next_step = temp_db.get_issue(next_step_id)
+
+    await orch.cycle_agent_to_next_step(agent, next_step)
+
+    # cleanup_session should have been called TWICE:
+    # 1. On the old session (the normal abort+delete at the top)
+    # 2. On the new session (error cleanup in except block)
+    calls = mock_oc.cleanup_session.call_args_list
+    assert len(calls) == 2, f"Expected 2 cleanup_session calls, got {len(calls)}"
+
+    # First call: old session cleanup
+    assert calls[0].args[0] == "old-session-123"
+    # Second call: new session cleanup (the fix)
+    assert calls[1].args[0] == "new-session-leaked"
+
+    # Agent should be unregistered from active_agents
+    assert agent.agent_id not in orch.active_agents
+
+
+# =============================================================================
+# NEW-3: Orphaned agent record on failed claim
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_new3_agent_marked_failed_on_claim_failure(temp_db, tmp_path):
+    """Verify that when the CAS claim fails (another worker claimed the issue
+    first), the agent record is marked 'failed' instead of left in 'idle'.
+
+    Before the fix, only the worktree was cleaned up and the agent record
+    lingered in the DB indefinitely.
+    """
+    mock_oc = AsyncMock(spec=OpenCodeClient)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    # Create an issue and pre-claim it (simulating another worker won the race)
+    issue_id = temp_db.create_issue("Contested task", project="test")
+    other_agent_id = temp_db.create_agent("winner-agent")
+    temp_db.claim_issue(issue_id, other_agent_id)  # Winner claims first
+
+    issue = temp_db.get_issue(issue_id)
+
+    fake_worktree = str(tmp_path / "loser-worktree")
+    with patch("hive.orchestrator.create_worktree_async", new_callable=AsyncMock, return_value=fake_worktree):
+        with patch("hive.orchestrator.remove_worktree_async", new_callable=AsyncMock) as mock_remove:
+            await orch.spawn_worker(issue)
+
+    # Worktree should have been cleaned up
+    mock_remove.assert_called_once_with(fake_worktree)
+
+    # Find the loser agent (the one that lost the CAS race)
+    cursor = temp_db.conn.execute("SELECT * FROM agents WHERE id != ?", (other_agent_id,))
+    loser_agents = cursor.fetchall()
+    assert len(loser_agents) == 1
+
+    loser = dict(loser_agents[0])
+    assert loser["status"] == "failed", (
+        f"Loser agent status is '{loser['status']}' but should be 'failed'. Orphaned agent left in DB after failed CAS claim."
+    )
+
+    # No session should have been created (we didn't get that far)
+    mock_oc.create_session.assert_not_called()
