@@ -31,8 +31,8 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "test_command": ("HIVE_TEST_COMMAND", str, None),
     "merge_queue_enabled": ("HIVE_MERGE_QUEUE_ENABLED", bool, True),
     "default_model": ("HIVE_DEFAULT_MODEL", str, "claude-opus-4-6"),
-    "worker_model": ("HIVE_WORKER_MODEL", str, "claude-sonnet-4-20250514"),
-    "refinery_model": ("HIVE_REFINERY_MODEL", str, "claude-sonnet-4-20250514"),
+    "worker_model": ("HIVE_WORKER_MODEL", str, "claude-sonnet-4-5-20250929"),
+    "refinery_model": ("HIVE_REFINERY_MODEL", str, "claude-opus-4-6"),
     # Cost guardrails
     "max_tokens_per_issue": ("HIVE_MAX_TOKENS_PER_ISSUE", int, 200_000),
     "max_tokens_per_run": ("HIVE_MAX_TOKENS_PER_RUN", int, 2_000_000),
