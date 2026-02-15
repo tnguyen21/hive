@@ -1,7 +1,10 @@
 """pytest fixtures for Hive tests."""
 
+import asyncio
+import json
 import os
 import tempfile
+from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import patch
 
@@ -13,34 +16,15 @@ from hive.db import Database
 from tests.fake_opencode import FakeOpenCodeServer
 
 
-def _opencode_reachable() -> bool:
-    """Check if OpenCode server is reachable with a quick HTTP request."""
-    import urllib.request
-
-    try:
-        req = urllib.request.Request(f"{Config.OPENCODE_URL}/session", method="GET")
-        urllib.request.urlopen(req, timeout=2)
-        return True
-    except Exception:
-        return False
-
-
-_server_up = _opencode_reachable()
-
-
-INTEGRATION_TIMEOUT = 60  # seconds per integration test
-
-
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip integration tests when OpenCode server is not running, and add timeouts."""
-    skip = pytest.mark.skip(reason="OpenCode server not reachable")
+    """Add timeouts to integration tests."""
     timeout = pytest.mark.timeout(INTEGRATION_TIMEOUT)
     for item in items:
         if "integration" in item.keywords:
-            if not _server_up:
-                item.add_marker(skip)
-            else:
-                item.add_marker(timeout)
+            item.add_marker(timeout)
+
+
+INTEGRATION_TIMEOUT = 30  # seconds per integration test
 
 
 @pytest.fixture
@@ -80,9 +64,10 @@ async def fake_server() -> AsyncGenerator[FakeOpenCodeServer, None]:
     url = f"http://{host}:{port}"
     server.set_url(url)
 
-    # Patch Config.OPENCODE_URL to point at fake server
     with patch.object(Config, "OPENCODE_URL", url):
         yield server
+
+    await server.stop_server()
 
 
 @pytest.fixture
@@ -105,37 +90,134 @@ def temp_git_repo(tmp_path):
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, check=True, capture_output=True)
 
-    # Create initial commit
+    # Create initial commit on main branch
     readme_path = repo_path / "README.md"
     readme_path.write_text("# Test Repository\n")
     subprocess.run(["git", "add", "README.md"], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo_path, check=True, capture_output=True)
 
     return repo_path
 
 
 @pytest_asyncio.fixture
 async def integration_orchestrator(fake_server, temp_db, temp_git_repo):
-    """Create a fully wired Orchestrator for integration testing."""
-    from hive.orchestrator import Orchestrator
-    from hive.opencode import OpenCodeClient
+    """Create a fully wired Orchestrator for integration testing.
 
-    # Patch Config to use fake server and set other testing values
-    with patch.object(Config, "OPENCODE_URL", fake_server.url), patch.object(Config, "MAX_AGENTS", 1), patch.object(Config, "POLL_INTERVAL", 1):
-        # Create OpenCode client with explicit fake server URL
+    Config overrides for fast, deterministic tests:
+    - POLL_INTERVAL=0.1: fast polling
+    - LEASE_DURATION=4: short enough for stall tests (check_interval=1)
+    - MERGE_QUEUE_ENABLED=False: no merge processing (tested separately)
+    - MAX_TOKENS_PER_RUN=0: disable run budget (0 is falsy)
+    - ANOMALY_FAILURE_THRESHOLD=0: disable anomaly detection (0 is falsy)
+    """
+    from hive.opencode import OpenCodeClient
+    from hive.orchestrator import Orchestrator
+
+    with (
+        patch.object(Config, "OPENCODE_URL", fake_server.url),
+        patch.object(Config, "MAX_AGENTS", 1),
+        patch.object(Config, "POLL_INTERVAL", 0.1),
+        patch.object(Config, "LEASE_DURATION", 4),
+        patch.object(Config, "LEASE_EXTENSION", 2),
+        patch.object(Config, "MERGE_QUEUE_ENABLED", False),
+        patch.object(Config, "PERMISSION_SAFETY_NET_INTERVAL", 60),
+        patch.object(Config, "MAX_TOKENS_PER_RUN", 0),
+        patch.object(Config, "ANOMALY_FAILURE_THRESHOLD", 0),
+    ):
         async with OpenCodeClient(base_url=fake_server.url) as opencode_client:
             orchestrator = Orchestrator(
-                project_path=str(temp_git_repo), project_name="test-project", db=temp_db, opencode_client=opencode_client
+                project_path=str(temp_git_repo),
+                project_name="test-project",
+                db=temp_db,
+                opencode_client=opencode_client,
             )
+            # Point SSE client at fake server
+            orchestrator.sse_client.base_url = fake_server.url
 
             yield orchestrator
 
-            # Cleanup - orchestrator doesn't have shutdown method either
-            # Just clean up any active agents
-            try:
-                orchestrator.active_agents.clear()
-            except Exception:
-                pass
+            orchestrator.running = False
+            orchestrator.sse_client.stop()
+            orchestrator.active_agents.clear()
+
+
+# ── Integration test helpers ───────────────────────────────────────────
+
+
+async def run_orchestrator_until(orchestrator, predicate, timeout=10.0):
+    """Start orchestrator and run until predicate() returns True or timeout.
+
+    Starts the full orchestrator stack (SSE, main_loop, permission loop,
+    merge loop) and polls predicate every 50ms. Tears everything down
+    in the finally block regardless of outcome.
+    """
+    orchestrator.running = True
+    orchestrator._setup_sse_handlers()
+
+    # Only initialize merge processor if merge queue is enabled —
+    # initialize() eagerly creates a refinery session which would
+    # confuse session-counting helpers in tests.
+    if Config.MERGE_QUEUE_ENABLED:
+        await orchestrator.merge_processor.initialize()
+
+    # Snapshot existing tasks so we only cancel tasks spawned during the run
+    # (i.e., fire-and-forget monitor_agent tasks from spawn_worker).
+    pre_existing_tasks = set(asyncio.all_tasks())
+
+    sse_task = asyncio.create_task(orchestrator.sse_client.connect_with_reconnect(max_retries=3, retry_delay=0.1))
+    permission_task = asyncio.create_task(orchestrator.permission_unblocker_loop())
+    merge_task = asyncio.create_task(orchestrator.merge_processor_loop())
+    main_task = asyncio.create_task(orchestrator.main_loop())
+    managed_tasks = {sse_task, permission_task, merge_task, main_task}
+
+    try:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            if predicate():
+                return
+            await asyncio.sleep(0.05)
+        raise TimeoutError(f"Predicate not satisfied within {timeout}s")
+    finally:
+        orchestrator.running = False
+        orchestrator.sse_client.stop()
+
+        # Cancel managed tasks + any fire-and-forget tasks spawned during the run
+        # (monitor_agent tasks created by spawn_worker / cycle_agent_to_next_step).
+        spawned_tasks = asyncio.all_tasks() - pre_existing_tasks
+        all_to_cancel = managed_tasks | spawned_tasks
+        for task in all_to_cancel:
+            task.cancel()
+
+        # Await all cancelled tasks to ensure clean teardown
+        await asyncio.gather(*all_to_cancel, return_exceptions=True)
+
+        orchestrator.active_agents.clear()
+        orchestrator.session_status_events.clear()
+
+
+async def await_session_created(fake_server, count=1, timeout=5.0):
+    """Wait until fake_server has at least `count` created sessions.
+
+    Returns the most recently created session_id.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if len(fake_server.created_session_ids) >= count:
+            return fake_server.created_session_ids[count - 1]
+        await asyncio.sleep(0.05)
+    raise TimeoutError(f"Expected {count} session(s), got {len(fake_server.created_session_ids)}")
+
+
+def complete_worker(fake_server, session_id, worktree, status="success", summary="Done", artifacts=None):
+    """Simulate a worker completing: write result file + inject idle SSE event."""
+    write_hive_result(
+        worktree_path=worktree,
+        status=status,
+        summary=summary,
+        artifacts=artifacts or [{"type": "git_commit", "value": "abc1234"}],
+    )
+    fake_server.inject_idle(session_id)
 
 
 def write_hive_result(
@@ -150,9 +232,6 @@ def write_hive_result(
     artifacts: list[dict] = None,
 ):
     """Helper function to write a valid .hive-result.jsonl file."""
-    import json
-    from pathlib import Path
-
     result = {
         "status": status,
         "summary": summary,
