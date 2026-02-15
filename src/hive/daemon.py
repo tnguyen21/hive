@@ -263,7 +263,7 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _signal_handler)
 
-        if Config.BACKEND == "claude-ws":
+        if Config.BACKEND == "claude":
             from .claude_ws import ClaudeWSBackend
 
             backend = ClaudeWSBackend(

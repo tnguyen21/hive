@@ -25,7 +25,7 @@ Human ←→ Queen Bee TUI (opencode @queen agent, Opus)
          Daemon (orchestrator loop)
               ↓ pluggable backend:
               ↓   opencode: HTTP/SSE to OpenCode server (API billing)
-              ↓   claude-ws: WebSocket to Claude CLI processes (subscription billing)
+              ↓   claude: WebSocket to Claude CLI processes (subscription billing)
               ↓
          Worker Sessions (Sonnet) → git worktrees
               ↓
@@ -86,8 +86,11 @@ hive daemon start -f
 Uses your Claude Code subscription credits (Pro/Max plan) — no API key needed. Hive runs a WebSocket server and spawns `claude` CLI processes that connect back to it via `--sdk-url`.
 
 ```bash
-# 1. Start Hive daemon with Claude WS backend
-HIVE_BACKEND=claude-ws hive daemon start -f
+# Set the backend persistently for this project
+echo -e '[hive]\nbackend = "claude"' > .hive.toml
+
+# Or use the env var per-command
+HIVE_BACKEND=claude hive daemon start -f
 ```
 
 That's it — no separate server to run. Each worker is a `claude` CLI process using your subscription. Default concurrency is 3 (conservative for subscription rate limits), configurable via `HIVE_CLAUDE_WS_MAX_CONCURRENT`.
@@ -99,10 +102,18 @@ The daemon polls the ready queue, spawns workers, monitors completion via triple
 ### 3. Launch the Queen Bee
 
 ```bash
+# Uses the backend from .hive.toml / HIVE_BACKEND / --backend flag
 hive queen
+
+# Or explicitly override for this invocation
+hive queen --backend claude
 ```
 
-This attaches to the running OpenCode server and opens a TUI. Switch to the `@queen` agent to interact with Hive through natural language. The Queen Bee decomposes your requests into issues, wires dependencies, and monitors progress -- all through `hive` CLI commands.
+The behavior depends on the configured backend:
+- **OpenCode**: Attaches to the running OpenCode server and opens a TUI. Switch to the `@queen` agent to interact with Hive.
+- **Claude WS**: Launches an interactive `claude` CLI session with the Queen Bee system prompt and scoped tool permissions.
+
+Either way, the Queen Bee decomposes your requests into issues, wires dependencies, and monitors progress — all through `hive` CLI commands.
 
 ### 4. Or manage issues directly
 
@@ -182,6 +193,8 @@ All commands support `--json` for machine-readable output.
 
 | Command | Description |
 |---------|-------------|
+| `hive start` | Start the hive daemon |
+| `hive stop` | Stop the hive daemon |
 | `hive daemon start [-f]` | Start daemon (`-f` for foreground) |
 | `hive daemon stop` | Stop daemon |
 | `hive daemon restart` | Restart daemon |
@@ -192,7 +205,7 @@ All commands support `--json` for machine-readable output.
 
 | Command | Description |
 |---------|-------------|
-| `hive queen` | Launch Queen Bee TUI (attaches to OpenCode server) |
+| `hive queen [--backend opencode\|claude]` | Launch Queen Bee TUI (OpenCode) or interactive Claude CLI session (Claude WS) |
 
 ## Configuration
 
@@ -207,7 +220,7 @@ export HIVE_LEASE_EXTENSION=600             # Lease extension on activity (defau
 export HIVE_PERMISSION_POLL_INTERVAL=0.5    # Permission check interval
 
 # Backend selection
-export HIVE_BACKEND=opencode                # "opencode" (default) or "claude-ws"
+export HIVE_BACKEND=opencode                # "opencode" (default) or "claude"
 
 # OpenCode backend
 export OPENCODE_URL=http://127.0.0.1:4096  # OpenCode server URL

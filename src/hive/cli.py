@@ -1197,9 +1197,10 @@ class HiveCLI:
 
     # ── Queen Bee TUI ─────────────────────────────────────────────────
 
-    def queen(self):
+    def queen(self, *, backend: str | None = None):
         """Launch Queen Bee TUI using the configured backend."""
-        if Config.BACKEND == "claude-ws":
+        effective = backend or Config.BACKEND
+        if effective == "claude":
             self._queen_claude()
         else:
             self._queen_opencode()
@@ -1618,8 +1619,18 @@ def main():
         help="Number of lines to show (default: 50)",
     )
 
+    # top-level start/stop aliases (delegate to daemon start/stop)
+    subparsers.add_parser("start", help="Start the hive daemon")
+    subparsers.add_parser("stop", help="Stop the hive daemon")
+
     # queen command
-    subparsers.add_parser("queen", help="Launch Queen Bee TUI")
+    queen_parser = subparsers.add_parser("queen", help="Launch Queen Bee TUI")
+    queen_parser.add_argument(
+        "--backend",
+        choices=["opencode", "claude"],
+        default=None,
+        help="Override backend (default: from config/HIVE_BACKEND)",
+    )
 
     # watch command
     watch_parser = subparsers.add_parser("watch", help="Stream live events from a worker's OpenCode session")
@@ -1803,6 +1814,12 @@ def main():
         elif args.command == "stats":
             cli.stats(model=args.model, tag=args.tag, json_mode=json_mode)
 
+        elif args.command == "start":
+            cli.start(json_mode=json_mode)
+
+        elif args.command == "stop":
+            cli.stop(json_mode=json_mode)
+
         elif args.command == "daemon":
             if args.daemon_command == "start":
                 cli.start(foreground=args.foreground, json_mode=json_mode)
@@ -1818,7 +1835,7 @@ def main():
                 daemon_parser.print_help()
 
         elif args.command == "queen":
-            cli.queen()
+            cli.queen(backend=args.backend)
 
         elif args.command == "watch":
             cli.watch(args.issue_id, json_mode=json_mode)

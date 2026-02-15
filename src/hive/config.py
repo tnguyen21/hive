@@ -39,7 +39,7 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "anomaly_window_minutes": ("HIVE_ANOMALY_WINDOW_MINUTES", int, 10),
     "anomaly_failure_threshold": ("HIVE_ANOMALY_FAILURE_THRESHOLD", int, 3),
     # Backend selection
-    "backend": ("HIVE_BACKEND", str, "opencode"),  # "opencode" or "claude-ws"
+    "backend": ("HIVE_BACKEND", str, "opencode"),  # "opencode" or "claude"
     # Claude WS backend settings
     "claude_ws_host": ("HIVE_CLAUDE_WS_HOST", str, "127.0.0.1"),
     "claude_ws_port": ("HIVE_CLAUDE_WS_PORT", int, 8765),

@@ -430,7 +430,7 @@ Any backend must implement two interfaces that the orchestrator consumes:
 The orchestrator is wired up in `daemon.py`:
 
 ```python
-if Config.BACKEND == "claude-ws":
+if Config.BACKEND == "claude":
     backend = ClaudeWSBackend(host=..., port=...)
     orchestrator = Orchestrator(
         opencode_client=backend,
@@ -457,7 +457,7 @@ A backend can serve as both the session client AND the event emitter (like `Clau
 | Backend | Config | Runtime | Billing | Dependencies |
 |---------|--------|---------|---------|-------------|
 | **OpenCode** (`opencode`) | `HIVE_BACKEND=opencode` | OpenCode server (HTTP + SSE) | Anthropic API key | OpenCode binary, running server |
-| **Claude WS** (`claude-ws`) | `HIVE_BACKEND=claude-ws` | Claude Code CLI via `--sdk-url` | Subscription credits (Pro/Max) | `claude` binary, active subscription |
+| **Claude WS** (`claude`) | `HIVE_BACKEND=claude` | Claude Code CLI via `--sdk-url` | Subscription credits (Pro/Max) | `claude` binary, active subscription |
 
 The OpenCode backend is the original and default. The Claude WS backend was added to let users run Hive on their existing Claude Code subscription without needing an API key or running a separate server.
 
