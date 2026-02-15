@@ -603,6 +603,56 @@ class Database:
         )
         return cursor.fetchone()[0]
 
+    def get_issue_token_total(self, issue_id: str) -> int:
+        """Get total tokens (input + output) used for an issue across all agents."""
+        cursor = self.conn.execute(
+            """
+            SELECT COALESCE(
+                SUM(json_extract(detail, '$.input_tokens') + json_extract(detail, '$.output_tokens')),
+                0
+            )
+            FROM events
+            WHERE issue_id = ? AND event_type = 'tokens_used' AND json_valid(detail)
+            """,
+            (issue_id,),
+        )
+        return cursor.fetchone()[0]
+
+    def get_run_token_total(self) -> int:
+        """Get total tokens used across all issues in this daemon run.
+
+        Uses all tokens_used events in the DB. For per-run isolation, the
+        daemon should use a fresh DB or track a run_id boundary event.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT COALESCE(
+                SUM(json_extract(detail, '$.input_tokens') + json_extract(detail, '$.output_tokens')),
+                0
+            )
+            FROM events
+            WHERE event_type = 'tokens_used' AND json_valid(detail)
+            """
+        )
+        return cursor.fetchone()[0]
+
+    def count_events_since_minutes(self, issue_id: str, event_type: str, minutes: int) -> int:
+        """Count events of a given type for an issue within the last N minutes.
+
+        Uses SQLite's datetime('now') for comparison to avoid timezone mismatches
+        between Python's local time and SQLite's UTC-based created_at timestamps.
+
+        Args:
+            issue_id: Issue ID to count events for
+            event_type: Type of event to count (e.g., 'incomplete')
+            minutes: Look back this many minutes from now
+        """
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ? AND created_at >= datetime('now', ?)",
+            (issue_id, event_type, f"-{minutes} minutes"),
+        )
+        return cursor.fetchone()[0]
+
     def get_next_ready_step(self, parent_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the next ready step within a molecule.

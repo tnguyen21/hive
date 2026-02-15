@@ -93,6 +93,9 @@ class Orchestrator:
         self._degraded_since: Optional[datetime] = None
         self._backoff_delay = 5  # Initial backoff delay in seconds
 
+        # Cost guardrails
+        self._budget_paused = False
+
     def _setup_sse_handlers(self):
         """Set up SSE event handlers."""
 
@@ -549,6 +552,20 @@ class Orchestrator:
                         self._backoff_delay = min(60, self._backoff_delay * 2)  # Cap at 60 seconds
                         continue  # Skip scheduling and stall checks
 
+                # Per-run budget cap — stop spawning if total token spend exceeds limit
+                if Config.MAX_TOKENS_PER_RUN:
+                    run_tokens = self.db.get_run_token_total()
+                    if run_tokens > Config.MAX_TOKENS_PER_RUN:
+                        if not self._budget_paused:
+                            logger.warning(f"Run budget exceeded ({run_tokens} tokens). Pausing new spawns.")
+                            self._budget_paused = True
+                            self.db.log_system_event("budget_paused", {"total_tokens": run_tokens})
+                        await asyncio.sleep(Config.POLL_INTERVAL)
+                        # Still check for stalled agents even when budget-paused
+                        if self._opencode_healthy:
+                            await self.check_stalled_agents()
+                        continue
+
                 # Normal operation - check if we can spawn more agents
                 if len(self.active_agents) < Config.MAX_AGENTS:
                     # Get ready work
@@ -949,6 +966,28 @@ class Orchestrator:
                 # Extract and log token usage from messages
                 self._log_token_usage(agent, messages)
 
+                # Per-issue token budget check
+                if Config.MAX_TOKENS_PER_ISSUE:
+                    issue_tokens = self.db.get_issue_token_total(agent.issue_id)
+                    if issue_tokens > Config.MAX_TOKENS_PER_ISSUE:
+                        logger.warning(f"Issue {agent.issue_id} exceeded token budget ({issue_tokens} > {Config.MAX_TOKENS_PER_ISSUE})")
+                        self.db.log_event(
+                            agent.issue_id,
+                            agent.agent_id,
+                            "budget_exceeded",
+                            {"issue_tokens": issue_tokens, "limit": Config.MAX_TOKENS_PER_ISSUE},
+                        )
+                        budget_result = CompletionResult(
+                            success=False,
+                            reason=f"Exceeded per-issue token budget ({issue_tokens} > {Config.MAX_TOKENS_PER_ISSUE})",
+                            summary=f"Terminated: per-issue token budget exceeded ({issue_tokens} tokens)",
+                        )
+                        await self._handle_agent_failure(agent, budget_result)
+                        await self._cleanup_session(agent)
+                        if agent.agent_id in self.active_agents:
+                            self._unregister_agent(agent.agent_id)
+                        return
+
                 # Assess completion — file_result takes priority over message parsing
                 result = assess_completion(messages, file_result=file_result)
 
@@ -1051,6 +1090,25 @@ class Orchestrator:
             "incomplete",
             {"reason": result.reason, "summary": result.summary},
         )
+
+        # Anomaly detection: auto-escalate if too many failures in a short window
+        if Config.ANOMALY_FAILURE_THRESHOLD and Config.ANOMALY_WINDOW_MINUTES:
+            recent_failures = self.db.count_events_since_minutes(issue_id, "incomplete", Config.ANOMALY_WINDOW_MINUTES)
+            if recent_failures >= Config.ANOMALY_FAILURE_THRESHOLD:
+                logger.warning(f"Anomaly: {recent_failures} failures on {issue_id} in {Config.ANOMALY_WINDOW_MINUTES}m — auto-escalating")
+                self.db.update_issue_status(issue_id, "escalated")
+                self.db.log_event(
+                    issue_id,
+                    agent.agent_id,
+                    "escalated",
+                    {
+                        "reason": "Anomaly detection: rapid repeated failures",
+                        "recent_failures": recent_failures,
+                        "window_minutes": Config.ANOMALY_WINDOW_MINUTES,
+                        "final_failure_reason": result.reason,
+                    },
+                )
+                return
 
         if retry_count < Config.MAX_RETRIES:
             # Tier 1: Retry with same or different agent

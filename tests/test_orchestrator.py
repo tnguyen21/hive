@@ -325,6 +325,10 @@ async def test_escalation_chain_full_progression(temp_db, tmp_path):
         project_name="test",
     )
 
+    # Disable anomaly detection so we can test the full retry→switch→escalate chain
+    original_threshold = Config.ANOMALY_FAILURE_THRESHOLD
+    Config.ANOMALY_FAILURE_THRESHOLD = 0
+
     # Create issue
     issue_id = temp_db.create_issue("Test task", "Do something")
 
@@ -392,6 +396,9 @@ async def test_escalation_chain_full_progression(temp_db, tmp_path):
     )
 
     await orch._handle_agent_failure(final_agent, final_result)
+
+    # Restore anomaly detection
+    Config.ANOMALY_FAILURE_THRESHOLD = original_threshold
 
     # Should now be escalated
     issue = temp_db.get_issue(issue_id)
