@@ -61,9 +61,17 @@ Human ←→ Queen Bee TUI (interactive Claude CLI session, Opus)
 
 ### Prerequisites
 
-1. **Python 3.12+**
-2. **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** (`claude` binary) with an active subscription (Pro/Max)
-3. **Git repository** for your project
+1. **Git 2.20+** — worktrees require a reasonably modern git
+2. **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** with an active Pro/Max subscription
+3. **Python 3.12+** and [uv](https://docs.astral.sh/uv/) (recommended)
+4. **A git repository** to run Hive in
+
+```bash
+# Install Claude Code (if you haven't already)
+# Native installer (recommended):
+curl -fsSL https://claude.ai/install.sh | bash
+# Or via npm: npm install -g @anthropic-ai/claude-code
+```
 
 ### Install Hive
 
