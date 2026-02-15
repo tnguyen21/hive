@@ -510,7 +510,7 @@ async def test_wait_for_refinery_message_count_fence(temp_db, mock_opencode):
             "conflicts_resolved": 0,
         },
     ):
-        with patch("hive.merge.remove_result_file"):
+        with patch("hive.merge.remove_result_file"), patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
             # Call with min_message_count=1 (fence)
             result = await mp._wait_for_refinery("test-session", worktree_path="/tmp/worktree", timeout=30, min_message_count=1)
 
@@ -653,7 +653,7 @@ async def test_send_to_refinery_status_verification(temp_db, mock_opencode):
     mock_opencode.cleanup_session = AsyncMock()
 
     # Patch config
-    with patch("hive.merge.Config") as mock_config:
+    with patch("hive.merge.Config") as mock_config, patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
         mock_config.REFINERY_MODEL = "test-model"
         mock_config.TEST_COMMAND = None
 
