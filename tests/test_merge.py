@@ -283,6 +283,10 @@ async def test_teardown_after_finalize(merge_entry_with_worktree, temp_db, mock_
     """Test _teardown_after_finalize cleans up worktree and agent."""
     info = merge_entry_with_worktree
 
+    # Create some test events to verify they persist after agent deletion
+    temp_db.log_event(info["issue_id"], info["agent_id"], "test_event", {"data": "test"})
+    temp_db.conn.commit()
+
     mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
 
     cursor = temp_db.conn.execute("SELECT * FROM merge_queue WHERE id = 1")

@@ -221,15 +221,10 @@ async def test_bug3_agent_marked_failed_on_worktree_error(temp_db, tmp_path):
     with patch("hive.orchestrator.create_worktree_async", new_callable=AsyncMock, side_effect=Exception("git ref contention")):
         await orch.spawn_worker(issue)
 
-    # Find the agent that was created (there should be exactly one)
+    # With ephemeral agents, the agent should be deleted immediately on failure
     cursor = temp_db.conn.execute("SELECT * FROM agents")
     agents = cursor.fetchall()
-    assert len(agents) == 1
-
-    agent = dict(agents[0])
-    assert agent["status"] == "failed", (
-        f"Agent status is '{agent['status']}' but should be 'failed'. Orphan agent left in DB after worktree creation failure."
-    )
+    assert len(agents) == 0, "No agents should remain after worktree creation failure (ephemeral agents)"
 
     # Issue should NOT be claimed (should still be open)
     issue = temp_db.get_issue(issue_id)
@@ -647,15 +642,10 @@ async def test_new3_agent_marked_failed_on_claim_failure(temp_db, tmp_path):
     # Worktree should have been cleaned up
     mock_remove.assert_called_once_with(fake_worktree)
 
-    # Find the loser agent (the one that lost the CAS race)
+    # With ephemeral agents, the loser agent should be deleted immediately
     cursor = temp_db.conn.execute("SELECT * FROM agents WHERE id != ?", (other_agent_id,))
     loser_agents = cursor.fetchall()
-    assert len(loser_agents) == 1
-
-    loser = dict(loser_agents[0])
-    assert loser["status"] == "failed", (
-        f"Loser agent status is '{loser['status']}' but should be 'failed'. Orphaned agent left in DB after failed CAS claim."
-    )
+    assert len(loser_agents) == 0, "Loser agent should be deleted immediately after failed claim (ephemeral agents)"
 
     # No session should have been created (we didn't get that far)
     mock_oc.create_session.assert_not_called()

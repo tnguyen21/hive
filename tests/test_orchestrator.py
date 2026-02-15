@@ -1057,9 +1057,9 @@ async def test_reconcile_ghost_agents(temp_db, tmp_path):
 
     await orch._reconcile_stale_agents()
 
-    # Agent should be marked failed
+    # Agent should be deleted (ephemeral agents)
     agent = temp_db.get_agent(agent_id)
-    assert agent["status"] == "failed"
+    assert agent is None
 
     # Abort should NOT have been called (session doesn't exist)
     mock_oc.cleanup_session.assert_not_called()
@@ -1084,9 +1084,9 @@ async def test_reconcile_stale_agents_with_live_sessions(temp_db, tmp_path):
     # Abort + delete should have been called for the live session
     mock_oc.cleanup_session.assert_called_once_with("live-sess", directory="/tmp/wt")
 
-    # Agent marked failed, issue released
+    # Agent deleted (ephemeral agents), issue released
     agent = temp_db.get_agent(agent_id)
-    assert agent["status"] == "failed"
+    assert agent is None
     issue = temp_db.get_issue(issue_id)
     assert issue["status"] == "open"
 
@@ -1128,9 +1128,9 @@ async def test_reconcile_fallback_when_opencode_unreachable(temp_db, tmp_path):
     # Best-effort abort/delete should still be called
     mock_oc.cleanup_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
 
-    # Agent failed, issue released
+    # Agent deleted (ephemeral agents), issue released
     agent = temp_db.get_agent(agent_id)
-    assert agent["status"] == "failed"
+    assert agent is None
     issue = temp_db.get_issue(issue_id)
     assert issue["status"] == "open"
 
@@ -1189,9 +1189,9 @@ async def test_reconcile_mixed_ghost_live_orphan(temp_db, tmp_path):
     orphan_abort_calls = [c for c in mock_oc.cleanup_session.call_args_list if c.args[0] == "orphan-sess"]
     assert len(orphan_abort_calls) == 1
 
-    # Both agents should be failed
-    assert temp_db.get_agent(ghost_agent_id)["status"] == "failed"
-    assert temp_db.get_agent(live_agent_id)["status"] == "failed"
+    # Both agents should be deleted (ephemeral agents)
+    assert temp_db.get_agent(ghost_agent_id) is None
+    assert temp_db.get_agent(live_agent_id) is None
 
     # Orphan cleanup event
     events = temp_db.get_events(event_type="orphan_sessions_cleaned")
@@ -1247,10 +1247,9 @@ async def test_reconcile_purges_idle_and_failed_agents(temp_db, tmp_path):
     assert temp_db.get_agent(idle_agent_id) is None
     assert temp_db.get_agent(failed_agent_id) is None
 
-    # Working agent should still exist (but will be reconciled to ghost status due to no live sessions)
+    # Working agent should also be deleted (gets reconciled to failed status, then purged in Phase 3)
     working_agent = temp_db.get_agent(working_agent_id)
-    assert working_agent is not None
-    assert working_agent["status"] == "ghost"  # Phase 1 reconciliation sets this
+    assert working_agent is None
 
 
 @pytest.mark.asyncio
