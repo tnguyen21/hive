@@ -1512,24 +1512,30 @@ class Orchestrator:
         if not self.active_agents:
             return
 
-        # Check each active agent against the DB lease
+        # Check all active agents against DB lease in a single query (optimization)
         stalled = []
-        for agent_id, agent in list(self.active_agents.items()):
-            try:
-                cursor = self.db.conn.execute(
-                    """
-                    SELECT lease_expires_at
-                    FROM agents
-                    WHERE id = ? AND status = 'working'
-                      AND lease_expires_at < datetime('now')
-                    """,
-                    (agent_id,),
-                )
-                row = cursor.fetchone()
-                if row:
-                    stalled.append(agent)
-            except Exception:
-                pass
+        try:
+            active_ids = list(self.active_agents.keys())
+            placeholders = ", ".join(["?"] * len(active_ids))
+
+            cursor = self.db.conn.execute(
+                f"""
+                SELECT id
+                FROM agents
+                WHERE id IN ({placeholders})
+                  AND status = 'working'
+                  AND lease_expires_at < datetime('now')
+                """,
+                active_ids,
+            )
+
+            stalled_ids = {row[0] for row in cursor.fetchall()}
+            stalled = [
+                agent for agent_id, agent in self.active_agents.items() if agent_id in stalled_ids
+            ]
+
+        except Exception as e:
+            logger.error(f"Error checking stalled agents: {e}")
 
         # For stalled agents, check OpenCode session status before handling
         for agent in stalled:
