@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 os.environ["HIVE_CLI_CONTEXT"] = "1"
 
 from .config import Config
-from .daemon import HiveDaemon, run_daemon_foreground
+from .daemon import HiveDaemon
 from .db import Database, validate_tags
 from .project import detect_project
 from .sse import SSEClient
@@ -1078,16 +1078,12 @@ class HiveCLI:
         return HiveDaemon(self.project_name, str(self.project_path))
 
     def start(self, foreground: bool = False, *, json_mode: bool = False):
-        """Start the hive daemon (or run in foreground for debugging)."""
+        """Start the hive daemon."""
         if foreground:
-            if not json_mode:
-                print(f"Starting Hive orchestrator in foreground for project: {self.project_name}")
-                print("Press Ctrl+C to stop\n")
-            try:
-                run_daemon_foreground(self.db, str(self.project_path), self.project_name)
-            except KeyboardInterrupt:
-                if not json_mode:
-                    print("\nStopping orchestrator...")
+            # Internal-only: used by the background daemon subprocess.
+            from .daemon import run_daemon_foreground
+
+            run_daemon_foreground(self.db, str(self.project_path), self.project_name)
             return
 
         daemon = self._make_daemon()
@@ -1605,7 +1601,7 @@ def main():
         "--foreground",
         "-f",
         action="store_true",
-        help="Run in foreground (don't daemonize)",
+        help=argparse.SUPPRESS,
     )
 
     daemon_subparsers.add_parser("stop", help="Stop daemon")

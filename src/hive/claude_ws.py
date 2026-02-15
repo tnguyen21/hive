@@ -12,7 +12,9 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import shutil
+import signal
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -121,8 +123,10 @@ class ClaudeWSBackend:
                 "-p",
                 "",
                 cwd=directory,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
             self.sessions[session_id].process = proc
             logger.info(f"Spawned claude CLI (pid={proc.pid}) for session {session_id}, model={resolved_model}")
@@ -232,11 +236,19 @@ class ClaudeWSBackend:
         if not session:
             return False
         if session.process and session.process.returncode is None:
-            session.process.terminate()
+            # Send SIGTERM to the process group (child is a session leader
+            # via start_new_session=True) so grandchildren are also killed.
+            try:
+                os.killpg(session.process.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
             try:
                 await asyncio.wait_for(session.process.wait(), timeout=5)
             except asyncio.TimeoutError:
-                session.process.kill()
+                try:
+                    os.killpg(session.process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    session.process.kill()
         if session.ws and not session.ws.closed:
             await session.ws.close()
         return True
@@ -378,8 +390,8 @@ class ClaudeWSBackend:
                     },
                 )
 
-        elif msg_type == "keep_alive":
-            pass  # Ignore keepalives
+        elif msg_type in ("keep_alive", "user", "control_response"):
+            pass  # Expected protocol messages, no action needed
 
         else:
             logger.debug(f"Unhandled message type '{msg_type}' from session {session_id}")
@@ -468,7 +480,20 @@ class ClaudeWSBackend:
 
     async def __aexit__(self, *args):
         self.stop()
-        for session_id in list(self.sessions):
-            await self.cleanup_session(session_id)
+        # Kill all child processes immediately (SIGKILL to process groups).
+        # No graceful abort/WS-close — we're shutting down the whole daemon.
+        for session_id, session in list(self.sessions.items()):
+            if session.process and session.process.returncode is None:
+                try:
+                    os.killpg(session.process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    try:
+                        session.process.kill()
+                    except ProcessLookupError:
+                        pass
+        self.sessions.clear()
         if self._runner:
-            await self._runner.cleanup()
+            try:
+                await asyncio.wait_for(self._runner.cleanup(), timeout=3)
+            except (asyncio.TimeoutError, Exception):
+                pass

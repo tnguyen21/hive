@@ -364,10 +364,10 @@ class Orchestrator:
             del self.active_agents[agent_id]
 
     async def _shutdown_all_sessions(self):
-        """Abort and delete all active opencode sessions on shutdown.
+        """Mark agents as failed and release issues on shutdown.
 
-        Called from the orchestrator's finally block to prevent orphaned
-        sessions from continuing to consume tokens after the daemon stops.
+        Process cleanup (killing children) is handled by the backend's
+        __aexit__. This just updates DB state.
         """
         if not self.active_agents:
             return
@@ -375,9 +375,6 @@ class Orchestrator:
         logger.info(f"Shutting down {len(self.active_agents)} active session(s)")
 
         for agent_id, agent in list(self.active_agents.items()):
-            await self.opencode.cleanup_session(agent.session_id, directory=agent.worktree)
-
-            # Mark agent failed in DB
             try:
                 self.db.conn.execute(
                     """
@@ -387,7 +384,6 @@ class Orchestrator:
                     """,
                     (agent_id,),
                 )
-                # Release issue back to open if still in_progress
                 self.db.conn.execute(
                     """
                     UPDATE issues
@@ -403,9 +399,6 @@ class Orchestrator:
             self.db.conn.commit()
         except Exception:
             pass
-
-        # Also clean up refinery session
-        await self.merge_processor.shutdown()
 
         self.active_agents.clear()
         self._session_to_agent.clear()
@@ -542,9 +535,10 @@ class Orchestrator:
             # Abort all active opencode sessions before shutting down
             await self._shutdown_all_sessions()
             self.sse_client.stop()
-            await sse_task
-            await permission_task
-            await merge_task
+            # Cancel background tasks so we don't block on their long sleeps
+            for task in (sse_task, permission_task, merge_task):
+                task.cancel()
+            await asyncio.gather(sse_task, permission_task, merge_task, return_exceptions=True)
 
     async def main_loop(self):
         """Main orchestration loop."""
