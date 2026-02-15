@@ -108,6 +108,8 @@ class ClaudeWSBackend:
             raise RuntimeError("claude CLI not found on PATH")
 
         async with self._spawn_semaphore:
+            # Strip CLAUDECODE env var so workers don't think they're nested sessions
+            spawn_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
             proc = await asyncio.create_subprocess_exec(
                 claude_bin,
                 "--sdk-url",
@@ -127,6 +129,7 @@ class ClaudeWSBackend:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
+                env=spawn_env,
             )
             self.sessions[session_id].process = proc
             logger.info(f"Spawned claude CLI (pid={proc.pid}) for session {session_id}, model={resolved_model}")

@@ -101,6 +101,8 @@ class HiveDaemon:
             self._remove_pid()
 
         # Spawn a detached subprocess running `hive daemon start --foreground`
+        # Strip CLAUDECODE so the daemon (and its workers) don't think they're nested
+        spawn_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         log_fd = open(self.log_file, "a")  # noqa: SIM115
         proc = subprocess.Popen(
             [
@@ -120,6 +122,7 @@ class HiveDaemon:
             stdin=subprocess.DEVNULL,
             cwd=str(self.project_path),
             start_new_session=True,  # detach from parent's session
+            env=spawn_env,
         )
         log_fd.close()
 
