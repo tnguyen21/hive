@@ -1633,31 +1633,46 @@ def _smart_noargs(cli: HiveCLI, project_path: Path, project_name: str, *, json_m
 _EPILOG = """\
 advanced commands:
   update, cancel, finalize, retry, escalate, molecule, dep, ready,
-  agents, agent, events, logs, merges, costs, stats, metrics,
-  daemon, watch, note, notes, ui
+  agent, costs, stats, metrics, daemon, note, notes, ui
 
 Run `hive <command> -h` for details on any command.
 """
 
 # Commands shown in `hive -h`
 _ESSENTIAL_COMMANDS = {"setup", "create", "list", "show", "status", "start", "stop", "queen", "doctor"}
+_MONITORING_COMMANDS = {"logs", "watch", "events", "agents", "merges"}
+
+
+_MONITORING_HELP = {
+    "logs": "Show event log (use -f to follow)",
+    "watch": "Watch a worker in real time",
+    "events": "Query event history",
+    "agents": "List agents and their status",
+    "merges": "Show merge queue",
+}
 
 
 class _HiveHelpFormatter(argparse.RawDescriptionHelpFormatter):
-    """Custom formatter that hides non-essential subcommands."""
+    """Custom formatter that shows essential + monitoring commands, hides the rest."""
 
     def _format_action(self, action):
         if isinstance(action, argparse._SubParsersAction):
-            # Filter choices to only essential commands
             orig_choices = action._choices_actions
+
+            # Essential commands only
             action._choices_actions = [a for a in orig_choices if a.dest in _ESSENTIAL_COMMANDS]
             result = super()._format_action(action)
             action._choices_actions = orig_choices
+
+            # Append monitoring section manually
+            lines = ["\nmonitoring:"]
+            for cmd in ("logs", "watch", "events", "agents", "merges"):
+                lines.append(f"    {cmd:<16s} {_MONITORING_HELP.get(cmd, '')}")
+            result += "\n".join(lines) + "\n"
             return result
         return super()._format_action(action)
 
     def _format_usage(self, usage, actions, groups, prefix):
-        # Override usage to not list all subcommand choices
         return super()._format_usage(usage, actions, groups, prefix)
 
 

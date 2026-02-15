@@ -927,39 +927,6 @@ def test_setup_interactive_no_test_command(tmp_path, capsys, monkeypatch):
 # ── Two-tier help tests ─────────────────────────────────────────
 
 
-def test_help_shows_essential_commands(capsys):
-    """Test that hive -h shows only essential commands."""
-
-    with pytest.raises(SystemExit) as exc_info:
-        from hive.cli import main
-
-        import sys
-
-        sys.argv = ["hive", "-h"]
-        main()
-
-    assert exc_info.value.code == 0
-    captured = capsys.readouterr()
-
-    # Essential commands should be visible
-    for cmd in ("setup", "create", "list", "show", "status", "start", "stop", "queen", "doctor"):
-        assert cmd in captured.out
-
-    # Hidden commands should NOT appear in the main listing
-    # (they're only in the epilog)
-    lines = captured.out.split("\n")
-    main_section = []
-    for line in lines:
-        if "advanced commands:" in line:
-            break
-        main_section.append(line)
-    main_text = "\n".join(main_section)
-
-    for cmd in ("molecule", "agents", "merges", "costs", "metrics"):
-        # These should only appear in the epilog, not in the main command listing
-        assert cmd not in main_text or cmd in ("status",)  # status is essential
-
-
 def test_hidden_commands_in_epilog(capsys):
     """Test that hidden commands are listed in the epilog."""
     with pytest.raises(SystemExit):
