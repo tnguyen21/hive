@@ -853,3 +853,72 @@ def test_cli_watch_valid_issue(mock_asyncio_run, temp_db, tmp_path):
     # Get the arguments passed to asyncio.run (should be a coroutine)
     call_args = mock_asyncio_run.call_args[0][0]
     assert hasattr(call_args, "__await__")  # It's a coroutine
+
+
+# ── Setup wizard tests ──────────────────────────────────────────
+
+
+def test_setup_creates_config(tmp_path, capsys):
+    """Test setup wizard creates .hive.toml with claude backend."""
+    from hive.cli import _do_setup
+
+    _do_setup(tmp_path, tmp_path.name, json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["claude_cli"] is not None  # bool
+    assert "config_created" in data
+
+    config = (tmp_path / ".hive.toml").read_text()
+    assert 'backend = "claude"' in config
+    assert tmp_path.name in config
+
+
+def test_setup_skips_existing_config(tmp_path, capsys):
+    """Test setup wizard doesn't overwrite existing config."""
+    from hive.cli import _do_setup
+
+    (tmp_path / ".hive.toml").write_text('[hive]\nbackend = "opencode"\n')
+
+    _do_setup(tmp_path, tmp_path.name, json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["config_exists"] is True
+    assert "config_created" not in data
+
+    # Original content preserved
+    assert "opencode" in (tmp_path / ".hive.toml").read_text()
+
+
+def test_setup_interactive_with_test_command(tmp_path, capsys, monkeypatch):
+    """Test interactive setup reads test command from input."""
+    from hive.cli import _do_setup
+
+    # Make it look like a git repo
+    (tmp_path / ".git").mkdir()
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "pytest tests/")
+
+    _do_setup(tmp_path, tmp_path.name)
+
+    config = (tmp_path / ".hive.toml").read_text()
+    assert 'test_command = "pytest tests/"' in config
+    assert 'backend = "claude"' in config
+
+    captured = capsys.readouterr()
+    assert "Next steps:" in captured.out
+    assert "hive create" in captured.out
+
+
+def test_setup_interactive_no_test_command(tmp_path, capsys, monkeypatch):
+    """Test interactive setup with blank test command."""
+    from hive.cli import _do_setup
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+
+    _do_setup(tmp_path, tmp_path.name)
+
+    config = (tmp_path / ".hive.toml").read_text()
+    assert "test_command" not in config
+    assert 'backend = "claude"' in config

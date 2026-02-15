@@ -1511,32 +1511,71 @@ class HiveCLI:
             sse_client.stop()
 
 
-_INIT_TEMPLATE = """\
-[project]
-name = "{name}"
+def _do_setup(project_path: Path, project_name: str, *, json_mode: bool = False):
+    """Interactive setup wizard for new Hive projects."""
+    import shutil
 
-[hive]
-# max_agents = 10
-# worker_model = "claude-sonnet-4-20250514"
-# test_command = "pytest"
-"""
-
-
-def _do_init(project_path: Path, project_name: str, *, json_mode: bool = False):
-    """Create a .hive.toml template at the project root."""
     target = project_path / ".hive.toml"
-    if target.exists():
-        if json_mode:
-            print(json.dumps({"error": f"{target} already exists"}))
-        else:
-            print(f"{target} already exists")
+
+    if json_mode:
+        # Non-interactive: just create config and report status
+        checks = {
+            "claude_cli": shutil.which("claude") is not None,
+            "git_repo": (project_path / ".git").is_dir(),
+            "config_exists": target.exists(),
+        }
+        if not checks["config_exists"]:
+            target.write_text(f'[project]\nname = "{project_name}"\n\n[hive]\nbackend = "claude"\n')
+            checks["config_created"] = str(target)
+        print(json.dumps(checks))
         return
 
-    target.write_text(_INIT_TEMPLATE.format(name=project_name))
-    if json_mode:
-        print(json.dumps({"created": str(target)}))
+    print("Hive Setup")
+    print("=" * 40)
+    print()
+
+    # Check for claude CLI
+    has_claude = shutil.which("claude") is not None
+    if has_claude:
+        print("  claude CLI found")
     else:
-        print(f"Created {target}")
+        print("  claude CLI not found in PATH")
+        print("    Install: https://docs.anthropic.com/en/docs/claude-code")
+
+    # Check for git repo
+    has_git = (project_path / ".git").is_dir()
+    if has_git:
+        print(f"  git repo detected: {project_name}")
+    else:
+        print("  Not a git repository — Hive requires git for worktrees")
+        print("    Run: git init")
+
+    print()
+
+    # Check if config already exists
+    if target.exists():
+        print(f"  {target} already exists, skipping config creation.")
+    else:
+        # Ask for test command
+        test_cmd = ""
+        try:
+            test_cmd = input("Test command (leave blank to skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+
+        # Write config
+        lines = [f'[project]\nname = "{project_name}"\n', '\n[hive]\nbackend = "claude"\n']
+        if test_cmd:
+            lines.append(f'test_command = "{test_cmd}"\n')
+        target.write_text("".join(lines))
+        print(f"\n  Created {target}")
+
+    # Next steps
+    print("\nNext steps:")
+    print("  1. hive create 'title' 'description'   — create an issue")
+    print("  2. hive start                           — start the daemon")
+    print("  3. hive status                          — check progress")
+    print("  4. hive queen                           — launch Queen Bee TUI")
 
 
 def main():
@@ -1768,8 +1807,9 @@ def main():
     watch_parser = subparsers.add_parser("watch", help="Stream live events from a worker's OpenCode session")
     watch_parser.add_argument("issue_id", help="Issue ID to watch")
 
-    # init command
-    subparsers.add_parser("init", help="Create a .hive.toml config at the project root")
+    # setup command (primary) + init (hidden alias)
+    subparsers.add_parser("setup", help="Interactive project setup wizard")
+    subparsers.add_parser("init", help=argparse.SUPPRESS)
 
     # note command (add a note)
     note_parser = subparsers.add_parser("note", help="Add a note to the knowledge base")
@@ -1816,9 +1856,9 @@ def main():
     # Ensure ~/.hive/ directory exists
     Config.HIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Handle init before DB (it doesn't need one)
-    if args.command == "init":
-        _do_init(project_path, project_name, json_mode=args.json_mode)
+    # Handle setup/init before DB (they don't need one)
+    if args.command in ("setup", "init"):
+        _do_setup(project_path, project_name, json_mode=args.json_mode)
         return
 
     # Resolve DB path: CLI flag > config
