@@ -52,6 +52,8 @@ SCHEMA = """
 -- WAL mode for concurrent reads during writes
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+-- NOTE: Existing databases may still have agent_id FK constraints in events, notes, merge_queue.
+-- Deletion code must use PRAGMA foreign_keys = OFF when deleting agents for backward compatibility.
 PRAGMA busy_timeout = 5000;
 
 ----------------------------------------------------------------------
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS dependencies (
 );
 
 ----------------------------------------------------------------------
--- AGENTS: persistent identity layer
+-- AGENTS: ephemeral execution identity (deleted after merge/cleanup)
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS agents (
     id          TEXT PRIMARY KEY,
@@ -110,11 +112,12 @@ CREATE TABLE IF NOT EXISTS agents (
 
 ----------------------------------------------------------------------
 -- EVENTS: append-only audit trail
+-- agent_id is a correlation key, not a live FK (agents are deleted after merge)
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id    TEXT REFERENCES issues(id),
-    agent_id    TEXT REFERENCES agents(id),
+    agent_id    TEXT,
     event_type  TEXT NOT NULL,
     detail      TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -130,7 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id    TEXT REFERENCES issues(id),
-    agent_id    TEXT REFERENCES agents(id),
+    agent_id    TEXT,
     category    TEXT NOT NULL DEFAULT 'discovery',
     content     TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -146,7 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at);
 CREATE TABLE IF NOT EXISTS merge_queue (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id    TEXT NOT NULL REFERENCES issues(id),
-    agent_id    TEXT REFERENCES agents(id),
+    agent_id    TEXT,
     project     TEXT NOT NULL,
     worktree    TEXT NOT NULL,
     branch_name TEXT NOT NULL,

@@ -906,6 +906,68 @@ def test_get_recent_project_notes_empty(temp_db):
     assert notes == []
 
 
+def test_create_event_with_nonexistent_agent_id():
+    """Test creating an event with non-existent agent_id succeeds on fresh DB."""
+    import tempfile
+    import os
+    from hive.db import Database
+
+    # Create completely fresh DB to ensure we get updated schema
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    db = Database(db_path)
+    db.connect()
+
+    try:
+        issue_id = db.create_issue("Test issue")
+        nonexistent_agent_id = "agent-nonexistent-12345"
+
+        # This should succeed (no FK constraint on agent_id in fresh schema)
+        db.log_event(issue_id, nonexistent_agent_id, "test_event", {"detail": "test"})
+
+        # Verify the event was created
+        events = db.get_events(agent_id=nonexistent_agent_id)
+        assert len(events) == 1
+        assert events[0]["agent_id"] == nonexistent_agent_id
+        assert events[0]["event_type"] == "test_event"
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_create_note_with_nonexistent_agent_id():
+    """Test creating a note with non-existent agent_id succeeds on fresh DB."""
+    import tempfile
+    import os
+    from hive.db import Database
+
+    # Create completely fresh DB to ensure we get updated schema
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    db = Database(db_path)
+    db.connect()
+
+    try:
+        issue_id = db.create_issue("Test issue")
+        nonexistent_agent_id = "agent-nonexistent-67890"
+
+        # This should succeed (no FK constraint on agent_id in fresh schema)
+        note_id = db.add_note(issue_id=issue_id, agent_id=nonexistent_agent_id, content="Test note with phantom agent")
+
+        assert isinstance(note_id, int)
+
+        # Verify the note was created
+        notes = db.get_notes(issue_id=issue_id)
+        assert len(notes) == 1
+        assert notes[0]["agent_id"] == nonexistent_agent_id
+        assert notes[0]["content"] == "Test note with phantom agent"
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 # --- get_completed_molecule_steps tests ---
 
 
