@@ -33,3 +33,4 @@ env/
 *.db-shm
 .DS_Store
 .worktrees
+.hive.toml
