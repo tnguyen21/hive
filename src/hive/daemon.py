@@ -249,6 +249,13 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
     from .orchestrator import Orchestrator
 
     async def main():
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
+
+        # Register signal handlers so Ctrl+C works even with child processes
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+
         if Config.BACKEND == "claude-ws":
             from .claude_ws import ClaudeWSBackend
 
@@ -264,7 +271,15 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
                     project_name=project_name,
                     sse_client=backend,
                 )
-                await orchestrator.start()
+                # Run orchestrator until stop signal
+                main_task = asyncio.create_task(orchestrator.start())
+                await stop_event.wait()
+                orchestrator.running = False
+                main_task.cancel()
+                try:
+                    await main_task
+                except asyncio.CancelledError:
+                    pass
         else:
             from .opencode import OpenCodeClient
 
@@ -275,9 +290,18 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
                     project_path=project_path,
                     project_name=project_name,
                 )
-                await orchestrator.start()
+                main_task = asyncio.create_task(orchestrator.start())
+                await stop_event.wait()
+                orchestrator.running = False
+                main_task.cancel()
+                try:
+                    await main_task
+                except asyncio.CancelledError:
+                    pass
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        pass  # Already handled by signal handler
+    finally:
         print("\nShutting down...")
