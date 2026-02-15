@@ -4,7 +4,7 @@ _A simplified multi-agent orchestration system inspired by Gas Town, using OpenC
 
 ---
 
-> **Implementation tracking** has moved to [`IMPL_PLAN.md`](IMPL_PLAN.md) (roadmap/checklist) and [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md) (delivered features, post-mortems, open questions).
+> **Implementation tracking**: [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md) (delivered features, post-mortems, open questions).
 
 ## 1. Motivation
 
@@ -1745,6 +1745,37 @@ ORDER BY completed DESC, avg_hours ASC;
 
 No special infrastructure. The CV is an emergent property of the event log, keyed by model rather than agent identity.
 
+### 14.1 `agent_runs` View
+
+A SQL view materializes per-agent-run metrics from the events table — one row per worker invocation:
+
+```sql
+CREATE VIEW IF NOT EXISTS agent_runs AS
+SELECT
+    e_start.agent_id, e_start.issue_id, i.type as issue_type,
+    COALESCE(i.model, 'unknown') as model, i.tags,
+    CASE
+        WHEN e_done.id IS NOT NULL THEN 'done'
+        WHEN e_fail.id IS NOT NULL THEN 'failed'
+        WHEN e_esc.id IS NOT NULL THEN 'escalated'
+        ELSE 'unknown'
+    END as outcome,
+    ROUND((julianday(COALESCE(e_done.created_at, ...)) - julianday(e_start.created_at)) * 86400, 1) as duration_s,
+    ...
+FROM events e_start
+JOIN issues i ON e_start.issue_id = i.id
+LEFT JOIN events e_done ON ... AND e_done.event_type = 'completed'
+LEFT JOIN events e_fail ON ... AND e_fail.event_type IN ('status_failed')
+LEFT JOIN events e_esc  ON ... AND e_esc.event_type  = 'escalated'
+WHERE e_start.event_type = 'worker_started'
+```
+
+Queryable via `hive metrics` (CLI), `hive ui` (Datasette), or raw SQL. A view (not a materialized table) because SQLite is fast enough at this scale and there's no write overhead.
+
+### 14.2 Pending: Adaptive Routing
+
+The data to route issues to optimal models exists (`agent_runs.model × outcome`), but no automated routing is wired yet. Currently model selection is static per-config or per-issue override.
+
 ---
 
 > **Implementation results** have moved to [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md).
@@ -1786,7 +1817,7 @@ No special infrastructure. The CV is an emergent property of the event log, keye
 
 ---
 
-> **Implementation roadmap**: [`IMPL_PLAN.md`](IMPL_PLAN.md) | **Implementation notes, post-mortems, open questions**: [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md)
+> **Implementation notes, post-mortems, open questions**: [`IMPLEMENTATION_NOTES.md`](IMPLEMENTATION_NOTES.md)
 
 ---
 
@@ -1911,3 +1942,94 @@ The notes system is sufficient for the current use case: sharing discoveries and
 **Why no note TTL/expiration?** Notes could accumulate over time, but the `limit` parameter on queries already prevents unbounded growth in prompt injection. Cleanup can be added later if the table gets large.
 
 **Why no content-based deduplication?** ID-based dedup (when combining molecule + project notes) is sufficient. Content-based dedup adds complexity for minimal gain.
+
+---
+
+## 17. Safety Guardrails & Feedback Loops
+
+The system generates signal — events, rejection reasons, test output, notes, cost data — and routes it back to where it changes outcomes. Two concerns:
+
+1. **Safety**: cost guardrails, invariant checking, worker output validation
+2. **Feedback**: retry context injection, refinery rejection notes, per-issue test commands
+
+### 17.1 Retry Context Injection
+
+When a worker retries an issue, it gets context about what went wrong before. `build_retry_context()` harvests prior `failed`, `stalled`, and `merge_rejected` events for the issue and injects them into the worker prompt as a `$prior_attempts` section. Workers see what was tried and can avoid repeating the same mistakes.
+
+### 17.2 Worker Output Validation
+
+Before accepting a worker's completion, `_validate_worker_output()` checks that the worker actually produced real work:
+- Were commits actually made? (`git diff --stat`)
+- Does the claimed file list match reality?
+
+Hard failures (no commits at all) route through `_handle_agent_failure`. This prevents empty or hallucinated completions from entering the merge queue.
+
+### 17.3 Refinery Rejection Notes
+
+When a merge fails — rebase conflict, test failure, or refinery rejection — a structured note (category `rejection`) is auto-created on the issue. Future retry workers receive these notes in their prompt context. The note includes the failure reason, branch name, and truncated test output (if applicable).
+
+### 17.4 Per-Issue Test Commands
+
+Workers can specify a `test_command` in `.hive-result.jsonl`. The merge pipeline stores it in `merge_queue.test_command` and runs it during mechanical merge:
+- Worker command + global `HIVE_TEST_COMMAND`: worker runs first (120s timeout), then global (300s)
+- Worker only: runs with 120s timeout
+- Global only: runs with 300s timeout (original behavior)
+- Neither: tests skipped
+
+### 17.5 `hive doctor` (Invariant Checker)
+
+`hive doctor` runs SQL-based checks against the DB to detect state inconsistencies:
+
+| Check | What it detects |
+|-------|----------------|
+| INV-1 | Open issues with exhausted retry budget |
+| INV-2 | Assignee/status inconsistency (`open` + non-null assignee, etc.) |
+| INV-3 | Unbounded retry loops (excessive agent count) |
+| INV-5 | Retry count vs expected state disagreement |
+| INV-7 | Stuck merge queue entries (running > 30 min) |
+
+### 17.6 Cost Guardrails (Partial)
+
+Config values exist (`MAX_TOKENS_PER_ISSUE=200K`, `MAX_TOKENS_PER_RUN=2M`, anomaly detection window/threshold) but enforcement in the orchestrator loop is not yet wired. Token totals are tracked via events; the guardrail check in `monitor_agent` is a TODO.
+
+### 17.7 Pending: Semantic Note Retrieval
+
+Notes are currently retrieved by recency. Vector-based semantic search (via `sqlite-vec` embeddings) would surface relevant notes by content similarity rather than just chronology. Becomes important after 50+ accumulated notes. Requires an embeddings pipeline not yet built.
+
+### 17.8 Pending: Domain Coordinators
+
+For large codebases, a middle tier of "domain coordinator" agents between Queen and workers could improve decomposition quality by understanding subdomain context. Coordinators would use existing primitives (molecules, long-lived sessions, CLI access) but require new agent type routing and decomposition-specific completion signals.
+
+---
+
+## 18. Concurrency Pitfalls
+
+Single-threaded asyncio eliminates threading races but introduces **interleaving across await points**. Key patterns and fixes:
+
+### Snapshot Pattern
+
+Any mutable state read before an `await` may change by the time the `await` returns. Capture critical values as locals:
+
+```python
+# In monitor_agent: session_id may change if molecule cycling occurs
+original_session_id = agent.session_id  # snapshot before any awaits
+# ... later in finally block, use original_session_id, not agent.session_id
+```
+
+### Double-Processing Guard
+
+The `_handling_agents` set prevents two concurrent tasks from processing the same agent's completion:
+
+```python
+if agent_id in self._handling_agents:
+    return  # another task is already handling this agent
+self._handling_agents.add(agent_id)
+try:
+    await handle_agent_complete(agent)
+finally:
+    self._handling_agents.discard(agent_id)
+```
+
+### Subprocess Blocking
+
+All subprocess calls (git operations, worktree creation) use `asyncio.run_in_executor()` to avoid blocking the event loop. Without this, a slow `git rebase` would stall all other orchestrator tasks.
