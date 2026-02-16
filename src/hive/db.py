@@ -111,8 +111,6 @@ CREATE TABLE IF NOT EXISTS agents (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project);
-
 ----------------------------------------------------------------------
 -- EVENTS: append-only audit trail
 -- agent_id is a correlation key, not a live FK (agents are deleted after merge)
@@ -146,7 +144,6 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_issue ON notes(issue_id);
 CREATE INDEX IF NOT EXISTS idx_notes_category ON notes(category);
 CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at);
-CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project);
 
 ----------------------------------------------------------------------
 -- MERGE_QUEUE: dedicated finalizer queue
