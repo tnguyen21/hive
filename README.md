@@ -106,7 +106,7 @@ Guideline for first runs:
 - `hive queen` - launch Queen session
 - `hive doctor` - health checks
 
-Monitoring commands are also visible in `hive -h`: `logs`, `watch`, `events`, `agents`, `merges`.
+Monitoring commands are also visible in `hive -h`: `logs`, `events`, `agents`, `merges`.
 
 ## Configuration
 
