@@ -1,14 +1,8 @@
 """Tests for agent_runs view and metrics functionality."""
 
 import json
-import time
 
-
-def test_agent_runs_view_exists(temp_db):
-    """Test that agent_runs view is created."""
-    cursor = temp_db.conn.execute("SELECT name FROM sqlite_master WHERE type='view' AND name='agent_runs'")
-    views = [row[0] for row in cursor.fetchall()]
-    assert "agent_runs" in views
+import pytest
 
 
 def test_agent_runs_single_completed(temp_db):
@@ -21,9 +15,6 @@ def test_agent_runs_single_completed(temp_db):
 
     # Log worker_started event
     temp_db.log_event(issue_id, agent_id, "worker_started", {"session_id": "sess-123"})
-
-    # Sleep briefly to ensure timestamps differ
-    time.sleep(0.01)
 
     # Log completed event
     temp_db.log_event(issue_id, agent_id, "completed", {"status": "success"})
@@ -130,16 +121,13 @@ def test_get_metrics_basic(temp_db):
 
     # Sonnet: 2 runs, 1 success, 1 failure
     temp_db.log_event(issue1, agent1, "worker_started")
-    time.sleep(0.01)
     temp_db.log_event(issue1, agent1, "completed")
 
     temp_db.log_event(issue2, agent2, "worker_started")
-    time.sleep(0.01)
     temp_db.log_event(issue2, agent2, "status_failed")
 
     # Opus: 1 run, 1 success
     temp_db.log_event(issue3, agent3, "worker_started")
-    time.sleep(0.01)
     temp_db.log_event(issue3, agent3, "completed")
 
     results = temp_db.get_metrics()
@@ -301,23 +289,32 @@ def test_get_metrics_duration_calculation(temp_db):
     agent1 = temp_db.create_agent("worker-001", model="sonnet")
     agent2 = temp_db.create_agent("worker-002", model="sonnet")
 
-    # First run: ~0.1s
-    temp_db.log_event(issue1, agent1, "worker_started")
-    time.sleep(0.1)
-    temp_db.log_event(issue1, agent1, "completed")
+    # First run: 10 seconds (using explicit timestamp injection)
+    temp_db.conn.execute(
+        "INSERT INTO events (issue_id, agent_id, event_type, created_at) VALUES (?, ?, 'worker_started', datetime('now', '-10 seconds'))",
+        (issue1, agent1),
+    )
+    temp_db.conn.execute(
+        "INSERT INTO events (issue_id, agent_id, event_type, created_at) VALUES (?, ?, 'completed', datetime('now'))", (issue1, agent1)
+    )
 
-    # Second run: ~0.1s
-    temp_db.log_event(issue2, agent2, "worker_started")
-    time.sleep(0.1)
-    temp_db.log_event(issue2, agent2, "completed")
+    # Second run: 10 seconds (using explicit timestamp injection)
+    temp_db.conn.execute(
+        "INSERT INTO events (issue_id, agent_id, event_type, created_at) VALUES (?, ?, 'worker_started', datetime('now', '-10 seconds'))",
+        (issue2, agent2),
+    )
+    temp_db.conn.execute(
+        "INSERT INTO events (issue_id, agent_id, event_type, created_at) VALUES (?, ?, 'completed', datetime('now'))", (issue2, agent2)
+    )
+    temp_db.conn.commit()
 
     results = temp_db.get_metrics()
     assert len(results) == 1
 
     sonnet_result = results[0]
-    # Average should be around 0.1s (allowing for some variance and rounding)
+    # Average should be approximately 10.0 seconds
     assert sonnet_result["avg_duration_s"] is not None
-    assert 0.0 <= sonnet_result["avg_duration_s"] < 0.3
+    assert sonnet_result["avg_duration_s"] == pytest.approx(10.0, abs=1.0)
 
 
 def test_agent_runs_view_with_tags(temp_db):
