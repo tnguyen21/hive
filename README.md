@@ -105,6 +105,7 @@ Guideline for first runs:
 - `hive stop` - stop daemon
 - `hive queen` - launch Queen session
 - `hive doctor` - health checks
+- `hive debug` - full diagnostic report
 
 Monitoring commands are also visible in `hive -h`: `logs`, `events`, `agents`, `merges`.
 
@@ -132,6 +133,17 @@ Global DB default remains `~/.hive/hive.db` unless overridden.
 For deep internals, orchestration design, schema, and implementation details, see:
 
 - `docs/TECHNICAL_DESIGN_DOC.md`
+
+## Bug Reports and Feedback
+
+Hive is alpha software and I genuinely love hearing from users — bug reports, feature ideas, workflow friction, all of it.
+
+If something isn't working, run `hive debug` and include the output in your report. It collects system info, config, daemon state, doctor checks, and recent logs into a single pasteable bundle:
+
+```bash
+hive debug          # human-readable
+hive debug --json   # machine-readable, easy to attach
+```
 
 ## Development
 
