@@ -12,7 +12,7 @@ source .venv/bin/activate
 uv pip install -e ".[dev]"
 
 # In your project repo
-hive setup
+hive init
 hive create "Add user auth" "Implement JWT login flow"
 hive start            # live dashboard by default
 ```
@@ -45,7 +45,7 @@ Rule of thumb: if you would split the work anyway, Hive is usually the better fi
 
 ## Setup Defaults (Safety First)
 
-`hive setup` now guides you through:
+`hive init` now guides you through:
 
 - test command for merge/review validation
 - auto-merge setting (`merge_queue_enabled`), defaulting to manual review mode
@@ -95,7 +95,7 @@ Guideline for first runs:
 
 ## Essential Commands
 
-- `hive setup` - interactive setup wizard
+- `hive init` - interactive setup wizard
 - `hive create` - create an issue
 - `hive list` - list issues
 - `hive show` - show issue details
