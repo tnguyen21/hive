@@ -100,7 +100,7 @@ class HiveDaemon:
         if existing_pid:
             self._remove_pid()
 
-        # Spawn a detached subprocess running `hive daemon start --foreground`
+        # Spawn a detached subprocess running `hive start --foreground`
         # Strip CLAUDECODE so the daemon (and its workers) don't think they're nested
         spawn_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         log_fd = open(self.log_file, "a")  # noqa: SIM115
@@ -128,9 +128,13 @@ class HiveDaemon:
         # Write child PID
         self._write_pid(proc.pid)
 
-        # Give it a moment to start and verify it's alive
-        time.sleep(0.3)
-        if not self._is_running(proc.pid):
+        # Give it a moment to start and verify it's alive.
+        # Use proc.poll() instead of os.kill(pid, 0) — the latter
+        # returns True on zombie processes, causing false positives
+        # when the child exits immediately (e.g. argparse error).
+        time.sleep(0.5)
+        exit_code = proc.poll()
+        if exit_code is not None:
             self._remove_pid()
             return False
 
@@ -184,27 +188,16 @@ class HiveDaemon:
         """
         pid = self._read_pid()
 
+        base = {"log_file": str(self.log_file)}
+
         if not pid:
-            return {
-                "running": False,
-                "pid": None,
-                "message": "Daemon not running (no PID file)",
-            }
+            return {**base, "running": False, "pid": None, "message": "Daemon not running (no PID file)"}
 
         if not self._is_running(pid):
             self._remove_pid()
-            return {
-                "running": False,
-                "pid": pid,
-                "message": f"Daemon not running (stale PID file for {pid})",
-            }
+            return {**base, "running": False, "pid": pid, "message": f"Daemon not running (stale PID file for {pid})"}
 
-        return {
-            "running": True,
-            "pid": pid,
-            "message": f"Daemon running (PID {pid})",
-            "log_file": str(self.log_file),
-        }
+        return {**base, "running": True, "pid": pid, "message": f"Daemon running (PID {pid})"}
 
     def logs(self, lines: int = 50, follow: bool = False):
         """

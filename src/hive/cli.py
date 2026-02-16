@@ -1185,17 +1185,25 @@ class HiveCLI:
         if started:
             ds = daemon.status()
             if json_mode:
-                print(json.dumps({"status": "started", "pid": ds["pid"]}))
+                print(json.dumps({"status": "started", "pid": ds["pid"], "log_file": ds.get("log_file")}))
             else:
                 print(f"Hive daemon started (PID {ds['pid']})")
-                print(f"  Log: {ds.get('log_file', 'N/A')}")
+                print(f"  Log: {ds.get('log_file')}")
         else:
+            log_tail = ""
+            try:
+                if daemon.log_file.exists():
+                    lines = daemon.log_file.read_text().strip().splitlines()
+                    log_tail = "\n".join(lines[-10:])
+            except OSError:
+                pass
             if json_mode:
-                print(json.dumps({"error": "Failed to start daemon"}))
+                print(json.dumps({"error": "Failed to start daemon", "log_file": str(daemon.log_file), "log_tail": log_tail}))
                 sys.exit(1)
             else:
-                print("Failed to start daemon. Check logs:")
-                print(f"  {daemon.log_file}")
+                print(f"Failed to start daemon. Log: {daemon.log_file}")
+                if log_tail:
+                    print(f"\nLast output:\n{log_tail}")
 
     def stop(self, *, json_mode: bool = False):
         """Stop the hive daemon."""
