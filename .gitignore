@@ -35,4 +35,3 @@ env/
 .worktrees
 .hive/
 .hive.toml
-.opencode/agents/queen.md
