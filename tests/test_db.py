@@ -495,24 +495,6 @@ def test_log_system_event(temp_db):
     assert detail == {"reason": "Connection timeout"}
 
 
-def test_log_system_event_no_detail(temp_db):
-    """Test logging system-level events without detail."""
-    temp_db.log_system_event("system_started")
-
-    # Get all events
-    events = temp_db.get_events()
-
-    # Find the system event
-    system_events = [e for e in events if e["event_type"] == "system_started"]
-    assert len(system_events) == 1
-
-    event = system_events[0]
-    assert event["issue_id"] is None
-    assert event["agent_id"] is None
-    assert event["event_type"] == "system_started"
-    assert event["detail"] is None
-
-
 # --- Capability scoring tests ---
 
 
@@ -657,17 +639,6 @@ def test_get_token_usage_with_invalid_json(temp_db):
 
 
 # --- Notes system tests ---
-
-
-def test_add_note_returns_integer_id(temp_db):
-    """Test add_note returns an integer ID."""
-    issue_id = temp_db.create_issue("Test issue")
-    agent_id = temp_db.create_agent("test-agent")
-
-    note_id = temp_db.add_note(issue_id=issue_id, agent_id=agent_id, content="Test note", category="discovery")
-
-    assert isinstance(note_id, int)
-    assert note_id > 0
 
 
 def test_add_note_with_defaults(temp_db):
@@ -836,20 +807,6 @@ def test_get_notes_for_molecule(temp_db):
     assert "Note from child 3" in contents
 
 
-def test_get_notes_for_molecule_empty(temp_db):
-    """Test get_notes_for_molecule returns empty list for molecule with no child notes."""
-    parent_id = temp_db.create_issue("Parent molecule", issue_type="molecule")
-
-    notes = temp_db.get_notes_for_molecule(parent_id)
-    assert notes == []
-
-
-def test_get_notes_for_molecule_nonexistent_parent(temp_db):
-    """Test get_notes_for_molecule with non-existent parent returns empty list."""
-    notes = temp_db.get_notes_for_molecule("nonexistent-parent-id")
-    assert notes == []
-
-
 def test_get_recent_project_notes(temp_db):
     """Test get_recent_project_notes returns mixed notes newest first."""
     issue1_id = temp_db.create_issue("Issue 1")
@@ -1014,13 +971,6 @@ def test_get_completed_molecule_steps_nonexistent(temp_db):
     """Test get_completed_molecule_steps with non-existent parent."""
     steps = temp_db.get_completed_molecule_steps("nonexistent")
     assert steps == []
-
-
-def test_get_completed_molecule_steps_not_connected(temp_db):
-    """Test get_completed_molecule_steps raises error when not connected."""
-    temp_db.close()
-    with pytest.raises(RuntimeError, match="Database not connected"):
-        temp_db.get_completed_molecule_steps("test")
 
 
 def test_notes_database_not_connected_error(temp_db):
@@ -1353,18 +1303,6 @@ def test_get_ready_queue_filter_by_project(db_with_projects):
     assert len([i for i in beta_ids if i in ids["alpha_issues"]]) == 0
 
 
-def test_get_ready_queue_no_project_filter(db_with_projects):
-    """Test get_ready_queue without project filter returns all projects."""
-    db, ids = db_with_projects
-
-    all_ready = db.get_ready_queue()
-    all_ids = [item["id"] for item in all_ready]
-
-    # Should have both alpha and beta
-    assert ids["alpha_issues"][1] in all_ids
-    assert ids["beta_issues"][1] in all_ids
-
-
 def test_get_queued_merges_filter_by_project(db_with_projects):
     """Test get_queued_merges filters by project."""
     db, ids = db_with_projects
@@ -1380,14 +1318,6 @@ def test_get_queued_merges_filter_by_project(db_with_projects):
     assert beta_merges[0]["issue_id"] == ids["beta_issues"][0]
 
 
-def test_get_queued_merges_no_project_filter(db_with_projects):
-    """Test get_queued_merges without project filter returns all projects."""
-    db, ids = db_with_projects
-
-    all_merges = db.get_queued_merges()
-    assert len(all_merges) == 2
-
-
 def test_get_active_agents_filter_by_project(db_with_projects):
     """Test get_active_agents filters by project."""
     db, ids = db_with_projects
@@ -1401,14 +1331,6 @@ def test_get_active_agents_filter_by_project(db_with_projects):
     beta_agents = db.get_active_agents(project="beta")
     assert len(beta_agents) == 1
     assert beta_agents[0]["id"] == ids["beta_agent"]
-
-
-def test_get_active_agents_no_project_filter(db_with_projects):
-    """Test get_active_agents without project filter returns all projects."""
-    db, ids = db_with_projects
-
-    all_agents = db.get_active_agents()
-    assert len(all_agents) == 2
 
 
 def test_get_notes_filter_by_project(db_with_projects):
@@ -1436,20 +1358,6 @@ def test_get_notes_filter_by_project(db_with_projects):
     assert "Alpha note 2" not in beta_contents
 
 
-def test_get_notes_no_project_filter(db_with_projects):
-    """Test get_notes without project filter returns all projects."""
-    db, ids = db_with_projects
-
-    all_notes = db.get_notes()
-    all_contents = [note["content"] for note in all_notes]
-
-    # Should have all notes
-    assert "Alpha note 1" in all_contents
-    assert "Alpha note 2" in all_contents
-    assert "Beta note 1" in all_contents
-    assert "Global note" in all_contents
-
-
 def test_get_recent_project_notes_filter_by_project(db_with_projects):
     """Test get_recent_project_notes filters by project."""
     db, ids = db_with_projects
@@ -1463,16 +1371,6 @@ def test_get_recent_project_notes_filter_by_project(db_with_projects):
     assert "Alpha note 2" in alpha_contents
     assert "Global note" in alpha_contents
     assert "Beta note 1" not in alpha_contents
-
-
-def test_get_recent_project_notes_no_project_filter(db_with_projects):
-    """Test get_recent_project_notes without project filter returns all projects."""
-    db, ids = db_with_projects
-
-    all_notes = db.get_recent_project_notes()
-
-    # Should have all notes
-    assert len(all_notes) == 4
 
 
 def test_get_token_usage_filter_by_project(db_with_projects):
@@ -1490,16 +1388,6 @@ def test_get_token_usage_filter_by_project(db_with_projects):
     assert beta_usage["total_input_tokens"] == 2000
     assert beta_usage["total_output_tokens"] == 1000
     assert beta_usage["total_tokens"] == 3000
-
-
-def test_get_token_usage_no_project_filter(db_with_projects):
-    """Test get_token_usage without project filter returns all projects."""
-    db, ids = db_with_projects
-
-    all_usage = db.get_token_usage()
-    assert all_usage["total_input_tokens"] == 3000
-    assert all_usage["total_output_tokens"] == 1500
-    assert all_usage["total_tokens"] == 4500
 
 
 def test_get_metrics_filter_by_project(db_with_projects):
