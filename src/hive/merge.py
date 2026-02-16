@@ -362,6 +362,21 @@ class MergeProcessor:
 
             # Process result
             if result["status"] == "merged":
+                # Merge the branch to main — the refinery fixed the code in the
+                # worktree but the branch still needs to land on main.
+                branch_name = entry["branch_name"]
+                try:
+                    await merge_to_main_async(self.project_path, branch_name)
+                except GitWorktreeError as e:
+                    self.db.update_merge_queue_status(queue_id, "failed")
+                    self.db.log_event(
+                        issue_id,
+                        agent_id,
+                        "merge_failed",
+                        {"error": str(e), "branch": branch_name, "after_refinery": True},
+                    )
+                    return
+
                 await self._finalize_issue(entry)
                 self.db.log_event(
                     issue_id,

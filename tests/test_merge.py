@@ -1124,7 +1124,6 @@ async def test_multiple_rejection_notes_accumulate(merge_entry_with_worktree, te
     assert any("[Test failure]" in c for c in contents)
 
 
-
 @pytest.mark.asyncio
 async def test_worker_test_command_only(merge_entry_with_worktree, temp_db, mock_opencode):
     """Test merge with worker test command only — verify it runs."""
@@ -1335,3 +1334,56 @@ async def test_refinery_uses_worker_test_command(merge_entry_with_worktree, temp
                     mock_build_prompt.assert_called_once()
                     call_kwargs = mock_build_prompt.call_args[1]
                     assert call_kwargs["test_command"] == "python -m pytest tests/worker.py"
+
+
+@pytest.mark.asyncio
+async def test_refinery_merged_actually_lands_on_main(merge_entry_with_worktree, temp_db, mock_opencode):
+    """Regression: refinery "merged" must call merge_to_main_async so the
+    branch actually lands on main, not just get finalized in the DB.
+
+    Before the fix, the refinery success path called _finalize_issue()
+    without merge_to_main_async(), leaving worker commits as dangling
+    objects that never reached the main branch.
+    """
+    info = merge_entry_with_worktree
+
+    # Set up refinery mock lifecycle
+    mock_opencode.create_session = AsyncMock(return_value={"id": "refinery-session-1"})
+    mock_opencode.send_message_async = AsyncMock()
+    mock_opencode.get_session_status = AsyncMock(side_effect=[{"type": "busy"}, {"type": "idle"}])
+    mock_opencode.get_messages = AsyncMock(return_value=[{"parts": [{"type": "text", "text": "done"}]}])
+    mock_opencode.cleanup_session = AsyncMock()
+
+    mp = MergeProcessor(temp_db, mock_opencode, str(info["git_repo"]), "test")
+
+    # Simulate: tests fail → refinery dispatched → refinery reports "merged"
+    with patch("hive.merge.run_command_in_worktree_async", new_callable=AsyncMock, return_value=(False, "FAILED test_foo.py")):
+        with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+            with patch("hive.merge.Config") as mock_config:
+                mock_config.TEST_COMMAND = "pytest"
+                mock_config.REFINERY_MODEL = "test-model"
+                mock_config.LEASE_DURATION = 30
+                mock_config.REFINERY_TOKEN_THRESHOLD = 100000
+
+                with patch(
+                    "hive.merge.read_result_file",
+                    return_value={
+                        "status": "merged",
+                        "summary": "Fixed failing test",
+                        "tests_passed": True,
+                        "conflicts_resolved": 0,
+                    },
+                ):
+                    with patch("hive.merge.remove_result_file"):
+                        await mp.process_queue_once()
+
+    # DB should show finalized
+    issue = temp_db.get_issue(info["issue_id"])
+    assert issue["status"] == "finalized"
+
+    # CRITICAL: the worker's file must actually exist on main.
+    # Before the fix, the branch was cleaned up but never merged,
+    # leaving the commit as a dangling git object.
+    assert (info["git_repo"] / "feature.py").exists(), (
+        "Worker's feature.py not found on main after refinery merge! merge_to_main_async was not called in the refinery success path."
+    )
