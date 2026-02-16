@@ -111,7 +111,7 @@ async def integration_orchestrator(fake_server, temp_db, temp_git_repo):
     - MAX_TOKENS_PER_RUN=0: disable run budget (0 is falsy)
     - ANOMALY_FAILURE_THRESHOLD=0: disable anomaly detection (0 is falsy)
     """
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
     from hive.orchestrator import Orchestrator
 
     with (

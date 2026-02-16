@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 import pytest_asyncio
 
-from hive.claude_ws import ClaudeWSBackend, SessionState
+from hive.backends import ClaudeWSBackend, SessionState
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -444,7 +444,7 @@ async def test_send_message_with_system_prompt_initializes(backend):
 
     asyncio.create_task(simulate_init())
 
-    with patch("hive.claude_ws.asyncio.sleep", new_callable=AsyncMock):
+    with patch("hive.backends.claude_ws.asyncio.sleep", new_callable=AsyncMock):
         await backend.send_message_async(
             session_id,
             parts=[{"type": "text", "text": "Do stuff"}],

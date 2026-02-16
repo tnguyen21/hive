@@ -21,7 +21,7 @@ from .git import (
     remove_worktree_async,
     run_command_in_worktree_async,
 )
-from .opencode import OpenCodeClient, make_model_config
+from .backends import OpenCodeClient, make_model_config
 from .prompts import build_refinery_prompt, read_notes_file, read_result_file, remove_notes_file, remove_result_file
 
 

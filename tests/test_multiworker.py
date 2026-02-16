@@ -135,7 +135,7 @@ def test_molecule_execution_order(temp_db):
 @pytest.mark.integration
 async def test_session_cycling(temp_db, git_repo):
     """Test session cycling between molecule steps (requires OpenCode server)."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
     from hive.orchestrator import Orchestrator
 
     # Create a molecule with two steps
@@ -191,7 +191,7 @@ async def test_session_cycling(temp_db, git_repo):
 async def test_multi_worker_pool(temp_db, git_repo):
     """Test spawning multiple workers concurrently (requires OpenCode server)."""
     from hive.config import Config
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
     from hive.orchestrator import Orchestrator
 
     # Create multiple independent issues

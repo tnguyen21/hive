@@ -445,7 +445,7 @@ def test_cli_logs(temp_db, tmp_path, capsys):
 
 def test_evaluate_permission_policy():
     """Test permission policy evaluation."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
     from hive.orchestrator import Orchestrator
 
     # Create a minimal orchestrator for testing
@@ -472,7 +472,7 @@ def test_evaluate_permission_policy():
 @pytest.mark.integration
 async def test_permission_unblocker_auto_resolve(temp_db, tmp_path):
     """Test that permission unblocker auto-resolves permissions (requires OpenCode server)."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
     from hive.orchestrator import Orchestrator
 
     async with OpenCodeClient() as opencode:

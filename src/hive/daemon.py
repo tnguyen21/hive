@@ -267,7 +267,7 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
             loop.add_signal_handler(sig, _signal_handler)
 
         if Config.BACKEND == "claude":
-            from .claude_ws import ClaudeWSBackend
+            from .backends import ClaudeWSBackend
 
             backend = ClaudeWSBackend(
                 host=Config.CLAUDE_WS_HOST,
@@ -291,7 +291,7 @@ def run_daemon_foreground(db, project_path: str, project_name: str):
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
         else:
-            from .opencode import OpenCodeClient
+            from .backends import OpenCodeClient
 
             async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as opencode:
                 orchestrator = Orchestrator(

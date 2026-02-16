@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from hive.utils import AgentIdentity
-from hive.opencode import OpenCodeClient
+from hive.backends import OpenCodeClient
 from hive.orchestrator import Orchestrator
-from hive.sse import SSEClient
+from hive.backends import SSEClient
 
 
 # --- Helpers ---

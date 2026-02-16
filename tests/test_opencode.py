@@ -2,7 +2,7 @@
 
 import pytest
 
-from hive.opencode import OpenCodeClient
+from hive.backends import OpenCodeClient
 
 
 @pytest.mark.asyncio

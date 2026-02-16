@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from hive.config import Config
-from hive.opencode import OpenCodeClient
+from hive.backends import OpenCodeClient
 from tests.conftest import await_session_created, complete_worker, run_orchestrator_until, write_hive_result
 
 

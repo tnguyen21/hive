@@ -7,7 +7,7 @@ import pytest
 
 from hive.config import Config
 from hive.utils import AgentIdentity, CompletionResult
-from hive.opencode import OpenCodeClient
+from hive.backends import OpenCodeClient
 from hive.orchestrator import Orchestrator
 
 
@@ -18,7 +18,7 @@ from hive.orchestrator import Orchestrator
 @pytest.mark.integration
 async def test_spawn_worker(temp_db, git_repo):
     """Test spawning a worker for an issue (requires OpenCode server)."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create an issue
     issue_id = temp_db.create_issue("Test task", "Do something", project="test")
@@ -59,7 +59,7 @@ async def test_spawn_worker(temp_db, git_repo):
 async def test_full_worker_lifecycle(temp_db, git_repo):
     """Test complete worker lifecycle from spawn to completion (requires OpenCode server)."""
     import asyncio
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create a simple issue
     issue_id = temp_db.create_issue(
@@ -102,7 +102,7 @@ async def test_full_worker_lifecycle(temp_db, git_repo):
 async def test_handle_agent_failure_retry_tier(temp_db, tmp_path):
     """Test first tier of escalation chain - retry same agent."""
     from unittest.mock import AsyncMock
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create orchestrator with mock opencode
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -160,7 +160,7 @@ async def test_handle_agent_failure_retry_tier(temp_db, tmp_path):
 async def test_handle_agent_failure_agent_switch_tier(temp_db, tmp_path):
     """Test second tier of escalation chain - switch agent."""
     from unittest.mock import AsyncMock
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create orchestrator with mock opencode
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -217,7 +217,7 @@ async def test_handle_agent_failure_agent_switch_tier(temp_db, tmp_path):
 async def test_handle_agent_failure_escalation_tier(temp_db, tmp_path):
     """Test third tier of escalation chain - escalate to human."""
     from unittest.mock import AsyncMock
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create orchestrator with mock opencode
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -271,7 +271,7 @@ async def test_handle_agent_failure_escalation_tier(temp_db, tmp_path):
 async def test_escalation_chain_full_progression(temp_db, tmp_path):
     """Test full progression through all escalation tiers."""
     from unittest.mock import AsyncMock
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create orchestrator with mock opencode
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -443,7 +443,7 @@ async def test_check_opencode_health_server_error(temp_db, tmp_path):
 
 def test_is_opencode_error():
     """Test detection of OpenCode-related errors."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     opencode = OpenCodeClient()
     orch = Orchestrator(
@@ -478,7 +478,7 @@ def test_is_opencode_error():
 @pytest.mark.asyncio
 async def test_enter_degraded_mode(temp_db, tmp_path):
     """Test entering degraded mode."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     opencode = OpenCodeClient()
     orch = Orchestrator(
@@ -511,7 +511,7 @@ async def test_enter_degraded_mode(temp_db, tmp_path):
 @pytest.mark.asyncio
 async def test_merge_task_auto_restart(temp_db, tmp_path):
     """Test auto-restart of merge_processor_loop on unexpected death."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     opencode = OpenCodeClient()
     orch = Orchestrator(
@@ -549,7 +549,7 @@ async def test_merge_task_auto_restart(temp_db, tmp_path):
 @pytest.mark.asyncio
 async def test_merge_task_no_restart_when_cancelled(temp_db, tmp_path):
     """Test no restart when task is cancelled."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     opencode = OpenCodeClient()
     orch = Orchestrator(
@@ -574,7 +574,7 @@ async def test_merge_task_no_restart_when_cancelled(temp_db, tmp_path):
 @pytest.mark.asyncio
 async def test_merge_task_no_restart_when_not_running(temp_db, tmp_path):
     """Test no restart when orchestrator is not running."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     opencode = OpenCodeClient()
     orch = Orchestrator(
@@ -602,7 +602,7 @@ async def test_merge_task_no_restart_when_not_running(temp_db, tmp_path):
 @pytest.mark.asyncio
 async def test_merge_processor_loop_health_check(temp_db, tmp_path):
     """Test merge_processor_loop calls health_check periodically."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     opencode = OpenCodeClient()
     orch = Orchestrator(
@@ -652,7 +652,7 @@ async def test_merge_processor_loop_health_check(temp_db, tmp_path):
 async def test_harvest_notes_on_agent_complete(temp_db, tmp_path):
     """Test that notes are harvested from worktree on agent completion."""
     import json
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
     from hive.prompts import NOTES_FILE_NAME
 
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -714,7 +714,7 @@ async def test_harvest_notes_on_agent_complete(temp_db, tmp_path):
 @pytest.mark.asyncio
 async def test_harvest_notes_no_file(temp_db, tmp_path):
     """Test harvest is a no-op when no notes file exists."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     mock_opencode = AsyncMock(spec=OpenCodeClient)
     mock_opencode.get_messages = AsyncMock(return_value=[])
@@ -757,7 +757,7 @@ async def test_harvest_notes_no_file(temp_db, tmp_path):
 
 def test_gather_notes_for_worker_with_molecule(temp_db, tmp_path):
     """Test _gather_notes_for_worker combines molecule + project notes with dedup."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     mock_opencode = MagicMock(spec=OpenCodeClient)
     orch = Orchestrator(
@@ -792,7 +792,7 @@ def test_gather_notes_for_worker_with_molecule(temp_db, tmp_path):
 
 def test_gather_notes_for_worker_deduplicates(temp_db, tmp_path):
     """Test _gather_notes_for_worker deduplicates by note ID."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     mock_opencode = MagicMock(spec=OpenCodeClient)
     orch = Orchestrator(
@@ -822,7 +822,7 @@ def test_gather_notes_for_worker_deduplicates(temp_db, tmp_path):
 
 def test_gather_notes_for_worker_no_notes(temp_db, tmp_path):
     """Test _gather_notes_for_worker returns None when no notes exist."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     mock_opencode = MagicMock(spec=OpenCodeClient)
     orch = Orchestrator(
@@ -839,7 +839,7 @@ def test_gather_notes_for_worker_no_notes(temp_db, tmp_path):
 
 def test_gather_notes_for_worker_standalone_issue(temp_db, tmp_path):
     """Test _gather_notes_for_worker for a standalone issue (no parent)."""
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     mock_opencode = MagicMock(spec=OpenCodeClient)
     orch = Orchestrator(
@@ -1513,7 +1513,7 @@ async def test_handle_stalled_with_session_api_failure(temp_db, tmp_path):
 async def test_worker_started_event_contains_model(temp_db, tmp_path):
     """Test that worker_started events contain the model field."""
     from unittest.mock import AsyncMock, patch
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Mock OpenCode client
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -1551,7 +1551,7 @@ async def test_worker_started_event_contains_model(temp_db, tmp_path):
 async def test_completed_event_contains_model(temp_db, tmp_path):
     """Test that completed events contain the model field."""
     from unittest.mock import AsyncMock, patch
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Mock OpenCode client
     mock_opencode = AsyncMock(spec=OpenCodeClient)
@@ -1618,7 +1618,7 @@ async def test_completed_event_contains_model(temp_db, tmp_path):
 async def test_validation_no_commits_routes_to_failure(temp_db, tmp_path):
     """Test that validation failure when worker claims success but has no commits routes to _handle_agent_failure."""
     from unittest.mock import AsyncMock, patch, MagicMock
-    from hive.opencode import OpenCodeClient
+    from hive.backends import OpenCodeClient
 
     # Create orchestrator with mock opencode
     mock_opencode = AsyncMock(spec=OpenCodeClient)

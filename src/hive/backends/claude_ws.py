@@ -22,8 +22,8 @@ from typing import Any, Callable, Dict, List, Optional
 import aiohttp
 import aiohttp.web
 
-from .config import Config
-from .utils import generate_id
+from ..config import Config
+from ..utils import generate_id
 
 logger = logging.getLogger(__name__)
 
