@@ -10,8 +10,7 @@ from .config import Config, WORKER_PERMISSIONS
 from .db import Database
 from .git import create_worktree_async, get_commit_hash, has_diff_from_main_async, remove_worktree_async
 from .merge import MergeProcessor
-from .ids import generate_id
-from .models import AgentIdentity, CompletionResult
+from .utils import generate_id, AgentIdentity, CompletionResult
 from .opencode import OpenCodeClient, make_model_config
 from .prompts import (
     assess_completion,

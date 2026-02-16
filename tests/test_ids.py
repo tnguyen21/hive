@@ -2,7 +2,7 @@
 
 import re
 
-from hive.ids import generate_id
+from hive.utils import generate_id
 
 
 def test_generate_id_format():

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from hive.config import Config
-from hive.models import AgentIdentity, CompletionResult
+from hive.utils import AgentIdentity, CompletionResult
 from hive.opencode import OpenCodeClient
 from hive.orchestrator import Orchestrator
 

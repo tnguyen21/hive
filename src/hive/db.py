@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .ids import generate_id
+from .utils import generate_id
 
 logger = logging.getLogger(__name__)
 
