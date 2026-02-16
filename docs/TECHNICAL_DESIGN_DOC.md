@@ -22,7 +22,7 @@ That stack is powerful, but it's designed for a world where:
 - OpenCode's HTTP server API replaces CLI-driven agent management
 - The orchestrator is a single process that owns the DB and the agent lifecycle
 
-The result is a system that preserves Gas Town's best abstractions — the ready queue, the three-layer agent lifecycle, push-based execution, molecules, and the capability ledger — while dramatically reducing infrastructure complexity.
+The result is a system that preserves Gas Town's best abstractions — the ready queue, the three-layer agent lifecycle, push-based execution, epics, and the capability ledger — while dramatically reducing infrastructure complexity.
 
 ---
 
@@ -65,7 +65,7 @@ The result is a system that preserves Gas Town's best abstractions — the ready
 
 | Component           | Responsibility                                                                                                                                                                                                                                                                                                                           |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Queen Bee (LLM)** | The **user-facing** strategic brain. The human chats with the Queen Bee in an OpenCode TUI/web session. The Queen Bee interprets requests, decomposes them into issues/molecules, monitors worker progress, handles escalations, and answers questions — all via tool calls to the `hive` CLI. The Queen Bee is the primary interface to the system. |
+| **Queen Bee (LLM)** | The **user-facing** strategic brain. The human chats with the Queen Bee in an OpenCode TUI/web session. The Queen Bee interprets requests, decomposes them into issues/epics, monitors worker progress, handles escalations, and answers questions — all via tool calls to the `hive` CLI. The Queen Bee is the primary interface to the system. |
 | **Orchestrator**    | The **headless** worker pool manager. Polls the ready queue, spawns workers in git worktrees, monitors completion via SSE, handles permissions, processes the merge queue. Handles the _deterministic_ parts: ready queue, CAS claims, health checks, session lifecycle. The orchestrator does NOT interact with the user.               |
 | **Refinery (LLM)**  | The merge processor. Easy rebases go through mechanically. Complex merges, conflicts, and integration failures get reasoned about by the Refinery agent. A persistent OpenCode session.                                                                                                                                                  |
 | **Workers (LLM)**   | Ephemeral coding agents. One per issue. Implement, test, commit. Spawned on demand, destroyed on completion.                                                                                                                                                                                                                             |
@@ -155,9 +155,9 @@ In this system, the propulsion loop becomes:
 
 No idle sessions. No "are you still working?" heartbeats. The SSE event stream replaces Gas Town's Witness patrol cycle. Polling fallback and file-based signaling (`.hive-result.jsonl`) provide redundancy when SSE events are missed.
 
-### 3.4 Molecules (Multi-Step Workflows)
+### 3.4 Epics (Multi-Step Workflows)
 
-Molecules as data — multi-step workflows where each step is a trackable work item with explicit dependencies — transfer directly. The `--continue` pattern (complete step, auto-advance) maps to: orchestrator observes step completion (`done`), queries for next ready step within the molecule, sends the next prompt.
+Epics as data — multi-step workflows where each step is a trackable work item with explicit dependencies — transfer directly. The `--continue` pattern (complete step, auto-advance) maps to: orchestrator observes step completion (`done`), queries for next ready step within the epic, sends the next prompt.
 
 ### 3.5 Capability Ledger
 
@@ -251,9 +251,9 @@ CREATE TABLE issues (
     description TEXT,
     status      TEXT NOT NULL DEFAULT 'open',  -- open|in_progress|done|finalized|failed|blocked|escalated|canceled
     priority    INTEGER NOT NULL DEFAULT 2,    -- 0 = critical, 4 = low
-    type        TEXT NOT NULL DEFAULT 'task',  -- task | bug | feature | step | molecule
+    type        TEXT NOT NULL DEFAULT 'task',  -- task | bug | feature | step | epic
     assignee    TEXT,                          -- agent ID or NULL
-    parent_id   TEXT REFERENCES issues(id),    -- molecule parent (nullable)
+    parent_id   TEXT REFERENCES issues(id),    -- epic parent (nullable)
     project     TEXT,                          -- project/repo name
     metadata    TEXT,                          -- JSON blob for extension
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -584,7 +584,7 @@ This replaces Gas Town's Witness patrol cycle. Instead of polling tmux sessions 
 
 ### 6.1.4 Session Cycling (Handoff)
 
-When an agent completes a molecule step and needs a fresh context for the next step:
+When an agent completes a epic step and needs a fresh context for the next step:
 
 1. Orchestrator observes step completion (via SSE or polling session messages)
 2. Orchestrator aborts the old session: `POST /session/:id/abort`
@@ -699,7 +699,7 @@ async def handle_agent_complete(agent):
             branch_name=agent.branch,
         )
 
-        # Check for next step in molecule
+        # Check for next step in epic
         next_step = db.get_next_ready_step(issue.parent_id)
         if next_step:
             # Session cycling: fresh context, same sandbox
@@ -882,16 +882,16 @@ This is the OpenCode equivalent of Gas Town's hooks guards. Without it, a single
 
 ---
 
-## 8. Molecules (Multi-Step Workflows)
+## 8. Epics (Multi-Step Workflows)
 
-Molecules are parent issues with child step-issues linked by blocking dependencies.
+Epics are parent issues with child step-issues linked by blocking dependencies.
 
-### Creating a Molecule
+### Creating a Epic
 
 ```python
-def create_molecule(title, steps, project):
+def create_epic(title, steps, project):
     """
-    Create a molecule from a list of steps with dependency ordering.
+    Create a epic from a list of steps with dependency ordering.
 
     steps = [
         {"id": "design",    "title": "Design the auth module"},
@@ -901,7 +901,7 @@ def create_molecule(title, steps, project):
     ]
     """
     # Create parent issue
-    parent = db.create_issue(title=title, type="molecule", project=project)
+    parent = db.create_issue(title=title, type="epic", project=project)
 
     # Create child step issues
     step_map = {}
@@ -922,20 +922,20 @@ def create_molecule(title, steps, project):
     return parent
 ```
 
-### Molecule Execution
+### Epic Execution
 
-The orchestrator manages molecule traversal. When an agent completes a step:
+The orchestrator manages epic traversal. When an agent completes a step:
 
 1. Mark the step issue `done` and enqueue to `merge_queue`
-2. Query for the next ready step within the molecule (`parent_id = molecule.id`)
+2. Query for the next ready step within the epic (`parent_id = epic.id`)
 3. If found: session-cycle the agent onto the next step
-4. If not found: all steps done — mark the molecule `done`, release agent (worktree persists until finalization)
+4. If not found: all steps done — mark the epic `done`, release agent (worktree persists until finalization)
 
 ```sql
--- Next ready step in a molecule (blocker resolved when done/finalized/canceled)
+-- Next ready step in a epic (blocker resolved when done/finalized/canceled)
 SELECT i.*
 FROM issues i
-WHERE i.parent_id = :molecule_id
+WHERE i.parent_id = :epic_id
   AND i.status = 'open'
   AND NOT EXISTS (
     SELECT 1 FROM dependencies d
@@ -987,7 +987,7 @@ You are agent '{agent_name}', working on project '{project}'.
 
 - You are working in a git worktree at: {worktree_path}
 - Branch: {branch_name}
-- This is step {step_number} of {total_steps} in the workflow "{molecule.title}"
+- This is step {step_number} of {total_steps} in the workflow "{epic.title}"
 
 ### Previous Steps (already completed)
 {completed_steps_summary}
@@ -1210,7 +1210,7 @@ The previous design had the Queen Bee emit `:::WORK_PLAN:::` blocks that the orc
 - Check the result of each operation (`hive show <id>`)
 - Correct mistakes immediately (`hive cancel <id>`, then re-create)
 - Query system state naturally as part of the conversation
-- Handle complex workflows (molecules, dependencies) incrementally
+- Handle complex workflows (epics, dependencies) incrementally
 
 The `hive` CLI is the Queen Bee's API. The DB is the shared contract between Queen Bee and orchestrator.
 
@@ -1496,7 +1496,7 @@ All three agent types need context cycling, but with different strategies:
 | ------------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | **Queen Bee** | User starts a fresh session when context feels stale; OpenCode auto-compacts older turns | DB (issues, events, agent state) — Queen Bee runs `hive status` to catch up |
 | **Refinery** | Token count > threshold, or after each extraordinary merge                               | Git state + DB                                                          |
-| **Workers**  | Between molecule steps (always); mid-step if context fills                               | Git worktree (sandbox)                                                  |
+| **Workers**  | Between epic steps (always); mid-step if context fills                               | Git worktree (sandbox)                                                  |
 
 The key insight from Gas Town: **state does not live in the context window**. The context is disposable working memory. Durable state lives in the DB (issues, events) and git (code, branches). When any agent cycles, it reads its state from the DB on startup.
 
@@ -1897,13 +1897,13 @@ The entire harvest is wrapped in `try/except/finally` — note harvesting is bes
 In `spawn_worker()` and `cycle_agent_to_next_step()`, before `build_worker_prompt()`:
 
 1. `_gather_notes_for_worker(issue_id)` assembles relevant notes:
-   - If the issue is a molecule step: `db.get_notes_for_molecule(parent_id)` (sibling notes)
+   - If the issue is a epic step: `db.get_notes_for_epic(parent_id)` (sibling notes)
    - Always: `db.get_recent_project_notes(limit=10)` (recent cross-project notes)
    - Deduplicates by note ID (a note from a sibling step might also appear in recent project notes)
    - Returns `None` if no notes found (so `build_worker_prompt` skips the section)
 2. `build_worker_prompt(..., notes=worker_notes)` renders the `### Project Notes` section
 
-For `cycle_agent_to_next_step()`, also populates `completed_steps` via `db.get_completed_molecule_steps(parent_id)` — giving the next step context about what siblings have already finished.
+For `cycle_agent_to_next_step()`, also populates `completed_steps` via `db.get_completed_epic_steps(parent_id)` — giving the next step context about what siblings have already finished.
 
 ### CLI Commands
 
@@ -1937,11 +1937,11 @@ The notes system is sufficient for the current use case: sharing discoveries and
 
 **Why harvest before the canceled check?** A worker that gets canceled externally may still have written useful notes about what it discovered before cancellation. By harvesting first, we capture all knowledge regardless of the issue's terminal state.
 
-**Why a shared `_gather_notes_for_worker` helper?** Both `spawn_worker` and `cycle_agent_to_next_step` need the same logic: molecule notes + project notes, deduped. A single helper prevents divergence and makes the injection logic easy to evolve.
+**Why a shared `_gather_notes_for_worker` helper?** Both `spawn_worker` and `cycle_agent_to_next_step` need the same logic: epic notes + project notes, deduped. A single helper prevents divergence and makes the injection logic easy to evolve.
 
 **Why no note TTL/expiration?** Notes could accumulate over time, but the `limit` parameter on queries already prevents unbounded growth in prompt injection. Cleanup can be added later if the table gets large.
 
-**Why no content-based deduplication?** ID-based dedup (when combining molecule + project notes) is sufficient. Content-based dedup adds complexity for minimal gain.
+**Why no content-based deduplication?** ID-based dedup (when combining epic + project notes) is sufficient. Content-based dedup adds complexity for minimal gain.
 
 ---
 
@@ -1998,7 +1998,7 @@ Notes are currently retrieved by recency. Vector-based semantic search (via `sql
 
 ### 17.8 Pending: Domain Coordinators
 
-For large codebases, a middle tier of "domain coordinator" agents between Queen and workers could improve decomposition quality by understanding subdomain context. Coordinators would use existing primitives (molecules, long-lived sessions, CLI access) but require new agent type routing and decomposition-specific completion signals.
+For large codebases, a middle tier of "domain coordinator" agents between Queen and workers could improve decomposition quality by understanding subdomain context. Coordinators would use existing primitives (epics, long-lived sessions, CLI access) but require new agent type routing and decomposition-specific completion signals.
 
 ---
 
@@ -2011,7 +2011,7 @@ Single-threaded asyncio eliminates threading races but introduces **interleaving
 Any mutable state read before an `await` may change by the time the `await` returns. Capture critical values as locals:
 
 ```python
-# In monitor_agent: session_id may change if molecule cycling occurs
+# In monitor_agent: session_id may change if epic cycling occurs
 original_session_id = agent.session_id  # snapshot before any awaits
 # ... later in finally block, use original_session_id, not agent.session_id
 ```

@@ -790,7 +790,7 @@ class Orchestrator:
     def _gather_notes_for_worker(self, issue_id: str) -> Optional[List[Dict[str, Any]]]:
         """Gather relevant notes to inject into a worker's prompt.
 
-        Combines molecule-specific notes (if the issue is a step) with
+        Combines epic-specific notes (if the issue is a step) with
         recent project-wide notes, deduplicating by note ID.
 
         Returns None if no notes are found (so build_worker_prompt skips the section).
@@ -798,10 +798,10 @@ class Orchestrator:
         seen_ids: set = set()
         notes: List[Dict[str, Any]] = []
 
-        # Get molecule-scoped notes if this is a step
+        # Get epic-scoped notes if this is a step
         issue = self.db.get_issue(issue_id)
         if issue and issue.get("parent_id"):
-            for note in self.db.get_notes_for_molecule(issue["parent_id"]):
+            for note in self.db.get_notes_for_epic(issue["parent_id"]):
                 if note["id"] not in seen_ids:
                     seen_ids.add(note["id"])
                     notes.append(note)
@@ -874,7 +874,7 @@ class Orchestrator:
             agent: Agent identity
         """
         # Snapshot the session_id we're monitoring. The agent object may be
-        # mutated by cycle_agent_to_next_step during molecule processing,
+        # mutated by cycle_agent_to_next_step during epic processing,
         # and we must clean up OUR session's event, not the new one.
         my_session_id = agent.session_id
         try:
@@ -1067,7 +1067,7 @@ class Orchestrator:
         started_event_detail: Dict[str, Any],
         completed_steps: Optional[List[str]] = None,
     ):
-        """Shared prompt + dispatch flow for spawn and molecule cycling."""
+        """Shared prompt + dispatch flow for spawn and epic cycling."""
         issue_id = issue["id"]
 
         worker_notes = self._gather_notes_for_worker(issue_id)
@@ -1434,7 +1434,7 @@ class Orchestrator:
 
     async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
         """
-        Cycle an agent to the next step in a molecule.
+        Cycle an agent to the next step in a epic.
 
         Args:
             agent: Current agent identity
@@ -1442,9 +1442,7 @@ class Orchestrator:
         """
         # Abort and delete current session (not just abort — delete prevents leaked sessions)
         old_session_id = agent.session_id
-        logger.info(
-            f"Cycling agent {agent.agent_id} to next molecule step; cleaning up old session {old_session_id} (next_step={next_step['id']})"
-        )
+        logger.info(f"Cycling agent {agent.agent_id} to next epic step; cleaning up old session {old_session_id} (next_step={next_step['id']})")
         await self.opencode.cleanup_session(old_session_id, directory=agent.worktree)
 
         # Claim the next step
@@ -1487,7 +1485,7 @@ class Orchestrator:
             # Gather completed steps for context
             completed_steps = None
             if next_step.get("parent_id"):
-                completed_issues = self.db.get_completed_molecule_steps(next_step["parent_id"])
+                completed_issues = self.db.get_completed_epic_steps(next_step["parent_id"])
                 completed_steps = [f"{s['title']}: {(s.get('description') or '')[:100]}" for s in completed_issues]
 
             await self._dispatch_worker_to_issue(

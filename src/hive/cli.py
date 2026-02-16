@@ -512,7 +512,7 @@ class HiveCLI:
         else:
             print(result.get("message", f"Retrying issue {issue_id}"))
 
-    def molecule(
+    def epic(
         self,
         title: str,
         description: str = "",
@@ -522,7 +522,7 @@ class HiveCLI:
         *,
         json_mode: bool = False,
     ):
-        """Create a molecule (multi-step workflow)."""
+        """Create a epic (multi-step workflow)."""
         try:
             steps = json.loads(steps_json)
         except json.JSONDecodeError as e:
@@ -535,11 +535,11 @@ class HiveCLI:
         try:
             tag_list = [t.strip() for t in tags.split(",")] if tags else None
 
-            # Create parent molecule issue
+            # Create parent epic issue
             parent_id = self.db.create_issue(
                 title=title,
                 description=description,
-                issue_type="molecule",
+                issue_type="epic",
                 project=self.project_name,
                 tags=tag_list,
             )
@@ -570,11 +570,11 @@ class HiveCLI:
                         self.db.add_dependency(step_map[i], step_map[dep_idx], "blocks")
 
             result = {
-                "molecule_id": parent_id,
+                "epic_id": parent_id,
                 "title": title,
                 "steps_count": len(steps),
                 "steps": created_steps,
-                "message": f"Created molecule {parent_id} with {len(steps)} steps",
+                "message": f"Created epic {parent_id} with {len(steps)} steps",
             }
         except Exception as e:
             self._error(str(e), json_mode=json_mode)
@@ -582,7 +582,7 @@ class HiveCLI:
         if json_mode:
             print(json.dumps(result, default=str))
         else:
-            print(result.get("message", f"Created molecule {result.get('molecule_id', '')}"))
+            print(result.get("message", f"Created epic {result.get('epic_id', '')}"))
             for step in result.get("steps", []):
                 print(f"  Step {step['index']}: {step['id']} - {step['title']}")
 
@@ -1441,7 +1441,7 @@ def main():
         "--type",
         default="task",
         dest="issue_type",
-        help="Issue type (task, bug, feature, step, molecule)",
+        help="Issue type (task, bug, feature, step, epic)",
     )
     create_parser.add_argument(
         "--model",
@@ -1478,7 +1478,7 @@ def main():
     list_parser.add_argument(
         "--type",
         dest="issue_type",
-        help="Filter by issue type (task, bug, feature, step, molecule)",
+        help="Filter by issue type (task, bug, feature, step, epic)",
     )
     list_parser.add_argument("--todo", action="store_true", help="Show only actionable issues (excludes done/finalized/canceled)")
     list_parser.add_argument("--assignee", help="Filter by agent assignee")
@@ -1517,16 +1517,16 @@ def main():
     retry_parser.add_argument("issue_id", help="Issue ID")
     retry_parser.add_argument("--notes", default="", help="Notes about what to try differently")
 
-    # molecule command (hidden — advanced)
-    molecule_parser = subparsers.add_parser("molecule", help="Create a multi-step molecule")
-    molecule_parser.add_argument("title", help="Molecule title")
-    molecule_parser.add_argument("--description", default="", help="Molecule description")
-    molecule_parser.add_argument("--steps", required=True, help="Steps as JSON array")
-    molecule_parser.add_argument(
+    # epic command (hidden — advanced)
+    epic_parser = subparsers.add_parser("epic", help="Create a multi-step epic")
+    epic_parser.add_argument("title", help="Epic title")
+    epic_parser.add_argument("--description", default="", help="Epic description")
+    epic_parser.add_argument("--steps", required=True, help="Steps as JSON array")
+    epic_parser.add_argument(
         "--model",
-        help="Model to use for this molecule (overrides global WORKER_MODEL)",
+        help="Model to use for this epic (overrides global WORKER_MODEL)",
     )
-    molecule_parser.add_argument("--tags", type=str, help="Comma-separated tags (e.g. refactor,python,small)")
+    epic_parser.add_argument("--tags", type=str, help="Comma-separated tags (e.g. refactor,python,small)")
 
     # dep command (hidden — advanced)
     dep_parser = subparsers.add_parser("dep", help="Manage issue dependencies")
@@ -1698,8 +1698,8 @@ def main():
         elif args.command == "retry":
             cli.retry(args.issue_id, notes=args.notes, json_mode=json_mode)
 
-        elif args.command == "molecule":
-            cli.molecule(
+        elif args.command == "epic":
+            cli.epic(
                 args.title,
                 description=args.description,
                 steps_json=args.steps,

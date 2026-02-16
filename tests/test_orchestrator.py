@@ -801,8 +801,8 @@ async def test_harvest_notes_no_file(temp_db, tmp_path):
     assert len(events) == 0
 
 
-def test_gather_notes_for_worker_with_molecule(temp_db, tmp_path):
-    """Test _gather_notes_for_worker combines molecule + project notes with dedup."""
+def test_gather_notes_for_worker_with_epic(temp_db, tmp_path):
+    """Test _gather_notes_for_worker combines epic + project notes with dedup."""
     from hive.backends import OpenCodeClient
 
     mock_opencode = MagicMock(spec=OpenCodeClient)
@@ -813,14 +813,14 @@ def test_gather_notes_for_worker_with_molecule(temp_db, tmp_path):
         project_name="test",
     )
 
-    # Create a molecule with steps
-    parent_id = temp_db.create_issue("Parent molecule", issue_type="molecule")
+    # Create a epic with steps
+    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
     step1_id = temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
     step2_id = temp_db.create_issue("Step 2", parent_id=parent_id, issue_type="step")
 
     agent_id = temp_db.create_agent("test-agent")
 
-    # Add molecule-scoped notes
+    # Add epic-scoped notes
     note1_id = temp_db.add_note(issue_id=step1_id, agent_id=agent_id, content="Step 1 discovery", category="discovery")
 
     # Add a project-wide note
@@ -848,14 +848,14 @@ def test_gather_notes_for_worker_deduplicates(temp_db, tmp_path):
         project_name="test",
     )
 
-    # Create a molecule with a step
-    parent_id = temp_db.create_issue("Parent molecule", issue_type="molecule")
+    # Create a epic with a step
+    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
     step_id = temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
 
     agent_id = temp_db.create_agent("test-agent")
 
     # Add a note tied to the step — it will appear in both
-    # get_notes_for_molecule AND get_recent_project_notes
+    # get_notes_for_epic AND get_recent_project_notes
     note_id = temp_db.add_note(issue_id=step_id, agent_id=agent_id, content="Shared note")
 
     notes = orch._gather_notes_for_worker(step_id)
@@ -1406,7 +1406,7 @@ async def test_handle_agent_complete_cycle_transition_skips_teardown(temp_db, tm
     mock_opencode.get_messages = AsyncMock(return_value=[])
     orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
 
-    parent_id = temp_db.create_issue("Molecule parent", issue_type="molecule")
+    parent_id = temp_db.create_issue("Epic parent", issue_type="epic")
     issue_id = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent_id)
     next_step_id = temp_db.create_issue("Step 2", issue_type="step", parent_id=parent_id)
     agent_id = temp_db.create_agent("test-agent")

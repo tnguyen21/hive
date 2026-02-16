@@ -50,7 +50,7 @@ def _make_agent(temp_db, orch, name="test-agent", issue_title="Test task", sessi
 
 # =============================================================================
 # BUG-1: monitor_agent finally block deletes new session's event after
-#         molecule cycling mutates agent.session_id
+#         epic cycling mutates agent.session_id
 # =============================================================================
 
 
@@ -62,7 +62,7 @@ async def test_bug1_monitor_agent_preserves_new_session_event_after_cycling(temp
     Before the fix, the finally block used agent.session_id which got mutated
     by cycle_agent_to_next_step, causing it to delete the new session's event.
 
-    We mock handle_agent_complete to simulate what molecule cycling does:
+    We mock handle_agent_complete to simulate what epic cycling does:
     mutate agent.session_id and create a new Event in session_status_events.
     This isolates the BUG-1 fix (snapshotting my_session_id) from side effects
     of the full cycling flow (spawned tasks, DB interactions, etc.).
@@ -94,7 +94,7 @@ async def test_bug1_monitor_agent_preserves_new_session_event_after_cycling(temp
     # Simulate: set the event (SSE said idle) → monitor_agent wakes up
     old_event.set()
 
-    # Mock handle_agent_complete to simulate molecule cycling:
+    # Mock handle_agent_complete to simulate epic cycling:
     # it mutates agent.session_id and creates a new event for the new session.
     # This is exactly what cycle_agent_to_next_step does (among other things).
     async def mock_handle_agent_complete(agent, file_result=None):

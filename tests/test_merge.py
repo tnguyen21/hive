@@ -769,10 +769,10 @@ async def test_send_to_refinery_harvests_notes(tmp_path, temp_db, mock_opencode)
 
 
 @pytest.mark.asyncio
-async def test_finalize_issue_molecule_completion(temp_db, mock_opencode, git_repo):
-    """Test that finalizing all steps of a molecule marks the parent as finalized."""
-    # Create a parent molecule issue
-    parent_id = temp_db.create_issue(title="Molecule Task", project="test")
+async def test_finalize_issue_epic_completion(temp_db, mock_opencode, git_repo):
+    """Test that finalizing all steps of a epic marks the parent as finalized."""
+    # Create a parent epic issue
+    parent_id = temp_db.create_issue(title="Epic Task", project="test")
 
     # Create two child issues (steps)
     step1_id = temp_db.create_issue(title="Step 1", project="test", parent_id=parent_id)
@@ -839,8 +839,8 @@ async def test_finalize_issue_molecule_completion(temp_db, mock_opencode, git_re
     parent = temp_db.get_issue(parent_id)
     assert parent["status"] == "finalized"
 
-    # Verify molecule_complete event was logged for the parent
-    cursor = temp_db.conn.execute("SELECT * FROM events WHERE issue_id = ? AND event_type = 'molecule_complete'", (parent_id,))
+    # Verify epic_complete event was logged for the parent
+    cursor = temp_db.conn.execute("SELECT * FROM events WHERE issue_id = ? AND event_type = 'epic_complete'", (parent_id,))
     event = cursor.fetchone()
     assert event is not None
 

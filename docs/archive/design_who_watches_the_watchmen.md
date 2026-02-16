@@ -177,7 +177,7 @@ Right now the hierarchy is flat:
 
 Human (Queen) → Orchestrator → Workers
 
-The Queen is the only entity that decomposes work. She creates issues (atomic tasks) or molecules (sequential
+The Queen is the only entity that decomposes work. She creates issues (atomic tasks) or epics (sequential
 multi-step tasks), and workers execute them. This works well when:
 
 - The human understands the full codebase
@@ -196,7 +196,7 @@ How it maps onto the existing architecture
 
 The good news: you already have most of the primitives.
 
-Molecules are the key. A domain coordinator is essentially an agent whose output is a molecule — a set of issues with
+Epics are the key. A domain coordinator is essentially an agent whose output is a epic — a set of issues with
 parent/child relationships and dependency edges. The coordinator doesn't write code; it writes issues.
 
 Here's the lifecycle:
@@ -205,13 +205,13 @@ Here's the lifecycle:
 2. Orchestrator sees domain=backend, routes to the backend coordinator
 3. Coordinator agent spins up in a read-only session (no worktree needed, or a shared read-only one)
 4. Coordinator explores src/api/, reads existing middleware, understands the patterns
-5. Coordinator outputs a decomposition plan as structured JSON — a molecule with steps:
+5. Coordinator outputs a decomposition plan as structured JSON — a epic with steps:
    - Step 1: "Create rate limit middleware in src/api/middleware/rate_limit.py" (small, python)
    - Step 2: "Add Redis counter backend in src/api/services/rate_store.py" (small, python)
    - Step 3: "Wire middleware into route handlers in src/api/routes/" (medium, python)
    - Step 4: "Add integration tests for rate limit behavior" (medium, python, test)
 
-6. Orchestrator creates the molecule + steps + dependencies in the DB
+6. Orchestrator creates the epic + steps + dependencies in the DB
 7. Workers pick them up as normal
 
 Concrete schema changes
@@ -301,7 +301,7 @@ A coordinator gets a special prompt (new template prompts/coordinator.md) and a 
 "cross_domain_notes": ["Frontend API client will need updating after this lands"]
 }
 
-The orchestrator parses this and creates the molecule + steps + dependency edges in one transaction.
+The orchestrator parses this and creates the epic + steps + dependency edges in one transaction.
 
 The orchestrator changes
 
@@ -324,7 +324,7 @@ Where \_needs_coordinator checks:
 
 - Issue has a domain set
 - Issue type is not already step (steps are worker-ready)
-- No existing decomposition (molecule children) exists yet
+- No existing decomposition (epic children) exists yet
 
 The tricky parts
 
@@ -352,12 +352,12 @@ The tricky parts
 What I'd actually build first
 
 Don't build the full domain system yet. Build the coordinator as a simpler concept first: an agent whose job is to take
-a vague issue and produce a molecule.
+a vague issue and produce a epic.
 
 hive add "Improve error handling across the API" --coordinate
 
 This creates an issue with type=coordinate. The orchestrator spawns a coordinator agent (using the same OpenCode
-infra), which explores the codebase, produces a structured decomposition, and the orchestrator creates the molecule. No
+infra), which explores the codebase, produces a structured decomposition, and the orchestrator creates the epic. No
 domain registry needed yet — the coordinator just explores whatever is relevant.
 
 This gets you 80% of the value with 20% of the complexity. Domains become a natural refinement later: "instead of
@@ -370,7 +370,7 @@ Already Exists: parent_id column
 Needs Building: -
 ────────────────────────────────────────
 Concept: Sequential multi-step
-Already Exists: Molecules + cycle_agent_to_next_step
+Already Exists: Epics + cycle_agent_to_next_step
 Needs Building: -
 ────────────────────────────────────────
 Concept: Dependency DAG
@@ -390,11 +390,11 @@ Already Exists: -
 Needs Building: Structured completion signal for coordinators
 ────────────────────────────────────────
 Concept: Routing logic
-Already Exists: get_ready_queue filters molecules
+Already Exists: get_ready_queue filters epics
 Needs Building: \_needs_coordinator check
 ────────────────────────────────────────
 Concept: Cross-domain deps
 Already Exists: -
 Needs Building: Coordinator cross_domain_notes → future issue linking
 
-The architecture is remarkably ready for this. The molecule primitive was the hard part, and it's already there.
+The architecture is remarkably ready for this. The epic primitive was the hard part, and it's already there.

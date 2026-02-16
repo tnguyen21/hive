@@ -57,7 +57,7 @@ See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-b
 - **Queen Bee**: Strategic decomposition (user-facing TUI, default: Opus)
 - **Workers**: Autonomous execution in git worktrees (default: Sonnet)
 - **Refinery**: LLM merge processor for conflicts and test failures (default: Sonnet)
-- Session cycling for molecule steps
+- Session cycling for epic steps
 
 ### Merge Pipeline
 
@@ -80,7 +80,7 @@ See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-b
 
 ### Human Interface (CLI)
 
-- 25+ commands: create, list, ready, show, update, cancel, finalize, retry, escalate, molecule, dep, agents, agent, events, logs, status, stats, merges, costs, watch, note, notes, daemon (start/stop/restart/logs), queen, init, ui
+- 25+ commands: create, list, ready, show, update, cancel, finalize, retry, escalate, epic, dep, agents, agent, events, logs, status, stats, merges, costs, watch, note, notes, daemon (start/stop/restart/logs), queen, init, ui
 - All commands under a single `HiveCLI` class with direct DB calls (no ToolExecutor indirection)
 - `hive --json` flag on all commands for programmatic/machine-readable output
 - `hive --json logs -f` for live event tailing (JSONL in `--json` mode)

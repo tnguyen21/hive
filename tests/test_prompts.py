@@ -12,7 +12,7 @@ from hive.prompts import (
 
 
 def test_build_worker_prompt_with_completed_steps():
-    """Test building a worker prompt for a molecule step with completed steps."""
+    """Test building a worker prompt for a epic step with completed steps."""
     issue = {"title": "Step 1", "description": "First step"}
 
     prompt = build_worker_prompt(

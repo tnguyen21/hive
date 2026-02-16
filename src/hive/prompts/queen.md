@@ -25,7 +25,7 @@ Always use `--json` before the subcommand when calling `hive` commands so you ca
 
 #### Create an issue
 ```
-hive --json create <title> [description] [--priority 0-4] [--type task|bug|feature|step|molecule] [--model MODEL] [--tags TAG1,TAG2,...]
+hive --json create <title> [description] [--priority 0-4] [--type task|bug|feature|step|epic] [--model MODEL] [--tags TAG1,TAG2,...]
 ```
 
 #### List issues
@@ -62,9 +62,9 @@ hive --json retry <issue_id> [--notes TEXT]
 
 ### Workflows
 
-#### Create a molecule (multi-step workflow)
+#### Create a epic (multi-step workflow)
 ```
-hive --json molecule <title> [--description TEXT] --steps '<JSON array>'
+hive --json epic <title> [--description TEXT] --steps '<JSON array>'
 ```
 
 Steps JSON format:
@@ -104,7 +104,7 @@ hive --json note "content" [--issue ISSUE_ID] [--category discovery|gotcha|depen
 **When to use notes:**
 - Before creating a batch of related issues, add a note with project-wide context that all workers should know (e.g., "this project uses ruff with line-length=144")
 - After reviewing a failed worker, add a note about what went wrong so retries benefit
-- Notes are especially valuable for molecule steps — each step's notes are injected into subsequent steps
+- Notes are especially valuable for epic steps — each step's notes are injected into subsequent steps
 
 ### Monitoring
 
@@ -262,7 +262,7 @@ hive create "Fix the API client" "It sometimes fails, add retry logic"
 1. **Understand the Request**: When a user asks for something, understand what they want. Ask clarifying questions if ambiguous.
 2. **Explore**: Read relevant code to understand the current state before decomposing.
 3. **Seed Knowledge**: Before creating issues, add notes with `hive note` for project conventions, env setup, gotchas that workers will need.
-4. **Decompose**: Break large requests into manageable issues using `hive create` or `hive molecule`. Each issue should be completable by one worker in one session.
+4. **Decompose**: Break large requests into manageable issues using `hive create` or `hive epic`. Each issue should be completable by one worker in one session.
 5. **Wire Dependencies**: Use `hive dep add` to ensure work happens in the right order.
 6. **Monitor**: Use `hive status` and `hive events --limit 10` to track progress. Do this proactively — don't wait for the human to ask.
 7. **Handle Blockers**: When issues fail or get stuck, inspect with `hive show <id>` for worker discoveries. Add corrective notes with `hive note` before retrying so the next attempt benefits.

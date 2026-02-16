@@ -762,10 +762,10 @@ def test_get_notes_limit_parameter(temp_db):
     assert len(all_notes) == 5
 
 
-def test_get_notes_for_molecule(temp_db):
-    """Test get_notes_for_molecule returns notes from child issues."""
-    # Create a parent molecule issue
-    parent_id = temp_db.create_issue("Parent molecule", issue_type="molecule")
+def test_get_notes_for_epic(temp_db):
+    """Test get_notes_for_epic returns notes from child issues."""
+    # Create a parent epic issue
+    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
 
     # Create child issues
     child1_id = temp_db.create_issue("Child 1", parent_id=parent_id, issue_type="step")
@@ -785,8 +785,8 @@ def test_get_notes_for_molecule(temp_db):
     # Create note for unrelated issue (should not be included)
     unrelated_note_id = temp_db.add_note(issue_id=unrelated_id, agent_id=agent_id, content="Unrelated note")
 
-    # Get notes for the molecule
-    notes = temp_db.get_notes_for_molecule(parent_id)
+    # Get notes for the epic
+    notes = temp_db.get_notes_for_epic(parent_id)
 
     assert len(notes) == 3
     note_ids = [note["id"] for note in notes]
@@ -925,12 +925,12 @@ def test_create_note_with_nonexistent_agent_id():
         os.unlink(db_path)
 
 
-# --- get_completed_molecule_steps tests ---
+# --- get_completed_epic_steps tests ---
 
 
-def test_get_completed_molecule_steps(temp_db):
-    """Test get_completed_molecule_steps returns done/finalized child issues."""
-    parent_id = temp_db.create_issue("Parent molecule", issue_type="molecule")
+def test_get_completed_epic_steps(temp_db):
+    """Test get_completed_epic_steps returns done/finalized child issues."""
+    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
 
     child1 = temp_db.create_issue("Step 1", description="First step", parent_id=parent_id, issue_type="step")
     child2 = temp_db.create_issue("Step 2", description="Second step", parent_id=parent_id, issue_type="step")
@@ -940,7 +940,7 @@ def test_get_completed_molecule_steps(temp_db):
     temp_db.update_issue_status(child1, "done")
     temp_db.update_issue_status(child2, "finalized")
 
-    steps = temp_db.get_completed_molecule_steps(parent_id)
+    steps = temp_db.get_completed_epic_steps(parent_id)
 
     assert len(steps) == 2
     step_ids = [s["id"] for s in steps]
@@ -958,18 +958,18 @@ def test_get_completed_molecule_steps(temp_db):
     assert steps[0]["status"] == "done"
 
 
-def test_get_completed_molecule_steps_empty(temp_db):
-    """Test get_completed_molecule_steps with no completed steps."""
-    parent_id = temp_db.create_issue("Parent molecule", issue_type="molecule")
+def test_get_completed_epic_steps_empty(temp_db):
+    """Test get_completed_epic_steps with no completed steps."""
+    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
     temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
 
-    steps = temp_db.get_completed_molecule_steps(parent_id)
+    steps = temp_db.get_completed_epic_steps(parent_id)
     assert steps == []
 
 
-def test_get_completed_molecule_steps_nonexistent(temp_db):
-    """Test get_completed_molecule_steps with non-existent parent."""
-    steps = temp_db.get_completed_molecule_steps("nonexistent")
+def test_get_completed_epic_steps_nonexistent(temp_db):
+    """Test get_completed_epic_steps with non-existent parent."""
+    steps = temp_db.get_completed_epic_steps("nonexistent")
     assert steps == []
 
 
@@ -986,7 +986,7 @@ def test_notes_database_not_connected_error(temp_db):
         temp_db.get_notes()
 
     with pytest.raises(RuntimeError, match="Database not connected"):
-        temp_db.get_notes_for_molecule("test-parent")
+        temp_db.get_notes_for_epic("test-parent")
 
 
 # --- Model performance tests ---

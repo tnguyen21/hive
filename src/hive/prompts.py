@@ -141,7 +141,7 @@ def build_worker_prompt(
         worktree_path: Path to the git worktree
         branch_name: Git branch name
         project: Project name
-        completed_steps: List of completed step summaries (for molecules)
+        completed_steps: List of completed step summaries (for epics)
         notes: List of note dicts from other workers
         retry_context: Optional retry context from previous failures
 
@@ -156,7 +156,7 @@ def build_worker_prompt(
 
     context = "\n".join(context_parts)
 
-    # Build completed steps section (for molecules)
+    # Build completed steps section (for epics)
     completed_section = ""
     if completed_steps:
         completed_section = "\n\n### Previous Steps (already completed)\n" + "\n".join(

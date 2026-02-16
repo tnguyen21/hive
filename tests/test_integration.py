@@ -2,7 +2,7 @@
 
 These tests exercise the real orchestrator code against a fake OpenCode server
 (FakeOpenCodeServer) to validate the seams between components: SSE event flow,
-session lifecycle, completion handling, retry escalation, and molecule cycling.
+session lifecycle, completion handling, retry escalation, and epic cycling.
 
 Run with: pytest -m integration -v
 """
@@ -262,18 +262,18 @@ async def test_worker_failure_and_retry(integration_orchestrator, fake_server, t
 
 
 # =============================================================================
-# Molecule flow (3 sequential steps with session cycling)
+# Epic flow (3 sequential steps with session cycling)
 # =============================================================================
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_molecule_three_step_flow(integration_orchestrator, fake_server, temp_git_repo):
-    """Parent molecule with 3 sequential steps → session cycling → all complete."""
+async def test_epic_three_step_flow(integration_orchestrator, fake_server, temp_git_repo):
+    """Parent epic with 3 sequential steps → session cycling → all complete."""
     orch = integration_orchestrator
 
-    # Create molecule with 3 sequential steps
-    parent_id = orch.db.create_issue(title="Big feature", issue_type="molecule")
+    # Create epic with 3 sequential steps
+    parent_id = orch.db.create_issue(title="Big feature", issue_type="epic")
     step1_id = orch.db.create_issue(title="Step 1: API", parent_id=parent_id, issue_type="step")
     step2_id = orch.db.create_issue(title="Step 2: Frontend", parent_id=parent_id, issue_type="step")
     step3_id = orch.db.create_issue(title="Step 3: Tests", parent_id=parent_id, issue_type="step")

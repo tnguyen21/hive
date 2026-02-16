@@ -305,9 +305,9 @@ class Database:
             title: Issue title
             description: Issue description
             priority: Priority (0=critical, 4=low)
-            issue_type: Type (task, bug, feature, step, molecule)
+            issue_type: Type (task, bug, feature, step, epic)
             project: Project/repo name
-            parent_id: Parent issue ID (for molecules)
+            parent_id: Parent issue ID (for epics)
             model: Model to use for this issue (overrides global WORKER_MODEL)
             tags: List of tags for the issue (validated against ALLOWED_TAGS)
             metadata: Additional metadata dict
@@ -368,7 +368,7 @@ class Database:
             FROM issues i
             WHERE i.status = 'open'
               AND i.assignee IS NULL
-              AND i.type != 'molecule'
+              AND i.type != 'epic'
               AND NOT EXISTS (
                 SELECT 1 FROM dependencies d
                 JOIN issues blocker ON d.depends_on = blocker.id
@@ -688,10 +688,10 @@ class Database:
 
     def get_next_ready_step(self, parent_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get the next ready step within a molecule.
+        Get the next ready step within a epic.
 
         Args:
-            parent_id: Parent molecule issue ID
+            parent_id: Parent epic issue ID
 
         Returns:
             Next ready step issue dict, or None if no steps are ready
@@ -1043,12 +1043,12 @@ class Database:
         rows = self.conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    def get_notes_for_molecule(self, parent_id: str) -> List[Dict]:
+    def get_notes_for_epic(self, parent_id: str) -> List[Dict]:
         """
-        Get all notes from issues that share a parent molecule. For predecessor context.
+        Get all notes from issues that share a parent epic. For predecessor context.
 
         Args:
-            parent_id: Parent molecule issue ID
+            parent_id: Parent epic issue ID
 
         Returns:
             List of note dicts from child issues, ordered by creation time (oldest first)
@@ -1067,12 +1067,12 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_completed_molecule_steps(self, parent_id: str) -> List[Dict]:
+    def get_completed_epic_steps(self, parent_id: str) -> List[Dict]:
         """
-        Get completed/finalized sibling issues for a molecule, ordered by creation time.
+        Get completed/finalized sibling issues for a epic, ordered by creation time.
 
         Args:
-            parent_id: Parent molecule issue ID
+            parent_id: Parent epic issue ID
 
         Returns:
             List of issue dicts with id, title, description, status
@@ -1089,12 +1089,12 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def check_molecule_complete(self, parent_id: str) -> bool:
+    def check_epic_complete(self, parent_id: str) -> bool:
         """
-        Check if all child issues of a molecule are complete.
+        Check if all child issues of a epic are complete.
 
         Args:
-            parent_id: Parent molecule issue ID
+            parent_id: Parent epic issue ID
 
         Returns:
             True if all children are done/finalized/canceled, False otherwise
@@ -1142,7 +1142,7 @@ class Database:
                     (julianday(COALESCE(i.closed_at, datetime('now'))) - julianday(i.created_at)) * 24 * 60
                 ), 1) as avg_duration_minutes
             {from_clause}
-            WHERE i.type != 'molecule'
+            WHERE i.type != 'epic'
         """
         params: list = []
         if model:

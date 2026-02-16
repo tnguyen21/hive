@@ -550,18 +550,18 @@ class MergeProcessor:
             {"merged_at": now},
         )
 
-        # Check if this issue has a parent (part of a molecule)
+        # Check if this issue has a parent (part of a epic)
         issue = self.db.get_issue(entry["issue_id"])
         if issue and issue.get("parent_id"):
             parent_id = issue["parent_id"]
             # Check if all children of the parent are now complete
-            if self.db.check_molecule_complete(parent_id):
-                # Mark parent molecule as finalized (all steps merged, nothing left to do)
+            if self.db.check_epic_complete(parent_id):
+                # Mark parent epic as finalized (all steps merged, nothing left to do)
                 self.db.update_issue_status(parent_id, "finalized")
                 self.db.log_event(
                     parent_id,
                     None,
-                    "molecule_complete",
+                    "epic_complete",
                     {"completed_at": now},
                 )
 

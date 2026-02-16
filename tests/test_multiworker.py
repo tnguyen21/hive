@@ -1,12 +1,12 @@
-"""Tests for multi-worker pool and molecules."""
+"""Tests for multi-worker pool and epics."""
 
 import pytest
 
 
 def test_get_next_ready_step(temp_db):
-    """Test getting next ready step in a molecule."""
-    # Create parent molecule
-    parent = temp_db.create_issue("Multi-step workflow", issue_type="molecule", project="test")
+    """Test getting next ready step in a epic."""
+    # Create parent epic
+    parent = temp_db.create_issue("Multi-step workflow", issue_type="epic", project="test")
 
     # Create steps
     step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test")
@@ -48,7 +48,7 @@ def test_get_next_ready_step(temp_db):
 
 def test_get_next_ready_step_no_dependencies(temp_db):
     """Test getting next ready step with no dependencies."""
-    parent = temp_db.create_issue("Molecule", issue_type="molecule", project="test")
+    parent = temp_db.create_issue("Epic", issue_type="epic", project="test")
 
     # Create independent steps
     step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test")
@@ -81,10 +81,10 @@ def test_get_active_agents(temp_db):
     assert agent2 not in active_ids
 
 
-def test_molecule_execution_order(temp_db):
-    """Test that molecule steps execute in dependency order."""
-    # Create a molecule with complex dependencies
-    parent = temp_db.create_issue("Complex workflow", issue_type="molecule", project="test")
+def test_epic_execution_order(temp_db):
+    """Test that epic steps execute in dependency order."""
+    # Create a epic with complex dependencies
+    parent = temp_db.create_issue("Complex workflow", issue_type="epic", project="test")
 
     # Create steps
     setup = temp_db.create_issue("Setup", issue_type="step", parent_id=parent, project="test")
@@ -134,12 +134,12 @@ def test_molecule_execution_order(temp_db):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_session_cycling(temp_db, git_repo):
-    """Test session cycling between molecule steps (requires OpenCode server)."""
+    """Test session cycling between epic steps (requires OpenCode server)."""
     from hive.backends import OpenCodeClient
     from hive.orchestrator import Orchestrator
 
-    # Create a molecule with two steps
-    parent = temp_db.create_issue("Two-step workflow", issue_type="molecule", project="test")
+    # Create a epic with two steps
+    parent = temp_db.create_issue("Two-step workflow", issue_type="epic", project="test")
     step1 = temp_db.create_issue(
         "Create README",
         issue_type="step",

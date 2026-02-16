@@ -319,8 +319,8 @@ def test_cli_retry_logs_manual_retry_event(temp_db, tmp_path):
     assert retry_count == 0, "Should have 0 retry events (only manual_retry)"
 
 
-def test_cli_molecule(temp_db, tmp_path, capsys):
-    """Test creating a molecule."""
+def test_cli_epic(temp_db, tmp_path, capsys):
+    """Test creating a epic."""
     cli = HiveCLI(temp_db, str(tmp_path))
 
     steps = json.dumps(
@@ -330,16 +330,16 @@ def test_cli_molecule(temp_db, tmp_path, capsys):
         ]
     )
 
-    cli.molecule("Test workflow", description="A test", steps_json=steps)
+    cli.epic("Test workflow", description="A test", steps_json=steps)
 
     captured = capsys.readouterr()
-    assert "Created molecule" in captured.out
+    assert "Created epic" in captured.out
     assert "Step 0" in captured.out
     assert "Step 1" in captured.out
 
 
-def test_cli_molecule_json(temp_db, tmp_path, capsys):
-    """Test creating a molecule with JSON output."""
+def test_cli_epic_json(temp_db, tmp_path, capsys):
+    """Test creating a epic with JSON output."""
     cli = HiveCLI(temp_db, str(tmp_path))
 
     steps = json.dumps(
@@ -349,12 +349,12 @@ def test_cli_molecule_json(temp_db, tmp_path, capsys):
         ]
     )
 
-    cli.molecule("Workflow", steps_json=steps, json_mode=True)
+    cli.epic("Workflow", steps_json=steps, json_mode=True)
 
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert data["steps_count"] == 2
-    assert "molecule_id" in data
+    assert "epic_id" in data
 
 
 def test_cli_dep_add_remove(temp_db, tmp_path, capsys):
