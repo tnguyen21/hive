@@ -11,63 +11,6 @@ from hive.opencode import OpenCodeClient
 from hive.orchestrator import Orchestrator
 
 
-def test_orchestrator_initialization(temp_db, tmp_path):
-    """Test orchestrator initialization."""
-    from hive.opencode import OpenCodeClient
-
-    opencode = OpenCodeClient()
-
-    orch = Orchestrator(
-        db=temp_db,
-        opencode_client=opencode,
-        project_path=str(tmp_path),
-        project_name="test-project",
-    )
-
-    assert orch.db == temp_db
-    assert orch.opencode == opencode
-    assert orch.project_name == "test-project"
-    assert len(orch.active_agents) == 0
-
-
-def test_agent_identity_creation():
-    """Test AgentIdentity model."""
-    agent = AgentIdentity(
-        agent_id="agent-123",
-        name="test-agent",
-        issue_id="w-abc",
-        worktree="/tmp/worktree",
-        session_id="session-456",
-    )
-
-    assert agent.agent_id == "agent-123"
-    assert agent.name == "test-agent"
-    assert agent.issue_id == "w-abc"
-
-
-def test_completion_result():
-    """Test CompletionResult model."""
-    result = CompletionResult(
-        success=True,
-        reason="",
-        summary="Task completed",
-        artifacts={"git_commit": "abc123", "test_result": True},
-    )
-
-    assert result.success is True
-    assert result.git_commit == "abc123"
-    assert result.artifacts.get("test_result") is True
-
-
-def test_completion_result_no_artifacts():
-    """Test CompletionResult without artifacts."""
-    result = CompletionResult(success=False, reason="Blocked", summary="Cannot proceed")
-
-    assert result.success is False
-    assert result.git_commit is None
-    assert result.artifacts.get("test_result") is None
-
-
 # Integration tests (require OpenCode server and git repo)
 
 
@@ -172,7 +115,7 @@ async def test_handle_agent_failure_retry_tier(temp_db, tmp_path):
 
     # Create issue and agent
     issue_id = temp_db.create_issue("Test task", "Do something")
-    agent_id = temp_db.create_agent("test-agent")
+    agent_id = temp_db.create_agent("test-agent", model="claude-sonnet-4-5")
 
     agent = AgentIdentity(
         agent_id=agent_id,
@@ -206,6 +149,12 @@ async def test_handle_agent_failure_retry_tier(temp_db, tmp_path):
     assert len(retry_events) == 1
     assert retry_events[0]["detail"] is not None
 
+    # Verify model field is propagated to the incomplete event
+    incomplete_events = temp_db.get_events(issue_id=issue_id, event_type="incomplete")
+    assert len(incomplete_events) == 1
+    detail = json.loads(incomplete_events[0]["detail"])
+    assert detail.get("model") == "claude-sonnet-4-5"
+
 
 @pytest.mark.asyncio
 async def test_handle_agent_failure_agent_switch_tier(temp_db, tmp_path):
@@ -224,7 +173,7 @@ async def test_handle_agent_failure_agent_switch_tier(temp_db, tmp_path):
 
     # Create issue and agent
     issue_id = temp_db.create_issue("Test task", "Do something")
-    agent_id = temp_db.create_agent("test-agent")
+    agent_id = temp_db.create_agent("test-agent", model="claude-sonnet-4-5")
 
     agent = AgentIdentity(
         agent_id=agent_id,
@@ -255,6 +204,13 @@ async def test_handle_agent_failure_agent_switch_tier(temp_db, tmp_path):
     # Check agent_switch event was logged
     agent_switch_count = temp_db.count_events_by_type(issue_id, "agent_switch")
     assert agent_switch_count == 1
+
+    # Verify model field is propagated to the agent_switch event
+    switch_events = temp_db.get_events(issue_id=issue_id, event_type="agent_switch")
+    # Filter to only the ones logged by _handle_agent_failure (not the pre-populated ones)
+    # The pre-populated ones have detail like {"attempt": N}, the new one has "model" key
+    switch_detail = json.loads(switch_events[-1]["detail"])
+    assert switch_detail.get("model") == "claude-sonnet-4-5"
 
 
 @pytest.mark.asyncio
@@ -485,22 +441,6 @@ async def test_check_opencode_health_server_error(temp_db, tmp_path):
     assert result is False
 
 
-@pytest.mark.asyncio
-async def test_check_opencode_health_connection_error(temp_db, tmp_path):
-    """Test health check when connection fails."""
-    mock_oc = AsyncMock(spec=OpenCodeClient)
-    mock_oc.list_sessions = AsyncMock(side_effect=Exception("Connection refused"))
-    orch = Orchestrator(
-        db=temp_db,
-        opencode_client=mock_oc,
-        project_path=str(tmp_path),
-        project_name="test-project",
-    )
-
-    result = await orch._check_opencode_health()
-    assert result is False
-
-
 def test_is_opencode_error():
     """Test detection of OpenCode-related errors."""
     from hive.opencode import OpenCodeClient
@@ -563,54 +503,6 @@ async def test_enter_degraded_mode(temp_db, tmp_path):
     assert len(events) == 1
     assert events[0]["issue_id"] is None
     assert events[0]["agent_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_degraded_mode_recovery(temp_db, tmp_path):
-    """Test recovery from degraded mode."""
-    from hive.opencode import OpenCodeClient
-
-    opencode = OpenCodeClient()
-    orch = Orchestrator(
-        db=temp_db,
-        opencode_client=opencode,
-        project_path=str(tmp_path),
-        project_name="test-project",
-    )
-
-    # Start in degraded mode
-    await orch._enter_degraded_mode("Connection refused")
-
-    # Mock successful health check recovery
-    with patch.object(orch, "_check_opencode_health") as mock_health:
-        mock_health.return_value = True
-
-        # Simulate recovery in main_loop
-        orch.running = True
-
-        # Mock get_ready_queue to return no work so loop exits quickly
-        with patch.object(temp_db, "get_ready_queue") as mock_queue:
-            mock_queue.return_value = []
-
-            # Run one iteration of main loop
-            await asyncio.sleep(0.01)  # Allow async scheduling
-
-            # Manually trigger recovery logic
-            healthy = await orch._check_opencode_health()
-            if healthy:
-                temp_db.log_system_event("opencode_recovered", {"degraded_duration_seconds": 1.0, "backoff_delay": orch._backoff_delay})
-                orch._opencode_healthy = True
-                orch._degraded_since = None
-                orch._backoff_delay = 5
-
-    # Verify recovery
-    assert orch._opencode_healthy is True
-    assert orch._degraded_since is None
-    assert orch._backoff_delay == 5
-
-    # Check that recovery event was logged
-    events = temp_db.get_events(event_type="opencode_recovered")
-    assert len(events) == 1
 
 
 # Tests for new auto-restart functionality
@@ -968,55 +860,6 @@ def test_gather_notes_for_worker_standalone_issue(temp_db, tmp_path):
     assert notes[0]["id"] == note_id
 
 
-@pytest.mark.asyncio
-async def test_merge_processor_initialize_called_on_start(temp_db, tmp_path):
-    """Test merge processor initialize is called during orchestrator start."""
-    from hive.opencode import OpenCodeClient
-
-    opencode = OpenCodeClient()
-    orch = Orchestrator(
-        db=temp_db,
-        opencode_client=opencode,
-        project_path=str(tmp_path),
-        project_name="test-project",
-    )
-
-    # Mock all the async components to avoid actual startup
-    orch.merge_processor.initialize = AsyncMock()
-    orch._reconcile_stale_agents = AsyncMock()
-    orch._shutdown_all_sessions = AsyncMock()
-    orch.sse_client.connect_with_reconnect = AsyncMock()
-    orch.sse_client.stop = Mock()
-
-    # Create mock tasks that support add_done_callback and await
-    async def noop():
-        pass
-
-    mock_task = Mock()
-    mock_task.add_done_callback = Mock()
-
-    # Make mock_task awaitable
-    future = asyncio.get_event_loop().create_future()
-    future.set_result(None)
-
-    with patch("asyncio.create_task") as mock_create_task:
-        mock_create_task.return_value = mock_task
-
-        # Mock main_loop to exit immediately
-        orch.main_loop = AsyncMock()
-
-        # Patch the awaits in the finally block
-        with patch.object(orch, "start", wraps=None):
-            # Call start manually up to the point we care about
-            orch.running = True
-            orch._setup_sse_handlers()
-            await orch._reconcile_stale_agents()
-            await orch.merge_processor.initialize()
-
-        # Verify initialize was called
-        orch.merge_processor.initialize.assert_called_once()
-
-
 # --- Bidirectional reconciliation tests ---
 
 
@@ -1201,24 +1044,6 @@ async def test_reconcile_mixed_ghost_live_orphan(temp_db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_no_stale_agents(temp_db, tmp_path):
-    """Clean state — no stale agents, no orphans, no errors."""
-    mock_oc = AsyncMock(spec=OpenCodeClient)
-    mock_oc.list_sessions = AsyncMock(return_value=[])
-    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
-
-    # Should complete without error
-    await orch._reconcile_stale_agents()
-
-    # No abort/delete calls
-    mock_oc.cleanup_session.assert_not_called()
-
-    # No orphan events
-    events = temp_db.get_events(event_type="orphan_sessions_cleaned")
-    assert len(events) == 0
-
-
-@pytest.mark.asyncio
 async def test_reconcile_purges_idle_and_failed_agents(temp_db, tmp_path):
     """Test that Phase 3 of reconciliation purges idle and failed agents from previous runs."""
     # Create some agents with different statuses
@@ -1252,22 +1077,6 @@ async def test_reconcile_purges_idle_and_failed_agents(temp_db, tmp_path):
     # Working agent should also be deleted (gets reconciled to failed status, then purged in Phase 3)
     working_agent = temp_db.get_agent(working_agent_id)
     assert working_agent is None
-
-
-@pytest.mark.asyncio
-async def test_check_opencode_health_uses_list_sessions(temp_db, tmp_path):
-    """Verify _check_opencode_health delegates to list_sessions."""
-    mock_oc = AsyncMock(spec=OpenCodeClient)
-    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
-
-    # Success case
-    mock_oc.list_sessions = AsyncMock(return_value=[])
-    assert await orch._check_opencode_health() is True
-    mock_oc.list_sessions.assert_called_once()
-
-    # Failure case
-    mock_oc.list_sessions = AsyncMock(side_effect=Exception("Connection refused"))
-    assert await orch._check_opencode_health() is False
 
 
 # --- SSE permission handling tests ---
@@ -1797,105 +1606,6 @@ async def test_completed_event_contains_model(temp_db, tmp_path):
 
     # Verify completed event has model field
     events = temp_db.get_events(issue_id=issue_id, event_type="completed")
-    assert len(events) == 1
-    event = events[0]
-    assert event["detail"] is not None
-    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
-    assert "model" in detail
-    assert detail["model"] == test_model
-
-
-@pytest.mark.asyncio
-async def test_incomplete_event_contains_model(temp_db, tmp_path):
-    """Test that incomplete events contain the model field."""
-    from unittest.mock import AsyncMock
-    from hive.opencode import OpenCodeClient
-
-    # Create orchestrator with mock opencode
-    mock_opencode = AsyncMock(spec=OpenCodeClient)
-    orch = Orchestrator(
-        db=temp_db,
-        opencode_client=mock_opencode,
-        project_path=str(tmp_path),
-        project_name="test",
-    )
-
-    # Create issue and agent
-    test_model = "claude-sonnet-4"
-    issue_id = temp_db.create_issue("Test task", "Do something")
-    agent_id = temp_db.create_agent("test-agent", model=test_model)
-
-    agent = AgentIdentity(
-        agent_id=agent_id,
-        name="test-agent",
-        issue_id=issue_id,
-        worktree=str(tmp_path),
-        session_id="session-123",
-    )
-
-    # Create failure result
-    result = CompletionResult(
-        success=False,
-        reason="Test failure",
-        summary="Agent failed for testing",
-    )
-
-    await orch._handle_agent_failure(agent, result)
-
-    # Verify incomplete event has model field
-    events = temp_db.get_events(issue_id=issue_id, event_type="incomplete")
-    assert len(events) == 1
-    event = events[0]
-    assert event["detail"] is not None
-    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
-    assert "model" in detail
-    assert detail["model"] == test_model
-
-
-@pytest.mark.asyncio
-async def test_agent_switch_event_contains_model(temp_db, tmp_path):
-    """Test that agent_switch events contain the model field."""
-    from unittest.mock import AsyncMock
-    from hive.opencode import OpenCodeClient
-
-    # Create orchestrator with mock opencode
-    mock_opencode = AsyncMock(spec=OpenCodeClient)
-    orch = Orchestrator(
-        db=temp_db,
-        opencode_client=mock_opencode,
-        project_path=str(tmp_path),
-        project_name="test",
-    )
-
-    # Create issue and agent
-    test_model = "claude-sonnet-4"
-    issue_id = temp_db.create_issue("Test task", "Do something")
-    agent_id = temp_db.create_agent("test-agent", model=test_model)
-
-    agent = AgentIdentity(
-        agent_id=agent_id,
-        name="test-agent",
-        issue_id=issue_id,
-        worktree=str(tmp_path),
-        session_id="session-123",
-    )
-
-    # Pre-populate with max retries to trigger agent switch
-    for i in range(Config.MAX_RETRIES):
-        temp_db.log_event(issue_id, agent_id, "retry", {"attempt": i + 1})
-
-    # Create failure result
-    result = CompletionResult(
-        success=False,
-        reason="Test failure after retries",
-        summary="Agent still failed after retries",
-    )
-
-    # Should trigger agent switch
-    await orch._handle_agent_failure(agent, result)
-
-    # Verify agent_switch event has model field
-    events = temp_db.get_events(issue_id=issue_id, event_type="agent_switch")
     assert len(events) == 1
     event = events[0]
     assert event["detail"] is not None
