@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional
 
 from .config import Config, WORKER_PERMISSIONS
 from .db import Database
@@ -57,6 +57,13 @@ class EscalationDecision(str, Enum):
     AGENT_SWITCH = "agent_switch"
     ESCALATE = "escalate"
     ANOMALY_ESCALATE = "anomaly_escalate"
+
+
+class StalledTransition(str, Enum):
+    """Transition outcomes for stalled-agent handling."""
+
+    FAIL_STALLED_IN_PROGRESS = "fail_stalled_in_progress"
+    FAIL_STALLED_TERMINAL = "fail_stalled_terminal"
 
 
 @dataclass
@@ -394,6 +401,21 @@ class Orchestrator:
             self._session_to_agent[agent.session_id] = agent_id
             self._issue_to_agent[agent.issue_id] = agent_id
 
+    def _register_active_agent(self, agent: AgentIdentity):
+        """Register an agent in active maps for session/issue lookup."""
+        self.active_agents[agent.agent_id] = agent
+        self._session_to_agent[agent.session_id] = agent.agent_id
+        self._issue_to_agent[agent.issue_id] = agent.agent_id
+
+    def _reassign_agent_context(self, agent: AgentIdentity, *, session_id: str, issue_id: str):
+        """Update an already-active agent to a new session/issue context."""
+        self._session_to_agent.pop(agent.session_id, None)
+        self._issue_to_agent.pop(agent.issue_id, None)
+        agent.session_id = session_id
+        agent.issue_id = issue_id
+        self._session_to_agent[session_id] = agent.agent_id
+        self._issue_to_agent[issue_id] = agent.agent_id
+
     def _unregister_agent(self, agent_id: str):
         """Remove an agent from active_agents and clean up reverse lookup maps.
 
@@ -717,11 +739,7 @@ class Orchestrator:
                 worktree=worktree_path,
                 session_id=session_id,
             )
-            self.active_agents[agent_id] = agent
-
-            # Populate reverse lookup maps
-            self._session_to_agent[agent.session_id] = agent_id
-            self._issue_to_agent[agent.issue_id] = agent_id
+            self._register_active_agent(agent)
 
             await self._dispatch_worker_to_issue(
                 agent=agent,
@@ -747,10 +765,10 @@ class Orchestrator:
             # Clean up the OpenCode session if it was created (best-effort —
             # don't let cleanup failure prevent DB/worktree cleanup below)
             if session_id:
-                try:
-                    await self.opencode.cleanup_session(session_id, directory=worktree_path)
-                except Exception:
-                    pass
+                await self._best_effort_cleanup(
+                    "spawn_session_cleanup",
+                    self.opencode.cleanup_session(session_id, directory=worktree_path),
+                )
             # Clean up in-memory tracking (if agent was registered)
             if agent_id in self.active_agents:
                 self._unregister_agent(agent_id)
@@ -917,21 +935,22 @@ class Orchestrator:
         self.db.conn.execute("UPDATE issues SET assignee = NULL WHERE id = ?", (issue_id,))
         self.db.conn.commit()
 
+    async def _best_effort_cleanup(self, label: str, op: Awaitable[Any]):
+        """Run async cleanup operation and suppress failures with debug logging."""
+        try:
+            await op
+        except Exception as e:
+            logger.debug(f"Best-effort cleanup failed ({label}): {e}")
+
     async def _teardown_agent(self, agent: AgentIdentity, *, remove_worktree: bool = False):
         """Best-effort cleanup for session, in-memory registration, and worktree."""
-        try:
-            await self._cleanup_session(agent)
-        except Exception:
-            pass
+        await self._best_effort_cleanup("cleanup_session", self._cleanup_session(agent))
 
         if agent.agent_id in self.active_agents:
             self._unregister_agent(agent.agent_id)
 
         if remove_worktree and agent.worktree:
-            try:
-                await remove_worktree_async(agent.worktree)
-            except Exception:
-                pass
+            await self._best_effort_cleanup("remove_worktree", remove_worktree_async(agent.worktree))
 
     @contextmanager
     def _agent_handling_scope(self, agent: AgentIdentity, *, handler_name: str):
@@ -1365,21 +1384,7 @@ class Orchestrator:
             )
             self.db.conn.commit()
 
-            # Update agent identity and reverse lookup maps
-            old_session_id = agent.session_id
-            old_issue_id = agent.issue_id
-
-            # Remove old mappings
-            self._session_to_agent.pop(old_session_id, None)
-            self._issue_to_agent.pop(old_issue_id, None)
-
-            # Update agent identity
-            agent.session_id = new_session_id
-            agent.issue_id = next_step["id"]
-
-            # Add new mappings
-            self._session_to_agent[agent.session_id] = agent.agent_id
-            self._issue_to_agent[agent.issue_id] = agent.agent_id
+            self._reassign_agent_context(agent, session_id=new_session_id, issue_id=next_step["id"])
 
             # Gather completed steps for context
             completed_steps = None
@@ -1410,10 +1415,10 @@ class Orchestrator:
             # Clean up the new session if it was created (best-effort —
             # don't let cleanup failure prevent _unregister_agent below)
             if new_session_id:
-                try:
-                    await self.opencode.cleanup_session(new_session_id, directory=agent.worktree)
-                except Exception:
-                    pass
+                await self._best_effort_cleanup(
+                    "cycle_session_cleanup",
+                    self.opencode.cleanup_session(new_session_id, directory=agent.worktree),
+                )
             # Release agent
             if agent.agent_id in self.active_agents:
                 self._unregister_agent(agent.agent_id)
@@ -1437,7 +1442,7 @@ class Orchestrator:
             if not should_handle:
                 return
 
-            stalled_transition = "FAIL_STALLED_TERMINAL"
+            stalled_transition = StalledTransition.FAIL_STALLED_TERMINAL
             try:
                 self.db.log_event(
                     agent.issue_id,
@@ -1454,7 +1459,7 @@ class Orchestrator:
                 # infinite spawn loop for issues whose workers always stall.
                 current_issue = self.db.get_issue(agent.issue_id)
                 if current_issue and current_issue.get("status") == "in_progress":
-                    stalled_transition = "FAIL_STALLED_IN_PROGRESS"
+                    stalled_transition = StalledTransition.FAIL_STALLED_IN_PROGRESS
                     stall_result = CompletionResult(
                         success=False,
                         reason="Agent stalled (lease expired, no activity)",
@@ -1462,7 +1467,7 @@ class Orchestrator:
                     )
                     await self._handle_agent_failure(agent, stall_result)
             finally:
-                logger.debug(f"Stall transition for {agent.name}: {stalled_transition}")
+                logger.debug(f"Stall transition for {agent.name}: {stalled_transition.value}")
                 await self._teardown_agent(agent, remove_worktree=True)
 
     async def _check_opencode_health(self) -> bool:
