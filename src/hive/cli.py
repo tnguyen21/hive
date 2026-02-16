@@ -258,42 +258,6 @@ class HiveCLI:
                         for key, value in detail.items():
                             print(f"    {key}: {value}")
 
-    def show_ready(self, *, json_mode: bool = False):
-        """Show ready queue."""
-        try:
-            ready = self.db.get_ready_queue(limit=20)
-
-            result = {
-                "count": len(ready),
-                "ready_issues": [
-                    {
-                        "id": i["id"],
-                        "title": i["title"],
-                        "priority": i["priority"],
-                        "type": i["type"],
-                    }
-                    for i in ready
-                ],
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
-            ready = result.get("ready_issues", [])
-            if not ready:
-                print("No ready issues.")
-                daemon = self._make_daemon()
-                if not daemon.status()["running"]:
-                    print("  Daemon is not running. Start it with: hive start")
-                return
-            print(f"\n{'ID':<12} {'Priority':<8} {'Title':<50}")
-            print("-" * 70)
-            for issue in ready:
-                print(f"{issue['id']:<12} {issue['priority']:<8} {issue['title'][:50]}")
-            print(f"\nTotal: {len(ready)} ready issues")
-
     def update(
         self,
         issue_id: str,
@@ -549,30 +513,6 @@ class HiveCLI:
         else:
             print(result.get("message", f"Retrying issue {issue_id}"))
 
-    def escalate(self, issue_id: str, reason: str = "", *, json_mode: bool = False):
-        """Escalate an issue."""
-        try:
-            issue = self.db.get_issue(issue_id)
-            if not issue:
-                raise ValueError(f"Issue not found: {issue_id}")
-
-            self.db.update_issue_status(issue_id, "escalated")
-            self.db.log_event(issue_id, None, "escalated", {"reason": reason})
-
-            result = {
-                "issue_id": issue_id,
-                "status": "escalated",
-                "reason": reason,
-                "message": f"Escalated issue {issue_id}: {reason}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
-            print(result.get("message", f"Escalated issue {issue_id}"))
-
     def molecule(
         self,
         title: str,
@@ -751,6 +691,10 @@ class HiveCLI:
             # Get merge queue stats
             merge_stats = self.db.get_merge_queue_stats()
 
+            # Get daemon status
+            daemon = self._make_daemon()
+            daemon_status = daemon.status()
+
             result = {
                 "project": self.project_name,
                 "issues": status_counts,
@@ -759,6 +703,11 @@ class HiveCLI:
                 "ready_queue": len(ready),
                 "merge_queue": merge_stats,
                 "ready_issues": [{"id": i["id"], "title": i["title"]} for i in ready[:5]],
+                "daemon": {
+                    "running": daemon_status.get("running", False),
+                    "pid": daemon_status.get("pid"),
+                    "log_file": daemon_status.get("log_file"),
+                },
             }
         except Exception as e:
             self._error(str(e), json_mode=json_mode)
@@ -793,6 +742,16 @@ class HiveCLI:
                 print(f"Merge queue: {', '.join(parts) if parts else 'empty'}")
             else:
                 print(f"Merge queue: {mq} pending")
+
+            # Daemon info
+            daemon_info = result.get("daemon", {})
+            if daemon_info.get("running"):
+                print(f"\nDaemon: running (PID {daemon_info.get('pid')})")
+                if daemon_info.get("log_file"):
+                    print(f"  Log: {daemon_info.get('log_file')}")
+            else:
+                print("\nDaemon: not running")
+
             total = result.get("total_issues", 0)
             if total == 0:
                 print("\n  No issues yet. Create one with: hive create 'title' 'description'")
@@ -902,37 +861,6 @@ class HiveCLI:
             print(json.dumps(result, default=str))
         else:
             print(f"Added note #{result['note_id']} [{category}]")
-
-    def list_notes(
-        self,
-        issue_id: Optional[str] = None,
-        category: Optional[str] = None,
-        limit: int = 20,
-        *,
-        json_mode: bool = False,
-    ):
-        """List notes from the knowledge base."""
-        try:
-            notes = self.db.get_notes(issue_id=issue_id, category=category, project=self.project_name, limit=limit)
-
-            result = {"count": len(notes), "notes": notes}
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
-            notes = result.get("notes", [])
-            if not notes:
-                print("No notes found.")
-                return
-            print(f"\n{'ID':<6} {'Category':<12} {'Issue':<14} {'Content':<50}")
-            print("-" * 82)
-            for note in notes:
-                issue = note.get("issue_id") or "-"
-                content = (note.get("content") or "")[:50]
-                print(f"{note['id']:<6} {note['category']:<12} {str(issue):<14} {content}")
-            print(f"\nTotal: {len(notes)} notes")
 
     # ── Event log (tail-style, not tool-backed) ─────────────────────
 
@@ -1231,43 +1159,6 @@ class HiveCLI:
 
         print()
         print(f"Escalation rate: {escalation_rate}% | Mean time to resolution: {mean_duration_m}m")
-
-    # ── Web UI ────────────────────────────────────────────────────────
-
-    def ui(self, port: int = 8001, host: str = "127.0.0.1"):
-        """Launch datasette UI for exploring Hive data."""
-        import shutil
-
-        datasette_bin = shutil.which("datasette")
-        if not datasette_bin:
-            print("Error: datasette not installed. Install with: pip install datasette", file=sys.stderr)
-            print('Or: uv pip install "hive[ui]"', file=sys.stderr)
-            sys.exit(1)
-
-        db_path = Config.DB_PATH  # ~/.hive/hive.db
-        metadata_path = Path(__file__).parent / "datasette_metadata.json"
-
-        print(f"Launching Hive Explorer at http://{host}:{port}")
-        print(f"Database: {db_path}")
-        print("Press Ctrl+C to stop")
-
-        os.execvp(
-            datasette_bin,
-            [
-                "datasette",
-                "--immutable",
-                str(db_path),  # read-only mode — don't allow writes
-                "--metadata",
-                str(metadata_path),
-                "--host",
-                host,
-                "--port",
-                str(port),
-                "--setting",
-                "sql_time_limit_ms",
-                "5000",
-            ],
-        )
 
     # ── Daemon management ────────────────────────────────────────────
 
@@ -1779,8 +1670,8 @@ def _smart_noargs(cli: HiveCLI, project_path: Path, project_name: str, *, json_m
 
 _EPILOG = """\
 advanced commands:
-  update, cancel, finalize, retry, escalate, molecule, dep, ready,
-  agent, costs, stats, metrics, daemon, note, notes, ui
+  update, cancel, finalize, retry, molecule, dep,
+  agent, costs, stats, metrics, daemon, note
 
 Run `hive <command> -h` for details on any command.
 """
@@ -1897,9 +1788,6 @@ def main():
     list_parser.add_argument("--assignee", help="Filter by agent assignee")
     list_parser.add_argument("--limit", type=int, default=50, help="Max issues to show (default: 50)")
 
-    # ready command (hidden — advanced)
-    subparsers.add_parser("ready", help=argparse.SUPPRESS)
-
     # show command
     show_parser = subparsers.add_parser("show", help="Show issue details")
     show_parser.add_argument("issue_id", help="Issue ID")
@@ -1932,11 +1820,6 @@ def main():
     retry_parser = subparsers.add_parser("retry", help=argparse.SUPPRESS)
     retry_parser.add_argument("issue_id", help="Issue ID")
     retry_parser.add_argument("--notes", default="", help="Notes about what to try differently")
-
-    # escalate command (hidden — advanced)
-    escalate_parser = subparsers.add_parser("escalate", help=argparse.SUPPRESS)
-    escalate_parser.add_argument("issue_id", help="Issue ID")
-    escalate_parser.add_argument("--reason", default="", help="Reason for escalation")
 
     # molecule command (hidden — advanced)
     molecule_parser = subparsers.add_parser("molecule", help=argparse.SUPPRESS)
@@ -2038,21 +1921,6 @@ def main():
         help="Note category (default: discovery)",
     )
 
-    # notes command (hidden — advanced)
-    notes_parser = subparsers.add_parser("notes", help=argparse.SUPPRESS)
-    notes_parser.add_argument("--issue", dest="issue_id", help="Filter by issue ID")
-    notes_parser.add_argument(
-        "--category",
-        choices=["discovery", "gotcha", "dependency", "pattern", "context"],
-        help="Filter by category",
-    )
-    notes_parser.add_argument("--limit", type=int, default=20, help="Max notes to show (default: 20)")
-
-    # ui command (hidden — advanced)
-    ui_parser = subparsers.add_parser("ui", help=argparse.SUPPRESS)
-    ui_parser.add_argument("--port", type=int, default=8001, help="Port to serve on (default: 8001)")
-    ui_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
-
     # doctor command
     doctor_parser = subparsers.add_parser("doctor", help="Run system health checks")
     doctor_parser.add_argument("--fix", action="store_true", help="Auto-fix issues where possible")
@@ -2119,9 +1987,6 @@ def main():
                 json_mode=json_mode,
             )
 
-        elif args.command == "ready":
-            cli.show_ready(json_mode=json_mode)
-
         elif args.command == "show":
             cli.show(args.issue_id, json_mode=json_mode)
 
@@ -2148,9 +2013,6 @@ def main():
 
         elif args.command == "retry":
             cli.retry(args.issue_id, notes=args.notes, json_mode=json_mode)
-
-        elif args.command == "escalate":
-            cli.escalate(args.issue_id, reason=args.reason, json_mode=json_mode)
 
         elif args.command == "molecule":
             cli.molecule(
@@ -2223,17 +2085,6 @@ def main():
                 category=args.category,
                 json_mode=json_mode,
             )
-
-        elif args.command == "notes":
-            cli.list_notes(
-                issue_id=args.issue_id,
-                category=args.category,
-                limit=args.limit,
-                json_mode=json_mode,
-            )
-
-        elif args.command == "ui":
-            cli.ui(port=args.port, host=args.host)
 
         elif args.command == "doctor":
             cli.doctor(fix=getattr(args, "fix", False), json_mode=json_mode)

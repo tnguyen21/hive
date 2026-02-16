@@ -97,22 +97,6 @@ def test_cli_list_issues_by_status(temp_db, tmp_path, capsys):
     assert "Done issue" not in captured.out
 
 
-def test_cli_show_ready(temp_db, tmp_path, capsys):
-    """Test showing ready queue."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    # Create ready issues
-    temp_db.create_issue("Ready 1", priority=1, project=tmp_path.name)
-    temp_db.create_issue("Ready 2", priority=2, project=tmp_path.name)
-
-    cli.show_ready()
-
-    captured = capsys.readouterr()
-    assert "Ready 1" in captured.out
-    assert "Ready 2" in captured.out
-    assert "Total: 2 ready issues" in captured.out
-
-
 def test_cli_show_issue(temp_db, tmp_path, capsys):
     """Test showing issue details."""
     cli = HiveCLI(temp_db, str(tmp_path))
@@ -333,17 +317,6 @@ def test_cli_retry_logs_manual_retry_event(temp_db, tmp_path):
 
     assert manual_retry_count == 1, "Should have exactly 1 manual_retry event"
     assert retry_count == 0, "Should have 0 retry events (only manual_retry)"
-
-
-def test_cli_escalate(temp_db, tmp_path, capsys):
-    """Test escalating an issue."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    issue_id = temp_db.create_issue("Needs help", project=tmp_path.name)
-    cli.escalate(issue_id, reason="blocked on API access")
-
-    issue = temp_db.get_issue(issue_id)
-    assert issue["status"] == "escalated"
 
 
 def test_cli_molecule(temp_db, tmp_path, capsys):
@@ -627,48 +600,6 @@ def test_cli_add_note_with_issue_and_category(temp_db, tmp_path, capsys):
     assert notes[0]["issue_id"] == issue_id
 
 
-def test_cli_list_notes(temp_db, tmp_path, capsys):
-    """Test listing notes via CLI."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    temp_db.add_note(content="Note 1", category="discovery")
-    temp_db.add_note(content="Note 2", category="gotcha")
-    temp_db.add_note(content="Note 3", category="pattern")
-
-    cli.list_notes()
-
-    captured = capsys.readouterr()
-    assert "Note 1" in captured.out
-    assert "Note 2" in captured.out
-    assert "Note 3" in captured.out
-    assert "Total: 3 notes" in captured.out
-
-
-def test_cli_list_notes_empty(temp_db, tmp_path, capsys):
-    """Test listing notes when none exist."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    cli.list_notes()
-
-    captured = capsys.readouterr()
-    assert "No notes found" in captured.out
-
-
-def test_cli_list_notes_filter_category(temp_db, tmp_path, capsys):
-    """Test listing notes filtered by category."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    temp_db.add_note(content="Discovery note", category="discovery")
-    temp_db.add_note(content="Gotcha note", category="gotcha")
-
-    cli.list_notes(category="gotcha")
-
-    captured = capsys.readouterr()
-    assert "Gotcha note" in captured.out
-    assert "Discovery note" not in captured.out
-    assert "Total: 1 notes" in captured.out
-
-
 # ── Setup wizard tests ──────────────────────────────────────────
 
 
@@ -947,16 +878,6 @@ def test_list_empty_suggests_create(temp_db, tmp_path, capsys):
     assert "hive create" in captured.out
 
 
-def test_ready_empty_suggests_start(temp_db, tmp_path, capsys):
-    """Test that empty ready queue mentions daemon when not running."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-    cli.show_ready()
-
-    captured = capsys.readouterr()
-    assert "No ready issues." in captured.out
-    assert "hive start" in captured.out
-
-
 def test_status_no_issues_suggests_create(temp_db, tmp_path, capsys):
     """Test that status with 0 issues suggests hive create."""
     cli = HiveCLI(temp_db, str(tmp_path))
@@ -975,3 +896,25 @@ def test_status_with_issues_no_hint(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "No issues yet" not in captured.out
+
+
+def test_status_includes_daemon_info_json(temp_db, tmp_path, capsys):
+    """Test that status --json includes daemon info."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    cli.status(json_mode=True)
+
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert "daemon" in result
+    assert "running" in result["daemon"]
+    assert "pid" in result["daemon"]
+    assert "log_file" in result["daemon"]
+
+
+def test_status_shows_daemon_info(temp_db, tmp_path, capsys):
+    """Test that status shows daemon info in human-readable output."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    cli.status()
+
+    captured = capsys.readouterr()
+    assert "Daemon:" in captured.out
