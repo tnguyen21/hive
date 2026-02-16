@@ -9,6 +9,7 @@ process (the CLI) survives and can report status back to the user.
 """
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -100,22 +101,22 @@ class HiveDaemon:
         if existing_pid:
             self._remove_pid()
 
-        # Spawn a detached subprocess running `hive start --foreground`
+        # Spawn a detached subprocess running `hive start --foreground`.
+        # Prefer the installed `hive` entry point over `sys.executable -m hive.cli`
+        # because sys.executable can resolve to a base Python (outside the
+        # tool venv) when hive was installed via `uv tool install`.
+        hive_bin = shutil.which("hive")
+        if hive_bin:
+            cmd = [hive_bin]
+        else:
+            cmd = [sys.executable, "-m", "hive.cli"]
+        cmd += ["--db", str(db_path), "--project", str(self.project_path), "start", "--foreground"]
+
         # Strip CLAUDECODE so the daemon (and its workers) don't think they're nested
         spawn_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         log_fd = open(self.log_file, "a")  # noqa: SIM115
         proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "hive.cli",
-                "--db",
-                str(db_path),
-                "--project",
-                str(self.project_path),
-                "start",
-                "--foreground",
-            ],
+            cmd,
             stdout=log_fd,
             stderr=log_fd,
             stdin=subprocess.DEVNULL,
