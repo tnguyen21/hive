@@ -14,6 +14,8 @@ from pathlib import Path
 
 # ── Mapping from TOML [hive] keys → (env var, type, default) ────────────
 
+_SENSITIVE_FIELDS = {"opencode_password"}
+
 _FIELDS: dict[str, tuple[str, type, object]] = {
     "max_agents": ("HIVE_MAX_AGENTS", int, 10),
     "poll_interval": ("HIVE_POLL_INTERVAL", int, 5),
@@ -39,11 +41,17 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "anomaly_window_minutes": ("HIVE_ANOMALY_WINDOW_MINUTES", int, 10),
     "anomaly_failure_threshold": ("HIVE_ANOMALY_FAILURE_THRESHOLD", int, 3),
     # Backend selection
-    "backend": ("HIVE_BACKEND", str, "claude"),  # "opencode" or "claude"
+    "backend": ("HIVE_BACKEND", str, "claude"),  # "opencode" | "claude" | "codex"
     # Claude WS backend settings
     "claude_ws_host": ("HIVE_CLAUDE_WS_HOST", str, "127.0.0.1"),
     "claude_ws_port": ("HIVE_CLAUDE_WS_PORT", int, 8765),
     "claude_ws_max_concurrent": ("HIVE_CLAUDE_WS_MAX_CONCURRENT", int, 3),
+    # Codex App Server backend settings
+    "codex_cmd": ("HIVE_CODEX_CMD", str, "codex app-server --listen stdio://"),
+    "codex_approval_policy": ("HIVE_CODEX_APPROVAL_POLICY", str, "never"),
+    "codex_sandbox": ("HIVE_CODEX_SANDBOX", str, "workspace-write"),
+    "codex_personality": ("HIVE_CODEX_PERSONALITY", str, "pragmatic"),
+    "codex_heartbeat_interval": ("HIVE_CODEX_HEARTBEAT_INTERVAL", int, 60),
 }
 
 # Directory that holds global state (DB, pids, logs)
@@ -105,6 +113,54 @@ class _Config:
             self._apply_toml(project_root / ".hive.toml")
         self._apply_env()
         self._loaded = True
+
+    def get_resolved_config(self, project_root: Path | None = None) -> list[dict]:
+        """Return resolved config with per-field source attribution.
+
+        Re-walks the 4 layers (defaults → global TOML → project TOML → env)
+        to determine which layer set each field. Sensitive fields are redacted.
+        """
+        global_toml = HIVE_DIR / "config.toml"
+        project_toml = (project_root / ".hive.toml") if project_root else None
+
+        # Load TOML sections once
+        global_section: dict = {}
+        if global_toml.is_file():
+            with open(global_toml, "rb") as f:
+                global_section = tomllib.load(f).get("hive", {})
+
+        project_section: dict = {}
+        if project_toml and project_toml.is_file():
+            with open(project_toml, "rb") as f:
+                project_section = tomllib.load(f).get("hive", {})
+
+        result = []
+        for key, (env_var, typ, default) in _FIELDS.items():
+            attr = key.upper()
+            value = getattr(self, attr, default)
+
+            # Walk layers in order to find effective source
+            source = "default"
+            if key in global_section:
+                source = "global_toml"
+            if key in project_section:
+                source = "project_toml"
+            if os.environ.get(env_var) is not None:
+                source = "env"
+
+            # Redact sensitive fields
+            display_value = "***" if key in _SENSITIVE_FIELDS and value else value
+
+            result.append(
+                {
+                    "field": attr,
+                    "value": display_value,
+                    "source": source,
+                    "env_var": env_var,
+                }
+            )
+
+        return result
 
 
 def _coerce(value: object, typ: type) -> object:

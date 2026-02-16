@@ -958,6 +958,16 @@ class HiveCLI:
         except KeyboardInterrupt:
             pass
 
+    def debug(self, *, json_mode: bool = False):
+        """Print a full diagnostic report."""
+        from .diag import format_report_text, gather_report
+
+        report = gather_report(self.db, str(self.project_path), self.project_name)
+        if json_mode:
+            print(json.dumps(report, default=str))
+        else:
+            print(format_report_text(report))
+
     def doctor(self, fix: bool = False, *, json_mode: bool = False):
         """Run system health checks."""
         from .doctor import run_all_checks
@@ -1616,6 +1626,9 @@ def main():
     doctor_parser = subparsers.add_parser("doctor", help="Run system health checks")
     doctor_parser.add_argument("--fix", action="store_true", help="Auto-fix issues where possible")
 
+    # debug command
+    subparsers.add_parser("debug", help="Print diagnostic report for debugging")
+
     args = parser.parse_args()
 
     # ── Project auto-detection + layered config ──────────────────────
@@ -1772,6 +1785,9 @@ def main():
 
         elif args.command == "doctor":
             cli.doctor(fix=getattr(args, "fix", False), json_mode=json_mode)
+
+        elif args.command == "debug":
+            cli.debug(json_mode=json_mode)
 
         else:
             parser.print_help()
