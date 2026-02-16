@@ -204,12 +204,39 @@ This is the single most important thing you do. Workers are autonomous — they 
 
 ### Test Expectations in Issues
 
-Every feature or bugfix issue MUST include a **Tests** section specifying:
-1. **What to test**: Specific behaviors, edge cases, and error paths
-2. **Where to put tests**: File path for new/modified test files
-3. **Invariants**: Properties that must ALWAYS hold after this change
+Every feature or bugfix issue MUST include a **Tests** section. But don't list rote
+test cases — describe **intent**. The worker is an autonomous agent; give it the
+"what matters" and let it decide the "how."
 
-If you cannot specify tests for an issue, that's a signal the requirements are underspecified. Clarify before creating the issue.
+Structure your Tests section like this:
+
+```
+## Tests
+File: tests/test_<module>.py
+
+Invariants (must always hold):
+- INV-1: <property that must never break>
+- INV-2: <property that must never break>
+
+Critical paths (2-3 scenarios where failure hurts users):
+- <scenario description>
+- <scenario description>
+
+Failure modes to cover:
+- <bad input / timeout / race / partial failure>
+
+Non-goals (do NOT test):
+- <trivial wrappers, private helpers, etc.>
+
+Verify: <exact command to run tests>
+```
+
+**Why this format:** Workers generate better tests when they understand *why* something
+matters, not just *what* to assert. "Test that retry works" produces checkbox tests.
+"Invariant: total retry time never exceeds 10s" produces a test that catches real bugs.
+
+If you cannot name at least one invariant and one failure mode, the requirements are
+underspecified. Clarify before creating the issue.
 
 **Good example:**
 ```
@@ -223,14 +250,27 @@ Requirements:
 
 The client is in src/hive/opencode.py. All methods use aiohttp and follow the same pattern: build headers, make request, return JSON. Add a decorator or wrapper method.
 
-Tests (in tests/test_opencode.py):
-- Test: retries exactly 3 times on 429, then raises
-- Test: no retry on 400 (client error)
-- Test: 5xx triggers retry, eventual success returns normally
-- Invariant: total retry time never exceeds 10s
-- Invariant: original request headers are preserved across retries
+## Tests
+File: tests/test_opencode.py
 
-Verify: Run 'python -m pytest tests/test_opencode.py -v'" --priority 1
+Invariants (must always hold):
+- INV-1: Total retry time never exceeds 10s (backoff is bounded)
+- INV-2: Original request headers are preserved across retries
+- INV-3: Non-retryable errors (4xx except 429) propagate immediately
+
+Critical paths:
+- 429 response triggers retry with backoff, succeeds on retry
+- 5xx triggers retry, eventual success returns normally
+
+Failure modes to cover:
+- All retries exhausted (429 x3) — must raise, not hang
+- Connection timeout during retry — must count toward retry budget
+
+Non-goals:
+- Do NOT test the aiohttp session lifecycle (framework concern)
+- Do NOT test individual HTTP methods separately if they share the retry wrapper
+
+Verify: python -m pytest tests/test_opencode.py -v" --priority 1
 ```
 
 **Bad example:**

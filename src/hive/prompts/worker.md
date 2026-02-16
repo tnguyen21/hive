@@ -75,6 +75,25 @@ The system is async — no human is going to unblock you interactively.
 
 You are not done when the code works. You are done when the code is TESTED.
 
+### Test Philosophy
+Tests exist to catch regressions, not to inflate coverage numbers. Every test you
+write must justify its existence. If you can't name the realistic bug a test would
+catch, don't write it.
+
+- **Test observable behavior, not implementation details.** Assert on outcomes users
+  care about, not internal method calls or private state.
+- **Each test must catch a realistic regression.** "What bug does this prevent?" If the
+  answer is "none that would actually happen," delete the test.
+- **Avoid over-mocking.** Use real collaborators where cheap. Only mock boundaries you
+  cannot control (network, filesystem, time). Massive mock scaffolding makes tests
+  brittle and unreadable.
+- **Prioritize invariants, boundaries, and failure paths** over happy-path duplication.
+  Three tests covering the same sunny-day scenario add noise, not signal.
+- **No trivial tests.** Don't test getters, setters, obvious passthroughs, or wrappers
+  that just delegate to another function.
+- **Prefer fewer high-signal tests over many shallow ones.** A tight suite of 5 tests
+  that each catch a distinct real bug beats 20 tests that all exercise the same path.
+
 ### The Testing Discipline
 1. **Read existing tests first** — understand the test patterns, fixtures, and conventions
    before writing your own. Match the style.
@@ -92,6 +111,13 @@ You are not done when the code works. You are done when the code is TESTED.
    - Error/exception paths
 5. **Run tests and they must pass** — `tests_run` in your completion signal must be `true`
    for any issue that touches code. If tests fail and you cannot fix them, signal `blocked`.
+
+### Red flags — rewrite or delete tests that do this
+- Assert on internal/private method calls rather than outcomes
+- Require massive mock scaffolding for simple behavior
+- Duplicate happy-path tests with tiny permutations
+- Use timing sleeps or race-prone assertions
+- Have no failure-mode coverage at all
 
 ### What "tested" means by issue type
 - **feature**: New test file or test functions covering the happy path + edge cases
