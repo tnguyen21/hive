@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from hive.models import AgentIdentity
+from hive.utils import AgentIdentity
 from hive.opencode import OpenCodeClient
 from hive.orchestrator import Orchestrator
 from hive.sse import SSEClient

@@ -23,7 +23,7 @@ import aiohttp
 import aiohttp.web
 
 from .config import Config
-from .ids import generate_id
+from .utils import generate_id
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ os.environ["HIVE_CLI_CONTEXT"] = "1"
 from .config import Config
 from .daemon import HiveDaemon
 from .db import Database, validate_tags
-from .project import detect_project
+from .utils import detect_project
 
 
 class HiveCLI:

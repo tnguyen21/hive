@@ -9,7 +9,7 @@ import pytest
 
 from hive.config import Config
 from hive.db import Database
-from hive.models import AgentIdentity, CompletionResult
+from hive.utils import AgentIdentity, CompletionResult
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────

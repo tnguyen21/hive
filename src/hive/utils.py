@@ -1,25 +1,64 @@
-"""Project auto-detection for Hive.
-
-Walks up from cwd to find the nearest .git/ directory, then resolves the
-project name from (in priority order):
-  1. .hive.toml [project] name
-  2. git remote origin URL
-  3. directory name
-"""
+"""Shared utilities: ID generation, project detection, data models."""
 
 import subprocess
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+
+# --- ID generation ---
+
+
+def generate_id(prefix: str = "w", length: int = 12) -> str:
+    """Generate a hash-based ID with a prefix.
+
+    Returns ID string in format "{prefix}-{hash[:length]}" (e.g., "w-a3f8b1c4d2e5").
+    If prefix is empty, returns just the hash suffix.
+    """
+    unique_part = uuid.uuid4().hex[:length]
+    if prefix:
+        return f"{prefix}-{unique_part}"
+    return unique_part
+
+
+# --- Data models ---
+
+
+@dataclass
+class CompletionResult:
+    """Result of assessing a worker's completion."""
+
+    success: bool
+    reason: str
+    summary: str
+    artifacts: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def git_commit(self) -> Optional[str]:
+        """Get git commit hash from artifacts."""
+        return self.artifacts.get("git_commit")
+
+
+@dataclass
+class AgentIdentity:
+    """Agent identity and context."""
+
+    agent_id: str
+    name: str
+    issue_id: str
+    worktree: str
+    session_id: str
+
+
+# --- Project detection ---
 
 
 def _parse_repo_name(remote_url: str) -> str | None:
-    """Extract repository name from a git remote URL.
-
-    Handles both SSH (git@...) and HTTPS (https://...) formats.
-    """
+    """Extract repository name from a git remote URL."""
     url = remote_url.strip().rstrip("/")
     if url.endswith(".git"):
         url = url[:-4]
-    # git@github.com:user/repo  or  https://github.com/user/repo
     for sep in (":", "/"):
         if sep in url:
             name = url.rsplit(sep, 1)[-1]
@@ -48,22 +87,17 @@ def _git_remote_name(project_root: Path) -> str | None:
 def detect_project(cwd: Path | None = None) -> tuple[Path, str]:
     """Detect the current project root and name.
 
-    Walks up from *cwd* (default: ``Path.cwd()``) looking for a ``.git/``
-    directory.  Once found, the project name is resolved from ``.hive.toml``,
-    the git remote origin URL, or the directory name (in that order).
+    Walks up from *cwd* looking for a ``.git/`` directory. Project name is
+    resolved from ``.hive.toml``, git remote origin, or directory name.
 
-    Returns:
-        ``(project_path, project_name)``
-
-    Raises:
-        SystemExit: if no ``.git/`` directory is found.
+    Returns ``(project_path, project_name)``.
+    Raises SystemExit if no ``.git/`` directory is found.
     """
     import sys
 
     start = Path(cwd) if cwd else Path.cwd()
     current = start.resolve()
 
-    # Walk up to find .git/
     while True:
         if (current / ".git").exists():
             break

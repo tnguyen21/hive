@@ -6,7 +6,7 @@ from pathlib import Path
 from string import Template
 from typing import Any, Dict, List, Optional
 
-from .models import CompletionResult
+from .utils import CompletionResult
 
 # Filename for file-based completion signal
 RESULT_FILE_NAME = ".hive-result.jsonl"
