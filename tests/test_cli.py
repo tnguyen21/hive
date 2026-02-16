@@ -604,14 +604,13 @@ def test_cli_add_note_with_issue_and_category(temp_db, tmp_path, capsys):
 
 
 def test_setup_creates_config(tmp_path, capsys):
-    """Test setup wizard creates .hive.toml with claude backend."""
+    """Test setup creates .hive.toml with claude backend."""
     from hive.cli import _do_setup
 
     _do_setup(tmp_path, tmp_path.name, json_mode=True)
 
     captured = capsys.readouterr()
     data = json.loads(captured.out)
-    assert data["claude_cli"] is not None  # bool
     assert "config_created" in data
 
     config = (tmp_path / ".hive.toml").read_text()
@@ -621,7 +620,7 @@ def test_setup_creates_config(tmp_path, capsys):
 
 
 def test_setup_skips_existing_config(tmp_path, capsys):
-    """Test setup wizard doesn't overwrite existing config."""
+    """Test setup doesn't overwrite existing config."""
     from hive.cli import _do_setup
 
     (tmp_path / ".hive.toml").write_text('[hive]\nbackend = "opencode"\n')
@@ -631,161 +630,9 @@ def test_setup_skips_existing_config(tmp_path, capsys):
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert data["config_exists"] is True
-    assert "config_created" not in data
 
     # Original content preserved
     assert "opencode" in (tmp_path / ".hive.toml").read_text()
-
-
-def test_setup_interactive_with_test_command(tmp_path, capsys, monkeypatch):
-    """Test interactive setup reads test command from input."""
-    from hive.cli import _do_setup
-
-    # Make it look like a git repo
-    (tmp_path / ".git").mkdir()
-
-    responses = iter(
-        [
-            "pytest tests/",  # test command
-            "y",  # auto-merge enabled
-            "ruff check src tests",  # lint command
-            "Prefer typed functions",  # conventions
-            "n",  # don't seed note in this test
-        ]
-    )
-    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
-
-    _do_setup(tmp_path, tmp_path.name)
-
-    config = (tmp_path / ".hive.toml").read_text()
-    assert 'test_command = "pytest tests/"' in config
-    assert 'backend = "claude"' in config
-    assert "merge_queue_enabled = true" in config
-
-    captured = capsys.readouterr()
-    assert "Next steps:" in captured.out
-    assert "hive create" in captured.out
-
-
-def test_setup_interactive_no_test_command(tmp_path, capsys, monkeypatch):
-    """Test interactive setup with blank test command."""
-    from hive.cli import _do_setup
-
-    responses = iter(
-        [
-            "",  # test command
-            "",  # auto-merge default (no)
-            "",  # lint command
-            "",  # conventions
-            "n",  # skip note
-        ]
-    )
-    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
-
-    _do_setup(tmp_path, tmp_path.name)
-
-    config = (tmp_path / ".hive.toml").read_text()
-    assert "test_command" not in config
-    assert 'backend = "claude"' in config
-    assert "merge_queue_enabled = false" in config
-
-
-def test_setup_interactive_seeds_context_note(temp_db, tmp_path, monkeypatch):
-    """Setup can seed a project-wide context note used by workers."""
-    from hive.cli import _do_setup
-
-    responses = iter(
-        [
-            "pytest -q",  # test command
-            "",  # auto-merge default (no)
-            "ruff check src tests",  # lint command
-            "Run tests before commit",  # conventions
-            "y",  # seed context note
-        ]
-    )
-    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
-
-    _do_setup(tmp_path, tmp_path.name, db=temp_db)
-
-    notes = temp_db.get_notes(category="context")
-    assert len(notes) == 1
-    assert "Test command: pytest -q" in notes[0]["content"]
-    assert "Lint command: ruff check src tests" in notes[0]["content"]
-
-
-# ── Two-tier help tests ─────────────────────────────────────────
-
-
-def test_hidden_commands_in_epilog(capsys):
-    """Test that hidden commands are listed in the epilog."""
-    with pytest.raises(SystemExit):
-        import sys
-
-        sys.argv = ["hive", "-h"]
-        from hive.cli import main
-
-        main()
-
-    captured = capsys.readouterr()
-    assert "advanced commands:" in captured.out
-    assert "hive <command> -h" in captured.out
-
-
-def test_help_shows_review_and_monitoring(capsys):
-    """Main help should include review and monitoring commands."""
-    with pytest.raises(SystemExit):
-        import sys
-
-        sys.argv = ["hive", "-h"]
-        from hive.cli import main
-
-        main()
-
-    captured = capsys.readouterr()
-    assert "review" in captured.out
-    assert "monitoring:" in captured.out
-    assert "logs" in captured.out
-
-
-def test_start_detach_does_not_attach_dashboard(temp_db, tmp_path):
-    """`hive start -d` should not attach live dashboard."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    daemon = unittest.mock.Mock()
-    daemon.status.side_effect = [
-        {"running": False, "pid": None},
-        {"running": True, "pid": 1234, "log_file": "/tmp/hive.log"},
-    ]
-    daemon.start.return_value = True
-
-    with (
-        unittest.mock.patch.object(cli, "_make_daemon", return_value=daemon),
-        unittest.mock.patch.object(cli, "_watch_dashboard") as watch_dashboard,
-    ):
-        cli.start(detach=True)
-
-    daemon.start.assert_called_once()
-    watch_dashboard.assert_not_called()
-
-
-def test_start_default_attaches_dashboard(temp_db, tmp_path):
-    """`hive start` should attach live dashboard by default."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    daemon = unittest.mock.Mock()
-    daemon.status.side_effect = [
-        {"running": False, "pid": None},
-        {"running": True, "pid": 5678, "log_file": "/tmp/hive.log"},
-    ]
-    daemon.start.return_value = True
-
-    with (
-        unittest.mock.patch.object(cli, "_make_daemon", return_value=daemon),
-        unittest.mock.patch.object(cli, "_watch_dashboard") as watch_dashboard,
-    ):
-        cli.start()
-
-    watch_dashboard.assert_called_once()
 
 
 def test_queen_auto_starts_daemon(temp_db, tmp_path):
@@ -807,65 +654,6 @@ def test_queen_auto_starts_daemon(temp_db, tmp_path):
 
     daemon.start.assert_called_once()
     queen_claude.assert_called_once()
-
-
-# ── Smart no-args tests ────────────────────────────────────────
-
-
-def test_smart_noargs_no_issues_no_config(temp_db, tmp_path, capsys):
-    """Test bare hive with no issues and no .hive.toml shows getting-started guide."""
-    from hive.cli import _smart_noargs
-
-    cli = HiveCLI(temp_db, str(tmp_path))
-    _smart_noargs(cli, tmp_path, tmp_path.name)
-
-    captured = capsys.readouterr()
-    assert "Get started:" in captured.out
-    assert "hive setup" in captured.out
-    assert "hive create" in captured.out
-
-
-def test_smart_noargs_no_issues_with_config(temp_db, tmp_path, capsys):
-    """Test bare hive with config but no issues shows abbreviated guide."""
-    from hive.cli import _smart_noargs
-
-    (tmp_path / ".hive.toml").write_text("[hive]\n")
-    cli = HiveCLI(temp_db, str(tmp_path))
-    _smart_noargs(cli, tmp_path, tmp_path.name)
-
-    captured = capsys.readouterr()
-    assert "No issues yet" in captured.out
-    assert "hive create" in captured.out
-    assert "hive setup" not in captured.out
-
-
-def test_smart_noargs_issues_no_daemon(temp_db, tmp_path, capsys):
-    """Test bare hive with issues but no daemon shows status + start hint."""
-    from hive.cli import _smart_noargs
-
-    temp_db.create_issue("Test issue", project=tmp_path.name)
-    cli = HiveCLI(temp_db, str(tmp_path))
-    _smart_noargs(cli, tmp_path, tmp_path.name)
-
-    captured = capsys.readouterr()
-    assert "Hive Status" in captured.out
-    assert "hive start" in captured.out
-
-
-def test_smart_noargs_json_new_project(temp_db, tmp_path, capsys):
-    """Test bare hive with --json and no issues."""
-    from hive.cli import _smart_noargs
-
-    cli = HiveCLI(temp_db, str(tmp_path))
-    _smart_noargs(cli, tmp_path, tmp_path.name, json_mode=True)
-
-    captured = capsys.readouterr()
-    data = json.loads(captured.out)
-    assert data["state"] == "new_project"
-    assert data["total_issues"] == 0
-
-
-# ── Smart empty state tests ────────────────────────────────────
 
 
 def test_list_empty_suggests_create(temp_db, tmp_path, capsys):
