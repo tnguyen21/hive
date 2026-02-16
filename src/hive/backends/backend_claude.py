@@ -1,11 +1,42 @@
-"""WebSocket backend using Claude Code CLI with --sdk-url.
+"""Claude WebSocket backend: direct Claude CLI via --sdk-url.
 
-Replaces OpenCode as middleware: instead of Hive -> HTTP -> OpenCode -> Anthropic API,
-this runs Hive as a WebSocket server that Claude CLI processes connect to, using
-Claude Code subscription credits instead of API billing.
+## Architecture Comparison
 
-Implements the same interfaces as OpenCodeClient + SSEClient so the orchestrator
-and merge processor work unchanged.
+### OpenCode backend (backend_opencode.py)
+    Hive ──HTTP REST──> OpenCode server ──API──> Anthropic
+    Hive <──SSE────────  OpenCode server
+
+    OpenCode is a standalone Go server that manages Claude sessions. Hive talks
+    to it via REST (session CRUD, send messages) and consumes an SSE stream for
+    real-time events. Requires running OpenCode separately and uses Anthropic API
+    billing (you supply your own API key via OpenCode's config).
+
+### Claude backend (this file)
+    Hive ──WebSocket──> Claude CLI process (one per session)
+                        └──> Anthropic (using Claude Code subscription credits)
+
+    Instead of going through OpenCode, Hive spawns `claude` CLI processes with
+    `--sdk-url ws://<host>:<port>/agent/<session_id>`. Each CLI process connects
+    *back* to Hive's built-in WebSocket server, creating a bidirectional channel.
+
+    Key differences from the OpenCode path:
+    - **Billing**: Uses Claude Code subscription credits, not API keys.
+    - **No middleware server**: Hive IS the server. Each `claude` CLI process is
+      a child process that connects back via WebSocket.
+    - **Process lifecycle**: One OS process per session (vs. OpenCode pooling).
+      Cleanup means killing the process group (SIGTERM → SIGKILL).
+    - **WS handshake protocol**: After Hive spawns the CLI and it connects via WS,
+      the CLI sends a `user` message first. Only after receiving this does Hive
+      respond with `system/init` (containing the system prompt). This is the
+      reverse of what you might expect — the CLI drives initialization.
+      See docs/claude_ws_protocol_reversed.md for the full protocol.
+    - **Permissions**: The CLI runs with `bypassPermissions` so the permission
+      API methods are no-ops.
+    - **Unified interface**: This single class implements both the session
+      management AND event streaming interfaces (HiveBackend). The orchestrator
+      passes the same instance as both `opencode_client` and `sse_client`.
+    - **Concurrency**: Controlled via CLAUDE_WS_MAX_CONCURRENT config (semaphore
+      on process spawning) to avoid overwhelming the machine.
 """
 
 import asyncio
@@ -24,6 +55,7 @@ import aiohttp.web
 
 from ..config import Config
 from ..utils import generate_id
+from .base import HiveBackend
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +79,11 @@ class SessionState:
     initialized: bool = False
 
 
-class ClaudeWSBackend:
+class ClaudeWSBackend(HiveBackend):
     """WebSocket backend using Claude Code CLI with --sdk-url.
 
     Acts as a WebSocket server that Claude CLI processes connect to.
-    Implements OpenCodeClient + SSEClient interfaces for drop-in replacement.
+    Implements the full HiveBackend interface (session management + event streaming).
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
@@ -74,7 +106,7 @@ class ClaudeWSBackend:
         self.server_ready = asyncio.Event()
         self._runner: Optional[aiohttp.web.AppRunner] = None
 
-    # ── OpenCodeClient-compatible methods ─────────────────────────────
+    # ── Session management ────────────────────────────────────────────
 
     async def list_sessions(self) -> List[Dict[str, Any]]:
         """Return list of active sessions (for health checks/reconciliation)."""
@@ -268,7 +300,7 @@ class ClaudeWSBackend:
             pass
 
     async def get_pending_permissions(self, directory: Optional[str] = None) -> List[Dict[str, Any]]:
-        """No-op with bypassPermissions mode."""
+        """No-op — CLI runs with bypassPermissions."""
         return []
 
     async def reply_permission(
@@ -278,10 +310,10 @@ class ClaudeWSBackend:
         message: Optional[str] = None,
         directory: Optional[str] = None,
     ):
-        """No-op with bypassPermissions mode."""
+        """No-op — CLI runs with bypassPermissions."""
         pass
 
-    # ── SSEClient-compatible methods ──────────────────────────────────
+    # ── Event streaming ───────────────────────────────────────────────
 
     def on(self, event_type: str, handler: Callable):
         """Register handler for specific event type."""
@@ -476,7 +508,7 @@ class ClaudeWSBackend:
             },
         )
 
-    # ── Context manager (matches OpenCodeClient interface) ────────────
+    # ── Context manager ───────────────────────────────────────────────
 
     async def __aenter__(self):
         return self

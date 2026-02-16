@@ -1,11 +1,17 @@
-"""Backend implementations for Hive (OpenCode HTTP, Claude WebSocket, SSE)."""
+"""Backend implementations for Hive.
 
-from .claude_ws import ClaudeWSBackend, SessionState
-from .opencode import OpenCodeClient, make_model_config
-from .sse import SSEClient
+Two backends available:
+- OpenCode (default): HTTP REST + SSE via an external OpenCode server
+- Claude: Direct WebSocket to Claude CLI processes (--sdk-url)
+"""
+
+from .backend_claude import ClaudeWSBackend, SessionState
+from .backend_opencode import OpenCodeClient, SSEClient, make_model_config
+from .base import HiveBackend
 
 __all__ = [
     "ClaudeWSBackend",
+    "HiveBackend",
     "OpenCodeClient",
     "SSEClient",
     "SessionState",
