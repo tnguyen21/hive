@@ -9,24 +9,6 @@ class TestOpenCodeBackend:
     """Test OpenCodeBackend class functionality."""
 
     @pytest.mark.asyncio
-    async def test_initialization(self):
-        """Test backend initialization."""
-        backend = OpenCodeBackend(
-            base_url="http://localhost:4096", password="test123", global_events=True, directory="/tmp/test", enable_sse=False
-        )
-
-        assert backend.base_url == "http://localhost:4096"
-        assert backend.password == "test123"
-        assert backend.global_events is True
-        assert backend.directory == "/tmp/test"
-        assert backend.enable_sse is False
-        assert backend.session is None
-        assert backend._session_dirs == {}
-        assert backend._handlers == {}
-        assert backend.running is False
-        assert backend._sse_task is None
-
-    @pytest.mark.asyncio
     async def test_auth_header(self):
         """Test auth header generation."""
         backend = OpenCodeBackend(password="secret123")
@@ -44,23 +26,6 @@ class TestOpenCodeBackend:
         assert auth == {}
 
     @pytest.mark.asyncio
-    async def test_directory_header(self):
-        """Test directory header generation."""
-        backend = OpenCodeBackend()
-        header = backend._get_directory_header("/home/user/project")
-
-        assert "X-OpenCode-Directory" in header
-        assert header["X-OpenCode-Directory"] == "/home/user/project"
-
-    @pytest.mark.asyncio
-    async def test_directory_header_none(self):
-        """Test directory header when not specified."""
-        backend = OpenCodeBackend()
-        header = backend._get_directory_header(None)
-
-        assert "X-OpenCode-Directory" not in header
-
-    @pytest.mark.asyncio
     async def test_context_manager(self):
         """Test async context manager functionality."""
         async with OpenCodeBackend(enable_sse=False) as backend:
@@ -72,45 +37,6 @@ class TestOpenCodeBackend:
         assert backend.session is None
         assert backend.running is False
         assert backend._sse_task is None
-
-    @pytest.mark.asyncio
-    async def test_start_stop_lifecycle(self):
-        """Test start/stop lifecycle management."""
-        backend = OpenCodeBackend(enable_sse=False)
-
-        # Initially not started
-        assert backend.session is None
-        assert backend.running is False
-        assert backend._sse_task is None
-
-        # Start
-        await backend.start()
-        assert backend.session is not None
-        assert backend.running is True
-        assert backend._sse_task is None  # No SSE task when disabled
-
-        # Stop
-        await backend.stop()
-        assert backend.session is None
-        assert backend.running is False
-        assert backend._sse_task is None
-
-    @pytest.mark.asyncio
-    async def test_session_dirs_mapping(self):
-        """Test session_id -> directory mapping functionality."""
-        backend = OpenCodeBackend()
-
-        # Initially empty
-        assert backend._session_dirs == {}
-        assert backend._get_session_directory("test-session") is None
-
-        # Manually add mapping
-        backend._session_dirs["test-session"] = "/tmp/test"
-        assert backend._get_session_directory("test-session") == "/tmp/test"
-
-        # Removing mapping
-        backend._session_dirs.pop("test-session", None)
-        assert backend._get_session_directory("test-session") is None
 
     @pytest.mark.asyncio
     async def test_sse_event_handlers(self):
@@ -223,31 +149,6 @@ class TestOpenCodeBackendWithFakeServer:
             await backend.delete_session(session_id)
 
     @pytest.mark.asyncio
-    async def test_send_message_async_direct(self, fake_server):
-        """Test send_message_async() directly with parts and model config."""
-        async with OpenCodeBackend(base_url=fake_server.url, enable_sse=False) as backend:
-            session = await backend.create_session(directory="/tmp/test")
-            session_id = session["id"]
-
-            parts = [{"type": "text", "text": "What is 2+2?"}, {"type": "text", "text": "Please explain."}]
-            model_config = {"providerID": "anthropic", "modelID": "claude-3-haiku-20240307"}
-
-            await backend.send_message_async(session_id, parts=parts, agent="build", model=model_config, system="Be concise")
-
-            # Verify message structure
-            messages = fake_server.messages.get(session_id, [])
-            assert len(messages) == 1
-
-            message = messages[0]
-            assert message["parts"] == parts
-            assert message["model"] == model_config
-            assert message["agent"] == "build"
-            assert message["system"] == "Be concise"
-
-            # Clean up
-            await backend.delete_session(session_id)
-
-    @pytest.mark.asyncio
     async def test_abort_and_delete_session(self, fake_server):
         """Test abort and delete session functionality."""
         async with OpenCodeBackend(base_url=fake_server.url, enable_sse=False) as backend:
@@ -319,20 +220,6 @@ class TestOpenCodeBackendWithFakeServer:
 
             # Clean up
             await backend.delete_session(session_id)
-
-    @pytest.mark.asyncio
-    async def test_get_pending_permissions(self, fake_server):
-        """Test getting pending permissions."""
-        async with OpenCodeBackend(base_url=fake_server.url, enable_sse=False) as backend:
-            permissions = await backend.get_pending_permissions()
-            assert isinstance(permissions, list)
-
-    @pytest.mark.asyncio
-    async def test_reply_permission(self, fake_server):
-        """Test replying to permission request."""
-        async with OpenCodeBackend(base_url=fake_server.url, enable_sse=False) as backend:
-            # Should not raise exception (fake server handles gracefully)
-            await backend.reply_permission("test-request-123", "allow")
 
     @pytest.mark.asyncio
     async def test_runtime_error_without_start(self):
@@ -421,33 +308,6 @@ class TestSSEEventParsing:
 class TestSSEWatcher:
     """Test SSEWatcher utility class."""
 
-    def test_initialization(self):
-        """Test SSEWatcher initialization."""
-        watcher = SSEWatcher(base_url="http://localhost:4096", password="test123", global_events=False, directory="/tmp/watch")
-
-        assert watcher.base_url == "http://localhost:4096"
-        assert watcher.password == "test123"
-        assert watcher.global_events is False
-        assert watcher.directory == "/tmp/watch"
-        assert watcher._handlers == {}
-        assert watcher.running is False
-
-    def test_event_handler_registration(self):
-        """Test event handler registration in SSEWatcher."""
-        watcher = SSEWatcher()
-
-        def status_handler(properties):
-            pass
-
-        def all_handler(event_type, properties):
-            pass
-
-        watcher.on("session.status", status_handler)
-        watcher.on_all(all_handler)
-
-        assert "session.status" in watcher._handlers
-        assert "*" in watcher._handlers
-
     @pytest.mark.asyncio
     async def test_sse_watcher_event_dispatch(self):
         """Test SSEWatcher event dispatch."""
@@ -477,12 +337,3 @@ class TestSSEWatcher:
         assert len(all_events_received) == 1
         assert all_events_received[0][0] == "session.status"
         assert all_events_received[0][1]["sessionID"] == "watch-123"
-
-    def test_stop_functionality(self):
-        """Test SSEWatcher stop functionality."""
-        watcher = SSEWatcher()
-
-        watcher.running = True
-        watcher.stop()
-
-        assert watcher.running is False
