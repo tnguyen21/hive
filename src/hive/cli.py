@@ -1576,7 +1576,8 @@ def main():
     metrics_parser.add_argument("--agent", help="Filter costs by specific agent ID (use with --costs)")
 
     # top-level start/stop commands
-    subparsers.add_parser("start", help="Start the hive daemon")
+    start_parser = subparsers.add_parser("start", help="Start the hive daemon")
+    start_parser.add_argument("--foreground", action="store_true", help="Run in foreground (used by daemon spawner)")
     subparsers.add_parser("stop", help="Stop the hive daemon")
 
     # queen command
@@ -1745,7 +1746,7 @@ def main():
             )
 
         elif args.command == "start":
-            cli.start(json_mode=json_mode)
+            cli.start(foreground=getattr(args, "foreground", False), json_mode=json_mode)
 
         elif args.command == "stop":
             cli.stop(json_mode=json_mode)

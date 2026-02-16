@@ -113,7 +113,6 @@ class HiveDaemon:
                 str(db_path),
                 "--project",
                 str(self.project_path),
-                "daemon",
                 "start",
                 "--foreground",
             ],
