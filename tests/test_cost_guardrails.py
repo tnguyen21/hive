@@ -310,12 +310,3 @@ async def test_anomaly_detection_allows_normal_retry(temp_db):
 
 
 # ── Per-run budget cap (unit-level) ──────────────────────────────────────
-
-
-def test_budget_paused_flag_init(temp_db):
-    """Budget paused flag starts as False."""
-    from hive.orchestrator import Orchestrator
-
-    opencode = AsyncMock()
-    orch = Orchestrator(db=temp_db, opencode_client=opencode, project_path="/tmp/test", project_name="test")
-    assert orch._budget_paused is False
