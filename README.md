@@ -25,23 +25,23 @@ hive start -d
 
 ## When To Use Hive vs Claude Code
 
-| Task | Just use Claude Code | Use Hive |
-|---|---|---|
-| Small bug fix in one area | Yes | - |
-| Single focused feature | Yes | - |
-| Feature + tests + docs + migration | - | Yes |
-| Refactor across multiple modules | - | Yes |
-| Spec that naturally splits into subtasks | - | Yes |
+| Task                                     | Just use Claude Code | Use Hive |
+| ---------------------------------------- | -------------------- | -------- |
+| Small bug fix in one area                | Yes                  | -        |
+| Single focused feature                   | Yes                  | -        |
+| Feature + tests + docs + migration       | -                    | Yes      |
+| Refactor across multiple modules         | -                    | Yes      |
+| Spec that naturally splits into subtasks | -                    | Yes      |
 
 Rule of thumb: if you would split the work anyway, Hive is usually the better fit.
 
 ## Three Core Concepts
 
-| Concept | What it means |
-|---|---|
-| Queen | Your project manager session (`hive queen`) |
+| Concept | What it means                                       |
+| ------- | --------------------------------------------------- |
+| Queen   | Your project manager session (`hive queen`)         |
 | Workers | Parallel implementers running in isolated worktrees |
-| Issues | The task board stored in SQLite |
+| Issues  | The task board stored in SQLite                     |
 
 ## Setup Defaults (Safety First)
 
@@ -134,9 +134,7 @@ For deep internals, orchestration design, schema, and implementation details, se
 
 - `docs/TECHNICAL_DESIGN_DOC.md`
 
-## Bug Reports and Feedback
-
-Hive is alpha software and I genuinely love hearing from users — bug reports, feature ideas, workflow friction, all of it.
+## Bug Reports and Feedback.
 
 If something isn't working, run `hive debug` and include the output in your report. It collects system info, config, daemon state, doctor checks, and recent logs into a single pasteable bundle:
 
@@ -144,6 +142,8 @@ If something isn't working, run `hive debug` and include the output in your repo
 hive debug          # human-readable
 hive debug --json   # machine-readable, easy to attach
 ```
+
+Please send me bug reports, feature requests, and other cool ideas!s
 
 ## Development
 
