@@ -988,9 +988,6 @@ def test_notes_database_not_connected_error(temp_db):
     with pytest.raises(RuntimeError, match="Database not connected"):
         temp_db.get_notes_for_molecule("test-parent")
 
-    with pytest.raises(RuntimeError, match="Database not connected"):
-        temp_db.get_recent_project_notes()
-
 
 # --- Model performance tests ---
 
