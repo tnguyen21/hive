@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS agents (
     session_id  TEXT,
     worktree    TEXT,
     current_issue TEXT REFERENCES issues(id),
+    project     TEXT,
     model       TEXT,
     lease_expires_at TEXT,
     last_progress_at TEXT,
@@ -109,6 +110,8 @@ CREATE TABLE IF NOT EXISTS agents (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project);
 
 ----------------------------------------------------------------------
 -- EVENTS: append-only audit trail
@@ -134,6 +137,7 @@ CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id    TEXT REFERENCES issues(id),
     agent_id    TEXT,
+    project     TEXT,
     category    TEXT NOT NULL DEFAULT 'discovery',
     content     TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -142,6 +146,7 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_issue ON notes(issue_id);
 CREATE INDEX IF NOT EXISTS idx_notes_category ON notes(category);
 CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at);
+CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project);
 
 ----------------------------------------------------------------------
 -- MERGE_QUEUE: dedicated finalizer queue
@@ -307,6 +312,48 @@ LEFT JOIN events e_fail ON e_start.agent_id = e_fail.agent_id AND e_fail.event_t
 LEFT JOIN events e_esc ON e_start.issue_id = e_esc.issue_id AND e_esc.event_type = 'escalated'
 WHERE e_start.event_type = 'worker_started'
         """)
+        self.conn.commit()
+
+        # Add project column to notes table if missing
+        cursor = self.conn.execute("PRAGMA table_info(notes)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "project" not in columns:
+            try:
+                self.conn.execute("ALTER TABLE notes ADD COLUMN project TEXT")
+                self.conn.commit()
+                logger.info("Added project column to notes table")
+            except sqlite3.Error as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+        # Backfill notes.project from issues.project via issue_id FK (always run to catch any NULL values)
+        self.conn.execute("""
+            UPDATE notes
+            SET project = (SELECT project FROM issues WHERE issues.id = notes.issue_id)
+            WHERE issue_id IS NOT NULL AND project IS NULL
+        """)
+        if self.conn.total_changes > 0:
+            self.conn.commit()
+            logger.info(f"Backfilled {self.conn.total_changes} notes.project from issues.project")
+
+        # Create index on notes.project if it doesn't exist
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project)")
+        self.conn.commit()
+
+        # Add project column to agents table if missing
+        cursor = self.conn.execute("PRAGMA table_info(agents)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "project" not in columns:
+            try:
+                self.conn.execute("ALTER TABLE agents ADD COLUMN project TEXT")
+                self.conn.commit()
+                logger.info("Added project column to agents table")
+            except sqlite3.Error as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+        # Create index on agents.project if it doesn't exist
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project)")
         self.conn.commit()
 
     def create_issue(

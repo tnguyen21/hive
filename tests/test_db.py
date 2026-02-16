@@ -1121,3 +1121,151 @@ def test_model_performance_empty(temp_db):
     """Should return empty list when no issues exist."""
     results = temp_db.get_model_performance()
     assert results == []
+
+
+# --- Project column migration tests ---
+
+
+def test_project_column_migration_fresh_db():
+    """Test that fresh DB has project columns in notes and agents tables."""
+    import tempfile
+    import os
+    from hive.db import Database
+
+    # Create completely fresh DB
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    db = Database(db_path)
+    db.connect()
+
+    try:
+        # Check that notes table has project column
+        cursor = db.conn.execute("PRAGMA table_info(notes)")
+        notes_columns = [row[1] for row in cursor.fetchall()]
+        assert "project" in notes_columns
+
+        # Check that agents table has project column
+        cursor = db.conn.execute("PRAGMA table_info(agents)")
+        agents_columns = [row[1] for row in cursor.fetchall()]
+        assert "project" in agents_columns
+
+        # Check that indexes exist
+        cursor = db.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notes_project'")
+        assert cursor.fetchone() is not None
+
+        cursor = db.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_agents_project'")
+        assert cursor.fetchone() is not None
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_project_column_migration_idempotent():
+    """Test that migration is idempotent (can be run multiple times)."""
+    import tempfile
+    import os
+    from hive.db import Database
+
+    # Create completely fresh DB
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    db = Database(db_path)
+    db.connect()
+
+    try:
+        # Run migration once (already happened in connect())
+        # Check columns exist
+        cursor = db.conn.execute("PRAGMA table_info(notes)")
+        notes_columns = [row[1] for row in cursor.fetchall()]
+        assert "project" in notes_columns
+
+        cursor = db.conn.execute("PRAGMA table_info(agents)")
+        agents_columns = [row[1] for row in cursor.fetchall()]
+        assert "project" in agents_columns
+
+        # Run migration again (should be no-op)
+        db._migrate_if_needed()
+
+        # Columns should still exist (no error)
+        cursor = db.conn.execute("PRAGMA table_info(notes)")
+        notes_columns = [row[1] for row in cursor.fetchall()]
+        assert "project" in notes_columns
+
+        cursor = db.conn.execute("PRAGMA table_info(agents)")
+        agents_columns = [row[1] for row in cursor.fetchall()]
+        assert "project" in agents_columns
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_project_column_backfill():
+    """Test that notes.project is backfilled from issues.project via FK."""
+    import tempfile
+    import os
+    from hive.db import Database
+
+    # Create completely fresh DB
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    db = Database(db_path)
+    db.connect()
+
+    try:
+        # Create an issue with a project
+        issue_id = db.create_issue(title="Test issue", project="test-project")
+        agent_id = db.create_agent("test-agent")
+
+        # Add a note for this issue
+        note_id = db.add_note(issue_id=issue_id, agent_id=agent_id, content="Test note")
+
+        # Manually clear the project column to simulate old data
+        db.conn.execute("UPDATE notes SET project = NULL WHERE id = ?", (note_id,))
+        db.conn.commit()
+
+        # Verify project is NULL
+        cursor = db.conn.execute("SELECT project FROM notes WHERE id = ?", (note_id,))
+        assert cursor.fetchone()["project"] is None
+
+        # Run migration (backfill should happen)
+        db._migrate_if_needed()
+
+        # Verify project was backfilled
+        cursor = db.conn.execute("SELECT project FROM notes WHERE id = ?", (note_id,))
+        backfilled_project = cursor.fetchone()["project"]
+        assert backfilled_project == "test-project"
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_project_column_backfill_null_issue_id():
+    """Test that notes with NULL issue_id keep NULL project (project-wide notes)."""
+    import tempfile
+    import os
+    from hive.db import Database
+
+    # Create completely fresh DB
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    db = Database(db_path)
+    db.connect()
+
+    try:
+        # Add a project-wide note (no issue_id)
+        note_id = db.add_note(content="Project-wide note")
+
+        # Run migration (should not crash on NULL issue_id)
+        db._migrate_if_needed()
+
+        # Verify project remains NULL for project-wide notes
+        cursor = db.conn.execute("SELECT project FROM notes WHERE id = ?", (note_id,))
+        note_project = cursor.fetchone()["project"]
+        assert note_project is None
+    finally:
+        db.close()
+        os.unlink(db_path)
