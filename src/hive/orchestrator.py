@@ -798,7 +798,7 @@ class Orchestrator:
                     notes.append(note)
 
         # Get recent project-wide notes
-        for note in self.db.get_recent_project_notes(project=self.project_name, limit=10):
+        for note in self.db.get_notes(project=self.project_name, limit=10):
             if note["id"] not in seen_ids:
                 seen_ids.add(note["id"])
                 notes.append(note)

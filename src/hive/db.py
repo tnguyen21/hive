@@ -550,17 +550,22 @@ class Database:
                 (issue_id, depends_on, dep_type),
             )
 
-    def get_events(
+    def _query_events(
         self,
+        *,
+        after_id: int = 0,
         issue_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         event_type: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = None,
+        order: str = "DESC",
     ) -> List[Dict[str, Any]]:
-        """Get events filtered by issue, agent, or type."""
+        """Private helper for querying events with optional filtering and ordering."""
         conditions = []
         params = []
-
+        if after_id:
+            conditions.append("id > ?")
+            params.append(after_id)
         if issue_id:
             conditions.append("issue_id = ?")
             params.append(issue_id)
@@ -570,20 +575,23 @@ class Database:
         if event_type:
             conditions.append("event_type = ?")
             params.append(event_type)
-
-        # Optimization: Sort by ID (primary key) instead of created_at.
-        # 1. Performance: Uses the PK index to avoid a full table scan/sort.
-        # 2. Correctness: Ensures strict ordering for events within the same second.
-        if conditions:
-            where_clause = " AND ".join(conditions)
-            query = f"SELECT * FROM events WHERE {where_clause} ORDER BY id DESC LIMIT ?"
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        query = f"SELECT * FROM events {where} ORDER BY id {order}"
+        if limit:
+            query += " LIMIT ?"
             params.append(limit)
-        else:
-            query = "SELECT * FROM events ORDER BY id DESC LIMIT ?"
-            params.append(limit)
-
         cursor = self.conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_events(
+        self,
+        issue_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Get events filtered by issue, agent, or type."""
+        return self._query_events(issue_id=issue_id, agent_id=agent_id, event_type=event_type, limit=limit, order="DESC")
 
     def get_events_since(
         self,
@@ -593,24 +601,7 @@ class Database:
         event_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get events with id > after_id, ordered ascending (oldest first)."""
-        conditions = ["id > ?"]
-        params = [after_id]
-
-        if issue_id:
-            conditions.append("issue_id = ?")
-            params.append(issue_id)
-        if agent_id:
-            conditions.append("agent_id = ?")
-            params.append(agent_id)
-        if event_type:
-            conditions.append("event_type = ?")
-            params.append(event_type)
-
-        where_clause = " AND ".join(conditions)
-        query = f"SELECT * FROM events WHERE {where_clause} ORDER BY id ASC"
-
-        cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._query_events(after_id=after_id, issue_id=issue_id, agent_id=agent_id, event_type=event_type, order="ASC")
 
     def get_max_event_id(self) -> int:
         """Return the current maximum event id, or 0 if no events."""
@@ -625,28 +616,8 @@ class Database:
         event_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get the most recent n events, returned oldest-first."""
-        conditions = []
-        params = []
-
-        if issue_id:
-            conditions.append("issue_id = ?")
-            params.append(issue_id)
-        if agent_id:
-            conditions.append("agent_id = ?")
-            params.append(agent_id)
-        if event_type:
-            conditions.append("event_type = ?")
-            params.append(event_type)
-
-        if conditions:
-            where_clause = " AND ".join(conditions)
-            query = f"SELECT * FROM (SELECT * FROM events WHERE {where_clause} ORDER BY id DESC LIMIT ?) ORDER BY id ASC"
-        else:
-            query = "SELECT * FROM (SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id ASC"
-
-        params.append(n)
-        cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        results = self._query_events(issue_id=issue_id, agent_id=agent_id, event_type=event_type, limit=n, order="DESC")
+        return list(reversed(results))
 
     def count_events_by_type(self, issue_id: str, event_type: str) -> int:
         """
@@ -1133,33 +1104,6 @@ class Database:
             (parent_id,),
         )
         return cursor.fetchone()[0] == 0
-
-    def get_recent_project_notes(self, project: Optional[str] = None, limit: int = 10) -> List[Dict]:
-        """
-        Get recent project-wide notes plus recent cross-issue notes.
-
-        Args:
-            project: Filter by project (optional). NULL-project notes match any query for backward compat.
-            limit: Maximum number of notes to return
-
-        Returns:
-            List of note dicts, ordered by newest first
-        """
-        if not self.conn:
-            raise RuntimeError("Database not connected")
-
-        query = "SELECT * FROM notes WHERE 1=1"
-        params = []
-
-        if project is not None:
-            query += " AND (project = ? OR project IS NULL)"
-            params.append(project)
-
-        query += " ORDER BY created_at DESC LIMIT ?"
-        params.append(limit)
-
-        rows = self.conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
 
     def get_model_performance(self, model: Optional[str] = None, tag: Optional[str] = None, group_by: str = "tag") -> List[Dict[str, Any]]:
         """Get model performance stats, optionally filtered by model or tag.

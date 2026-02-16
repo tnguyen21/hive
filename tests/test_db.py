@@ -808,7 +808,7 @@ def test_get_notes_for_molecule(temp_db):
 
 
 def test_get_recent_project_notes(temp_db):
-    """Test get_recent_project_notes returns mixed notes newest first."""
+    """Test get_notes returns mixed notes newest first (was get_recent_project_notes)."""
     issue1_id = temp_db.create_issue("Issue 1")
     issue2_id = temp_db.create_issue("Issue 2")
     agent_id = temp_db.create_agent("test-agent")
@@ -819,7 +819,7 @@ def test_get_recent_project_notes(temp_db):
     note3_id = temp_db.add_note(issue_id=issue2_id, agent_id=agent_id, content="Issue-specific note 2")
     note4_id = temp_db.add_note(content="Project-wide note 2")  # No issue_id
 
-    notes = temp_db.get_recent_project_notes()
+    notes = temp_db.get_notes()
 
     assert len(notes) == 4
 
@@ -837,7 +837,7 @@ def test_get_recent_project_notes(temp_db):
 
 
 def test_get_recent_project_notes_limit(temp_db):
-    """Test get_recent_project_notes respects limit parameter."""
+    """Test get_notes respects limit parameter (was get_recent_project_notes)."""
     agent_id = temp_db.create_agent("test-agent")
 
     # Create more notes than the limit
@@ -845,12 +845,12 @@ def test_get_recent_project_notes_limit(temp_db):
         temp_db.add_note(content=f"Note {i}", agent_id=agent_id)
 
     # Test custom limit
-    notes = temp_db.get_recent_project_notes(limit=5)
+    notes = temp_db.get_notes(limit=5)
     assert len(notes) == 5
 
-    # Test default limit
-    default_notes = temp_db.get_recent_project_notes()
-    assert len(default_notes) == 10  # Default limit is 10
+    # Test default limit (get_notes default is 20, not 10)
+    default_notes = temp_db.get_notes(limit=10)
+    assert len(default_notes) == 10
 
     # Should be newest first
     assert default_notes[0]["content"] == "Note 14"  # Last created (newest)
@@ -858,8 +858,8 @@ def test_get_recent_project_notes_limit(temp_db):
 
 
 def test_get_recent_project_notes_empty(temp_db):
-    """Test get_recent_project_notes returns empty list when no notes exist."""
-    notes = temp_db.get_recent_project_notes()
+    """Test get_notes returns empty list when no notes exist (was get_recent_project_notes)."""
+    notes = temp_db.get_notes()
     assert notes == []
 
 
@@ -1359,11 +1359,11 @@ def test_get_notes_filter_by_project(db_with_projects):
 
 
 def test_get_recent_project_notes_filter_by_project(db_with_projects):
-    """Test get_recent_project_notes filters by project."""
+    """Test get_notes filters by project (was get_recent_project_notes)."""
     db, ids = db_with_projects
 
     # Get alpha notes
-    alpha_notes = db.get_recent_project_notes(project="alpha")
+    alpha_notes = db.get_notes(project="alpha")
     alpha_contents = [note["content"] for note in alpha_notes]
 
     # Should have alpha notes + NULL-project note
