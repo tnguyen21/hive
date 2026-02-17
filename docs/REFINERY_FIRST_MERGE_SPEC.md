@@ -276,6 +276,9 @@ Mitigation: policy fallback switch + health-based auto-downgrade to mechanical/m
 Risk: queue latency spikes.
 Mitigation: tighter SLAs, queue alerts, optional secondary refinery worker pool (future).
 
+Risk: project-root `main` worktree has local tracked changes, causing ff-merge failures.
+Mitigation: preflight dirty-worktree guard that pauses merge queue and emits explicit system events until clean.
+
 Risk: model quality drift changes acceptance behavior.
 Mitigation: pinned model version, prompt versioning, periodic acceptance-rate audits.
 

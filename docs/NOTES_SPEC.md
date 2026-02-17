@@ -344,3 +344,9 @@ Categories can be added later if they prove useful, but they are not required to
 - deliver notes to the right workers,
 - guarantee those workers saw required updates,
 - block unsafe completion when they did not.
+
+## 17. Related Future Work
+
+Historical note retrieval (vector embeddings + issue-bootstrap RAG) is intentionally out of scope for this v1 messaging protocol.
+
+See `docs/NOTES_RAG_DESIGN.md` for a separate design and benchmark plan.
