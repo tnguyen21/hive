@@ -428,6 +428,15 @@ Consumed statuses:
 
 Workers/refinery may write `.hive-notes.jsonl` (JSONL) in worktree root.
 
+During execution (parallel coordination):
+
+- orchestrator polls active workers' `.hive-notes.jsonl` and harvests appended notes incrementally
+- harvested notes are persisted to the `notes` table immediately
+- notes are best-effort relayed to other active workers as an FYI message (to close the "only on completion" gap)
+- events:
+  - `notes_harvested_live` (in-progress harvest)
+  - `notes_harvested` (final flush at completion)
+
 On completion merge/orchestrator paths:
 
 - parse notes
