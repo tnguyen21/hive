@@ -204,8 +204,9 @@ def merge_to_main(project_path: str, branch_name: str, main_branch: str = "main"
     """
     Fast-forward merge a branch into main from the main project repo.
 
-    This runs in the MAIN repo (not a worktree). The branch should already
-    be rebased onto main so ff-only succeeds.
+    Uses git update-ref instead of checkout+merge to avoid creating
+    .git/index.lock, which fails with EPERM on macOS when the daemon
+    process inherits com.apple.provenance from Claude Code's sandbox.
 
     Args:
         project_path: Path to the main git repository
@@ -218,18 +219,31 @@ def merge_to_main(project_path: str, branch_name: str, main_branch: str = "main"
     project_path = Path(project_path).resolve()
 
     try:
-        # Ensure we're on main
+        # Verify fast-forward is possible: main must be an ancestor of branch
         subprocess.run(
-            ["git", "checkout", main_branch],
+            ["git", "merge-base", "--is-ancestor", main_branch, branch_name],
+            cwd=str(project_path),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        raise GitWorktreeError(f"Cannot fast-forward {main_branch} to {branch_name}: {main_branch} is not an ancestor of {branch_name}")
+
+    try:
+        # Update the ref directly (no checkout, no index.lock needed)
+        subprocess.run(
+            ["git", "update-ref", f"refs/heads/{main_branch}", branch_name],
             cwd=str(project_path),
             check=True,
             capture_output=True,
             text=True,
         )
 
-        # Fast-forward only merge
+        # Sync working tree to match the updated ref. update-ref only moves
+        # the branch pointer; without this the working tree is stale.
         subprocess.run(
-            ["git", "merge", "--ff-only", branch_name],
+            ["git", "reset", "--hard", main_branch],
             cwd=str(project_path),
             check=True,
             capture_output=True,
