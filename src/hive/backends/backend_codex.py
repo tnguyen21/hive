@@ -39,6 +39,7 @@ import os
 import shlex
 import signal
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import Config
@@ -135,7 +136,7 @@ class CodexAppServerBackend(HiveBackend):
         await self.server_ready.wait()
 
         approval_policy = getattr(Config, "CODEX_APPROVAL_POLICY", "never")
-        sandbox_mode = getattr(Config, "CODEX_SANDBOX", "workspace-write")
+        sandbox_mode = self._normalize_sandbox_mode(getattr(Config, "CODEX_SANDBOX", "workspace-write"))
         personality = getattr(Config, "CODEX_PERSONALITY", "pragmatic")
 
         params: Dict[str, Any] = {
@@ -192,15 +193,19 @@ class CodexAppServerBackend(HiveBackend):
 
         approval_policy = getattr(Config, "CODEX_APPROVAL_POLICY", state.approval_policy or "never")
         personality = getattr(Config, "CODEX_PERSONALITY", "pragmatic")
+        sandbox_mode = self._normalize_sandbox_mode(getattr(Config, "CODEX_SANDBOX", state.sandbox_mode or "workspaceWrite"))
+        turn_cwd = directory or state.directory
 
         params: Dict[str, Any] = {
             "threadId": session_id,
             "input": [{"type": "text", "text": text}],
             "approvalPolicy": approval_policy,
-            "cwd": directory or state.directory,
+            "cwd": turn_cwd,
             "personality": personality,
             "model": model_id,
+            "sandboxPolicy": self._build_turn_sandbox_policy(sandbox_mode, turn_cwd),
         }
+        state.sandbox_mode = sandbox_mode
 
         # Inject developer instructions once per thread so the turn runs with
         # Hive's system prompt (agent identity + project rules).
@@ -637,3 +642,71 @@ class CodexAppServerBackend(HiveBackend):
         if state.heartbeat_task:
             state.heartbeat_task.cancel()
             state.heartbeat_task = None
+
+    def _normalize_sandbox_mode(self, value: Optional[str]) -> str:
+        if value in {"readOnly", "workspaceWrite", "dangerFullAccess"}:
+            return value
+
+        normalized = str(value or "").strip().replace("-", "").replace("_", "").lower()
+        aliases = {
+            "readonly": "readOnly",
+            "workspacewrite": "workspaceWrite",
+            "dangerfullaccess": "dangerFullAccess",
+            "fullaccess": "dangerFullAccess",
+        }
+        mapped = aliases.get(normalized)
+        if mapped:
+            return mapped
+
+        if value:
+            logger.warning(f"Unknown CODEX_SANDBOX value {value!r}; defaulting to workspaceWrite")
+        return "workspaceWrite"
+
+    def _build_turn_sandbox_policy(self, sandbox_mode: str, cwd: Optional[str]) -> Dict[str, Any]:
+        if sandbox_mode == "dangerFullAccess":
+            return {"type": "dangerFullAccess"}
+        if sandbox_mode == "workspaceWrite":
+            return {
+                "type": "workspaceWrite",
+                "writableRoots": self._workspace_writable_roots(cwd),
+                "networkAccess": True,
+            }
+        return {"type": "readOnly"}
+
+    def _workspace_writable_roots(self, cwd: Optional[str]) -> List[str]:
+        roots: List[str] = []
+
+        def _add(value: Any):
+            if value is None:
+                return
+            try:
+                resolved = str(Path(value).expanduser().resolve())
+            except Exception:
+                return
+            if resolved not in roots:
+                roots.append(resolved)
+
+        _add(cwd)
+        _add(self._infer_project_root(cwd))
+        _add(getattr(Config, "HIVE_DIR", None))
+        return roots
+
+    def _infer_project_root(self, cwd: Optional[str]) -> Optional[Path]:
+        if not cwd:
+            return None
+
+        try:
+            path = Path(cwd).expanduser().resolve()
+        except Exception:
+            return None
+
+        # Hive worker worktrees are created at <project>/.worktrees/<worker>.
+        parts = path.parts
+        if ".worktrees" in parts:
+            idx = parts.index(".worktrees")
+            if idx > 0:
+                return Path(*parts[:idx])
+
+        if (path / ".git").exists():
+            return path
+        return None
