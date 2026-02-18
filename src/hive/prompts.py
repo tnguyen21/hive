@@ -411,6 +411,7 @@ def build_refinery_prompt(
     rebase_succeeded: bool = False,
     test_output: Optional[str] = None,
     test_command: Optional[str] = None,
+    mode: str = "integration",
 ) -> str:
     """
     Build the Refinery prompt for processing a merge.
@@ -424,19 +425,108 @@ def build_refinery_prompt(
         rebase_succeeded: Whether mechanical rebase succeeded
         test_output: Output from test run (if tests failed)
         test_command: Test command that was run
+        mode: Refinery prompt mode ("integration" or "review")
 
     Returns:
         Formatted refinery prompt string
     """
-    if not rebase_succeeded:
-        problem = "Mechanical rebase FAILED — conflicts detected. Please resolve them."
-    elif test_output:
-        problem = f"Rebase succeeded but TESTS FAILED. Please diagnose.\n\nTest command: {test_command}\nTest output:\n{test_output[:3000]}"
+    if mode not in ("integration", "review"):
+        raise ValueError(f"Unknown refinery mode: {mode}")
+
+    context_lines = []
+    if rebase_succeeded:
+        context_lines.append("Rebase status: no conflicts detected (if attempted).")
     else:
-        problem = "Unknown merge issue. Investigate and resolve."
+        context_lines.append("Rebase status: not attempted or conflicts present.")
+
+    if test_output:
+        context_lines.append(f"Test command: {test_command or 'N/A'}")
+        context_lines.append(f"Test output (truncated):\n{test_output[:3000]}")
+    else:
+        context_lines.append("Test output: none provided.")
+
+    problem = "\n".join(context_lines)
 
     worker_line = f"- **Worker**: {agent_name}" if agent_name else ""
     test_step = f"Run tests: `{test_command}`" if test_command else "Verify the code compiles/looks correct"
+
+    if mode == "review":
+        mode_heading = "Review Mode"
+        mode_summary = "Evaluate merge readiness and return an approval/rejection/escalation decision. Do not integrate or rebase."
+        role_description = "You are a reviewer. You do not resolve conflicts or re-implement features."
+        task_instructions = "Review this branch for merge readiness and decide approve/reject/escalate."
+        mode_steps = "\n".join(
+            [
+                f"1. `cd {worktree_path}`",
+                "2. Inspect the worktree state: `git status` and `git diff main --stat`.",
+                "3. Review evidence (tests, logs, diff) and assess risk. If needed, run targeted checks.",
+                "4. Decide: approve, reject, or escalate (needs human).",
+                "5. Write your decision to `.hive-result.jsonl` (see DECISION CONTRACT below).",
+            ]
+        )
+        review_section = "\n".join(
+            [
+                "## REVIEW CHECKLIST",
+                "",
+                "- Evidence-driven: cite concrete signals (test output, diff scope, logs).",
+                "- Validate scope matches the issue description.",
+                "- Confirm tests cover the change or note gaps explicitly.",
+                "- Check for unresolved conflicts or uncommitted changes.",
+                "- Assess risk: data migrations, config changes, or breaking behavior.",
+            ]
+        )
+        completion_contract = "\n".join(
+            [
+                "## DECISION CONTRACT",
+                "",
+                "Write exactly ONE JSON line to `.hive-result.jsonl`:",
+                "",
+                "```json",
+                '{"status": "approved", "summary": "Evidence-based decision summary", "rationale": "Why this decision", "evidence": ["Test output: ...", "Diff scope: ..."], "warnings": ""}',
+                "```",
+                "",
+                "**Status values**:",
+                "- `approved` — safe to merge",
+                "- `rejected` — must be reworked",
+                "- `escalated` — needs human decision",
+            ]
+        )
+    else:
+        mode_heading = "Integration Mode"
+        mode_summary = "Perform the integration/rebase/test workflow and leave the branch mergeable."
+        role_description = "You integrate completed work. You do not re-implement features."
+        task_instructions = "Process this branch for merge to main."
+        mode_steps = "\n".join(
+            [
+                f"1. `cd {worktree_path}`",
+                "2. First check the worktree state: `git status`. If there's a rebase in progress, abort it with `git rebase --abort` before starting fresh.",
+                "3. Run `git rebase main` (resolve conflicts if any).",
+                f"4. {test_step}",
+                "5. Ensure all changes are committed and git status is clean.",
+                "6. Write your result to `.hive-result.jsonl` (see COMPLETION SIGNAL below).",
+            ]
+        )
+        review_section = ""
+        completion_contract = "\n".join(
+            [
+                "## COMPLETION SIGNAL",
+                "",
+                "After processing, write your result to `.hive-result.jsonl` in the worktree root",
+                f"(`{worktree_path}/.hive-result.jsonl`). Write exactly ONE JSON line:",
+                "",
+                "```json",
+                '{"status": "merged", "summary": "Rebased and resolved 2 conflicts, all tests pass", "tests_passed": true, "tests_added": true, "conflicts_resolved": 2, "warnings": ""}',
+                "```",
+                "",
+                "**Status values**:",
+                "- `merged` — branch is cleanly rebased and tests pass, ready for ff-merge",
+                "- `rejected` — branch is fundamentally incompatible, needs rework",
+                "- `needs_human` — ambiguous situation you can't resolve confidently",
+                "",
+                "Write this file AFTER all git operations and tests are complete. The orchestrator reads",
+                "this file to determine the outcome — do not skip it.",
+            ]
+        )
 
     template_str = _load_template("refinery")
     return Template(template_str).safe_substitute(
@@ -446,5 +536,11 @@ def build_refinery_prompt(
         worktree_path=worktree_path,
         worker_line=worker_line,
         problem=problem,
-        test_step=test_step,
+        mode_heading=mode_heading,
+        mode_summary=mode_summary,
+        role_description=role_description,
+        task_instructions=task_instructions,
+        mode_steps=mode_steps,
+        review_section=review_section,
+        completion_contract=completion_contract,
     )
