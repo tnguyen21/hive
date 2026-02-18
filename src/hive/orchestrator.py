@@ -388,8 +388,20 @@ class Orchestrator:
                         {"reason": "stale agent, retry budget exhausted — marking failed"},
                     )
 
-            # Clean up worktree (in executor to avoid blocking event loop)
-            if worktree:
+            # Clean up worktree — but NOT if the issue is done with a
+            # pending merge queue entry. The merge processor still needs the
+            # worktree to run refinery review.
+            worktree_needed = False
+            if worktree and issue_id:
+                mq_row = self.db.conn.execute(
+                    "SELECT id FROM merge_queue WHERE issue_id = ? AND status IN ('queued', 'running')",
+                    (issue_id,),
+                ).fetchone()
+                if mq_row:
+                    worktree_needed = True
+                    logger.info(f"Preserving worktree {worktree} for pending merge of {issue_id}")
+
+            if worktree and not worktree_needed:
                 try:
                     await remove_worktree_async(worktree)
                 except Exception:
