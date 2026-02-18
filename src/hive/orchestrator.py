@@ -485,6 +485,8 @@ class Orchestrator:
         self.active_agents.clear()
         self._session_to_agent.clear()
         self._issue_to_agent.clear()
+        self.session_status_events.clear()
+        self._session_last_activity.clear()
         logger.info("All sessions shut down")
 
     def _log_token_usage(self, agent: AgentIdentity, messages: List[Dict[str, Any]]):
@@ -1077,6 +1079,12 @@ class Orchestrator:
         """Best-effort cleanup for session, in-memory registration, and worktree."""
         await self._best_effort_cleanup("cleanup_session", self._cleanup_session(agent))
 
+        # Clean up session tracking dicts (these are only cleaned in
+        # monitor_agent's finally block otherwise, so any teardown path
+        # that bypasses monitor — stalls, cancels, errors — would leak).
+        self.session_status_events.pop(agent.session_id, None)
+        self._session_last_activity.pop(agent.session_id, None)
+
         if agent.agent_id in self.active_agents:
             self._unregister_agent(agent.agent_id)
 
@@ -1587,6 +1595,8 @@ class Orchestrator:
                     "cycle_session_cleanup",
                     self.opencode.cleanup_session(new_session_id, directory=agent.worktree),
                 )
+                self.session_status_events.pop(new_session_id, None)
+                self._session_last_activity.pop(new_session_id, None)
             # Release agent
             if agent.agent_id in self.active_agents:
                 self._unregister_agent(agent.agent_id)
