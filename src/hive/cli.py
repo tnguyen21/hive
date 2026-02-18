@@ -1605,6 +1605,14 @@ def main():
     # show command
     show_parser = subparsers.add_parser("show", help="Show issue details")
     show_parser.add_argument("issue_id", help="Issue ID")
+    show_parser.add_argument(
+        "--format",
+        "-f",
+        choices=["text", "json"],
+        default="text",
+        dest="show_format",
+        help="Output format: text (default) or json",
+    )
 
     # review command
     review_parser = subparsers.add_parser("review", help="Review done issues before finalizing")
@@ -1793,7 +1801,8 @@ def main():
             )
 
         elif args.command == "show":
-            cli.show(args.issue_id, json_mode=json_mode)
+            show_json = json_mode or getattr(args, "show_format", "text") == "json"
+            cli.show(args.issue_id, json_mode=show_json)
 
         elif args.command == "review":
             cli.review(limit=args.limit, json_mode=json_mode)
