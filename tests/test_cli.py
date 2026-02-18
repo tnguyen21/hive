@@ -740,3 +740,114 @@ def test_status_shows_daemon_info(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Daemon:" in captured.out
+
+
+# ── Merges summary footer tests ──────────────────────────────────────
+
+
+def _insert_merge_entry(db, issue_id, agent_id, project, status):
+    """Helper: insert a merge_queue row with the given status."""
+    db.conn.execute(
+        """
+        INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (issue_id, agent_id, project, f"/worktrees/{agent_id}", f"agent/{agent_id}", status),
+    )
+    db.conn.commit()
+
+
+def test_merges_summary_footer_shows_counts_by_status(temp_db, tmp_path, capsys):
+    """merges output should show a summary footer with counts per status, not just a total."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue1 = temp_db.create_issue("Issue 1", project=tmp_path.name)
+    issue2 = temp_db.create_issue("Issue 2", project=tmp_path.name)
+    issue3 = temp_db.create_issue("Issue 3", project=tmp_path.name)
+    issue4 = temp_db.create_issue("Issue 4", project=tmp_path.name)
+
+    _insert_merge_entry(temp_db, issue1, "a1", tmp_path.name, "queued")
+    _insert_merge_entry(temp_db, issue2, "a2", tmp_path.name, "running")
+    _insert_merge_entry(temp_db, issue3, "a3", tmp_path.name, "merged")
+    _insert_merge_entry(temp_db, issue4, "a4", tmp_path.name, "failed")
+
+    cli.merges()
+
+    captured = capsys.readouterr()
+    # Summary footer must include per-status counts
+    assert "1 queued" in captured.out
+    assert "1 running" in captured.out
+    assert "1 merged" in captured.out
+    assert "1 failed" in captured.out
+
+
+def test_merges_summary_footer_omits_zero_statuses(temp_db, tmp_path, capsys):
+    """merges footer should not mention statuses with zero entries."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue1 = temp_db.create_issue("Only merged", project=tmp_path.name)
+    _insert_merge_entry(temp_db, issue1, "a1", tmp_path.name, "merged")
+
+    cli.merges()
+
+    captured = capsys.readouterr()
+    assert "1 merged" in captured.out
+    # Last line is the summary; it should only contain 'merged', not other statuses
+    summary_line = [line for line in captured.out.splitlines() if line.strip()][-1]
+    assert "1 merged" in summary_line
+    assert "queued" not in summary_line
+    assert "running" not in summary_line
+    assert "failed" not in summary_line
+
+
+def test_merges_summary_aggregates_multiple_same_status(temp_db, tmp_path, capsys):
+    """merges footer should sum entries of the same status correctly."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    for i in range(3):
+        issue_id = temp_db.create_issue(f"Merged issue {i}", project=tmp_path.name)
+        _insert_merge_entry(temp_db, issue_id, f"a{i}", tmp_path.name, "merged")
+
+    issue_queued = temp_db.create_issue("Queued issue", project=tmp_path.name)
+    _insert_merge_entry(temp_db, issue_queued, "aq", tmp_path.name, "queued")
+
+    cli.merges()
+
+    captured = capsys.readouterr()
+    assert "3 merged" in captured.out
+    assert "1 queued" in captured.out
+
+
+def test_merges_json_includes_status_counts(temp_db, tmp_path, capsys):
+    """merges --json output should include a status_counts field."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue1 = temp_db.create_issue("Q1", project=tmp_path.name)
+    issue2 = temp_db.create_issue("Q2", project=tmp_path.name)
+    issue3 = temp_db.create_issue("M1", project=tmp_path.name)
+
+    _insert_merge_entry(temp_db, issue1, "a1", tmp_path.name, "queued")
+    _insert_merge_entry(temp_db, issue2, "a2", tmp_path.name, "queued")
+    _insert_merge_entry(temp_db, issue3, "a3", tmp_path.name, "merged")
+
+    cli.merges(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert "status_counts" in data
+    assert data["status_counts"]["queued"] == 2
+    assert data["status_counts"]["merged"] == 1
+    assert data["count"] == 3
+
+
+def test_merges_empty_shows_no_entries_message(temp_db, tmp_path, capsys):
+    """merges with no entries should print the empty message, not the summary footer."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.merges()
+
+    captured = capsys.readouterr()
+    assert "No merge queue entries found." in captured.out
+    # No status counts should appear when there are no entries
+    assert "queued" not in captured.out
+    assert "merged" not in captured.out

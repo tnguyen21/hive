@@ -653,8 +653,14 @@ class HiveCLI:
         cursor = self.db.conn.execute(query, params)
         entries = [dict(row) for row in cursor.fetchall()]
 
+        # Compute per-status counts from the result set
+        status_counts: dict[str, int] = {}
+        for e in entries:
+            s = e.get("status") or "unknown"
+            status_counts[s] = status_counts.get(s, 0) + 1
+
         if json_mode:
-            print(json.dumps({"count": len(entries), "merges": entries}, indent=2, default=str))
+            print(json.dumps({"count": len(entries), "status_counts": status_counts, "merges": entries}, indent=2, default=str))
         else:
             if not entries:
                 print("No merge queue entries found.")
@@ -665,7 +671,8 @@ class HiveCLI:
                 title = (e.get("issue_title") or "")[:30]
                 branch = (e.get("branch_name") or "")[:25]
                 print(f"{e['id']:<6} {e['status']:<10} {e['issue_id']:<14} {title:<30} {branch:<25} {e.get('enqueued_at', '')}")
-            print(f"\nTotal: {len(entries)} entries")
+            summary_parts = [f"{count} {s}" for s, count in status_counts.items() if count > 0]
+            print(f"\n{', '.join(summary_parts)}")
 
     def status(self, *, json_mode: bool = False):
         """Show orchestrator status."""
