@@ -130,6 +130,75 @@ class MergeProcessor:
             self.refinery_session_id = None
             return False
 
+    async def _mechanical_preflight(self) -> bool:
+        """Check main worktree cleanliness before attempting any merge.
+
+        Logs appropriate events and updates dirty-main pause/resume state.
+
+        Returns:
+            True if the main worktree is clean and merges may proceed.
+            False if dirty (queue should pause) or if the git status check itself fails.
+        """
+        try:
+            main_dirty, dirty_output = await get_worktree_dirty_status_async(self.project_path)
+        except GitWorktreeError as e:
+            self.db.log_system_event(
+                "merge_preflight_error",
+                {"path": self.project_path, "error": str(e)},
+            )
+            return False
+
+        if main_dirty:
+            snapshot = "\n".join(dirty_output.splitlines()[:20])
+            if (not self._main_dirty_blocked) or (snapshot != self._main_dirty_snapshot):
+                self.db.log_system_event(
+                    "merge_paused_dirty_main",
+                    {"path": self.project_path, "project": self.project_name, "changes": snapshot},
+                )
+            self._main_dirty_blocked = True
+            self._main_dirty_snapshot = snapshot
+            return False
+
+        if self._main_dirty_blocked:
+            self.db.log_system_event(
+                "merge_resumed_main_clean",
+                {"path": self.project_path, "project": self.project_name},
+            )
+            self._main_dirty_blocked = False
+            self._main_dirty_snapshot = None
+
+        return True
+
+    async def _mechanical_ff_merge(self, entry: Dict[str, Any]) -> tuple:
+        """Perform the fast-forward merge of a branch to main.
+
+        This is the final step in the mechanical merge path, run after rebase
+        and tests have both succeeded.
+
+        Args:
+            entry: Merge queue entry dict with at least 'branch_name', 'issue_id', 'agent_id'.
+
+        Returns:
+            (success: bool, error_str: str | None)
+        """
+        branch_name = entry["branch_name"]
+        issue_id = entry["issue_id"]
+        agent_id = entry.get("agent_id")
+
+        try:
+            await merge_to_main_async(self.project_path, branch_name)
+        except GitWorktreeError as e:
+            self.db.log_event(
+                issue_id,
+                agent_id,
+                "merge_failed",
+                {"error": str(e), "branch": branch_name},
+            )
+            return (False, str(e))
+
+        self.db.log_event(issue_id, agent_id, "merged", {"branch": branch_name})
+        return (True, None)
+
     async def process_queue_once(self):
         """Process the next item in the merge queue. One at a time, sequential."""
         merge_policy = self._resolve_merge_policy()
@@ -143,33 +212,8 @@ class MergeProcessor:
         # Merge operations run in the project root worktree. If that worktree is
         # dirty, attempting ff-merge can fail in confusing ways. Pause the queue
         # until the worktree is clean instead of burning merge attempts.
-        try:
-            main_dirty, dirty_output = await get_worktree_dirty_status_async(self.project_path)
-        except GitWorktreeError as e:
-            self.db.log_system_event(
-                "merge_preflight_error",
-                {"path": self.project_path, "error": str(e)},
-            )
+        if not await self._mechanical_preflight():
             return
-
-        if main_dirty:
-            snapshot = "\n".join(dirty_output.splitlines()[:20])
-            if (not self._main_dirty_blocked) or (snapshot != self._main_dirty_snapshot):
-                self.db.log_system_event(
-                    "merge_paused_dirty_main",
-                    {"path": self.project_path, "project": self.project_name, "changes": snapshot},
-                )
-            self._main_dirty_blocked = True
-            self._main_dirty_snapshot = snapshot
-            return
-
-        if self._main_dirty_blocked:
-            self.db.log_system_event(
-                "merge_resumed_main_clean",
-                {"path": self.project_path, "project": self.project_name},
-            )
-            self._main_dirty_blocked = False
-            self._main_dirty_snapshot = None
 
         entry = entries[0]
         queue_id = entry["id"]
@@ -330,19 +374,7 @@ class MergeProcessor:
         # If neither test command exists, skip tests
 
         # Step 3: Merge to main (ff-only, in executor to avoid blocking event loop)
-        try:
-            await merge_to_main_async(self.project_path, branch_name)
-        except GitWorktreeError as e:
-            self.db.log_event(
-                issue_id,
-                agent_id,
-                "merge_failed",
-                {"error": str(e), "branch": branch_name},
-            )
-            return (False, str(e))
-
-        self.db.log_event(issue_id, agent_id, "merged", {"branch": branch_name})
-        return (True, None)
+        return await self._mechanical_ff_merge(entry)
 
     async def _send_to_refinery(
         self,
