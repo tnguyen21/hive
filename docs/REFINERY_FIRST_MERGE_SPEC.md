@@ -1,27 +1,32 @@
-# Refinery-First Merge Queue Spec
+# Refinery-Only Merge Queue Spec
 
-_Status: proposed_
+_Status: accepted_
 
-_Last updated: 2026-02-17_
+_Last updated: 2026-02-18_
 
 ## 1. Proposal in One Line
 
-Replace the current two-tier merge processor (mechanical fast-path, refinery fallback) with a single refinery-first path where every queued merge is reviewed and integrated by the Refinery LLM before finalization.
+Delete the mechanical merge path entirely. The refinery is the only way code gets merged. If the refinery is down, merges stop.
 
 ## 2. Why This Change
 
-Today, many branches are auto-merged without LLM review when they pass rebase/test gates mechanically. That optimizes throughput, but it means semantic integration review is inconsistent: only "hard" merges get refinery attention.
+The two-tier merge system (mechanical fast-path + refinery fallback) is the single largest source of complexity and bugs in the merge processor.
 
-This proposal makes merge review policy uniform:
-- every `done` issue entering `merge_queue` gets refinery review,
-- refinery explicitly accepts/rejects/escalates,
-- only accepted branches are ff-merged and finalized.
+The mechanical path exists to optimize throughput for "easy" merges. In practice:
+
+- it creates two entirely separate code paths that must both be correct,
+- it introduces git operations (checkout, index.lock, rebase) that interact badly with macOS sandbox provenance,
+- it makes merge behavior inconsistent — some branches get LLM review, some don't,
+- when it fails, the fallback to refinery adds latency anyway.
+
+The refinery already handles the hard cases correctly. Make it handle all cases. Delete the rest.
 
 ## 3. Current vs Proposed Behavior
 
 ### Current (implemented)
 
 Flow in `src/hive/merge.py`:
+
 1. `merge_queue` entry (`queued -> running`)
 2. Tier 1 mechanical path (`_try_mechanical_merge`):
    - `git rebase main`
@@ -32,18 +37,19 @@ Flow in `src/hive/merge.py`:
 
 Effect: branches that clear deterministic gates can be merged with no LLM review.
 
-### Proposed (refinery-first)
+### Proposed (refinery-only)
 
 Flow for every queued entry:
+
 1. `merge_queue` entry (`queued -> running`)
-2. Send directly to refinery review/integration
+2. Send to refinery for review/integration
 3. Refinery writes `.hive-result.jsonl` with:
    - `merged` -> orchestrator ff-merges + finalizes
    - `rejected` -> queue failed, issue reopened
    - `needs_human` -> queue failed, issue escalated
 4. Teardown unchanged on successful finalization
 
-Mechanical logic becomes optional preflight only (existence/sanity checks), not merge authority.
+There is no mechanical path. There is no preflight. The refinery owns the entire merge decision, including rebase, test execution, and ff-merge. `_try_mechanical_merge()` is deleted.
 
 ## 4. State Machine and Side-Effect Impact
 
@@ -52,86 +58,91 @@ Mechanical logic becomes optional preflight only (existence/sanity checks), not 
 No new issue statuses are required.
 
 Unchanged high-level transitions:
+
 - `in_progress -> done` in orchestrator completion handler
 - `done -> finalized` on merge success
 - `done -> open` on merge rejection
 - `done -> escalated` on ambiguous/hard failure
 
 What changes is who decides `done -> {finalized|open|escalated}`:
+
 - today: deterministic mechanical gate first, refinery second
 - proposed: refinery always
 
 ### 4.2 Merge queue statuses
 
 No schema change is required. Keep:
+
 - `queued`, `running`, `merged`, `failed`
 
-Interpretation shift:
-- `running` effectively means "under refinery review" rather than "mechanical attempt in progress, maybe refinery later".
+`running` now means exactly one thing: under refinery review.
 
 ### 4.3 Transition side effects
 
 Side effects that remain:
+
 - finalization event logging
 - branch/worktree/session teardown on merged
 - rejection notes persisted
 - refinery session lifecycle/cycling logic
 
-Side effects removed or reduced:
-- direct mechanical merge events (`rebase_success`, `test_failure` from Tier 1) as merge-decision signals
-- deterministic merge path as a separate execution branch
+Side effects deleted:
 
-New side effects recommended:
+- all mechanical merge events (`rebase_success`, `test_failure`, `mechanical_merge_success`, etc.)
+- the entire `_try_mechanical_merge` code path and its associated error handling
+
+New side effects:
+
 - standardized review events for every merge:
   - `refinery_review_started`
   - `refinery_review_passed`
   - `refinery_review_rejected`
   - `refinery_review_escalated`
 
-This yields cleaner analytics because all merge decisions come from one path.
+All merge decisions come from one path. No exceptions.
 
-### 4.4 Transition matrix (current vs refinery-first)
+### 4.4 Transition matrix
 
-| Scenario | Current transition owner | Proposed transition owner | Status outcome |
-|---|---|---|---|
-| Clean rebase + tests pass | Mechanical path | Refinery | `done -> finalized` |
-| Rebase conflict | Refinery fallback | Refinery | `done -> finalized|open|escalated` |
-| Tests fail after rebase | Refinery fallback | Refinery | `done -> finalized|open|escalated` |
-| Ambiguous integration | Refinery fallback | Refinery | `done -> escalated` |
-| Explicit rejection | Refinery fallback | Refinery | `done -> open` |
+| Scenario              | Transition owner | Status outcome                       |
+| --------------------- | ---------------- | ------------------------------------ |
+| Clean merge           | Refinery         | `done -> finalized`                  |
+| Rebase conflict       | Refinery         | `done -> finalized\|open\|escalated` |
+| Tests fail            | Refinery         | `done -> open`                       |
+| Ambiguous integration | Refinery         | `done -> escalated`                  |
+| Explicit rejection    | Refinery         | `done -> open`                       |
+| Refinery unavailable  | Nobody           | Queue stalls, operator alerted       |
 
-Behavioral delta:
-- today, trivial merges can bypass LLM review entirely;
-- proposed, every `done` item gets the same review gate before finalization.
+Every merge goes through the same path. There is no bypass.
 
 ## 5. Implementation Delta
 
 ### 5.1 `src/hive/merge.py`
 
-Primary changes:
-1. `process_queue_once()` dispatches all entries to refinery directly.
-2. `_try_mechanical_merge()` is removed or reduced to non-authoritative preflight checks.
-3. `_send_to_refinery()` becomes the single decision engine.
+Changes:
 
-Recommended structure:
+1. Delete `_try_mechanical_merge()` entirely.
+2. Delete all git checkout/rebase/index.lock operations from the merge processor.
+3. `process_queue_once()` dispatches every entry to `_send_to_refinery()`.
+4. `_send_to_refinery()` is the only merge path.
+
+Resulting structure:
+
 - `process_queue_once`
   - mark `running`
-  - validate entry/worktree/branch preconditions
-  - call `_send_to_refinery(entry, mode="full_review")`
+  - call `_send_to_refinery(entry)`
 - `_send_to_refinery`
-  - prompt refinery for integration + review + test verification
-  - parse result and apply state transition
+  - prompt refinery for rebase + review + test + ff-merge
+  - parse `.hive-result.jsonl` and apply state transition
 - `_finalize_issue` unchanged
 
-Complexity effect:
-- lower branching complexity in merge processor,
-- higher dependence on prompt contract and LLM determinism.
+The refinery session operates inside the worker's worktree. It has full shell access. It does the rebase, runs the tests, writes the result file. The orchestrator just reads the verdict.
 
 ### 5.2 `src/hive/prompts.py` and `src/hive/prompts/refinery.md`
 
 `build_refinery_prompt()` currently frames refinery mainly as fallback for conflict/test failures. It should support first-pass review for all merges.
 
 Required prompt changes:
+
 - remove assumption that an upstream mechanical attempt happened,
 - define mandatory review checklist for every merge:
   - rebase cleanliness,
@@ -139,108 +150,71 @@ Required prompt changes:
   - diff/test coverage sanity,
   - explicit accept/reject rationale.
 
-Recommended result schema extension (backward-compatible):
-- `review_summary`
-- `risk_level` (`low|medium|high`)
-- `tests_run` list
-- `warnings`
+Result file schema is unchanged: verdict (`merged`/`rejected`/`needs_human`) plus reason string. Audit detail lives in the refinery session logs, not in structured result fields.
 
 ### 5.3 Orchestrator / DB / CLI
 
-- `src/hive/orchestrator.py`: no state machine rewrite needed for `in_progress -> done`; merge enqueue remains unchanged.
-- `src/hive/db.py`: no required migration if keeping existing queue statuses.
+- `src/hive/orchestrator.py`: no changes. Merge enqueue remains unchanged.
+- `src/hive/db.py`: no migration needed.
 - `src/hive/cli.py`:
-  - `hive review` remains useful for manual QA and audit,
-  - `hive finalize` path remains fallback/manual override for merge-disabled/manual modes.
+  - `hive review` remains for manual QA/audit,
+  - `hive finalize` remains as manual override when merge queue is disabled.
 
 ### 5.4 Config surface
 
-Current flags are overloaded (`merge_queue_enabled` mixes auto-processing and policy semantics). Introduce explicit merge policy:
+`HIVE_MERGE_QUEUE_ENABLED` remains the only toggle:
 
-- `HIVE_MERGE_POLICY=mechanical_then_refinery|refinery_first|manual`
+- `true` (default): refinery processes the queue automatically
+- `false`: no background processing; human-driven finalize via `hive finalize`
 
-Mapping:
-- `mechanical_then_refinery`: current behavior
-- `refinery_first`: proposed behavior
-- `manual`: no background processing; human-driven finalize
+## 6. Complexity
 
-`HIVE_MERGE_QUEUE_ENABLED` can remain as deprecated alias for compatibility.
+This change is a strict simplification.
 
-## 6. Simpler or More Complex?
+Deleted:
 
-Net effect is mixed.
+- `_try_mechanical_merge()` and all its git checkout/rebase/index.lock operations
+- the two-tier dispatch logic and tier-selection heuristics
+- mechanical merge event types and their handling
+- the fallback path from mechanical to refinery
+- policy configuration surface (`HIVE_MERGE_POLICY`)
 
-Simpler:
-- one merge decision path instead of two,
-- easier observability and fewer edge-case branches,
-- less duplicated logic around tests/rejections across mechanical vs refinery paths.
+What remains:
 
-More complex:
-- system correctness now depends more on prompt quality and refinery behavior,
-- latency/cost variability increases,
-- higher need for robust refinery health/retry/error instrumentation.
+- one merge path: refinery
+- one toggle: enabled or not
 
-Practical conclusion:
-- code complexity goes down,
-- operational complexity (cost, latency, model drift) goes up.
+The tradeoff is real — refinery outage means no merges — but that's an acceptable failure mode. A stopped merge queue is visible and recoverable. Silent bad merges from a buggy mechanical path are not.
 
-## 7. Expected Merge Quality Impact
+## 7. Quality Guardrails
 
-Most likely outcome is "quality up, throughput down" if implemented with strict guardrails.
+The refinery prompt must enforce:
 
-Potential quality improvements:
-- consistent semantic review for every merge, not just failing mechanical cases,
-- better detection of risky diffs that pass tests but violate intent/conventions,
-- richer rejection notes for rework.
-
-Potential quality regressions:
-- false rejects from model over-conservatism,
-- inconsistent decisions across similar changes,
-- occasional model mistakes on trivial merges that deterministic path handled reliably.
-
-Expected net:
-- integration correctness likely improves,
-- deterministic reliability and lead time likely worsen,
-- cost per merged issue definitely increases.
-
-### 7.1 When quality gets better vs worse
-
-More likely better when:
-- test suite is reliable and refinery is required to run it,
-- prompts enforce evidence-based decisions (commands run, failures observed),
-- rejection reasons are concrete and tied to files/tests.
-
-More likely worse when:
-- tests are weak/flaky and refinery substitutes judgment for evidence,
-- prompt allows style-based subjective rejection without objective failures,
-- refinery model/version changes without acceptance-rate monitoring.
-
-Non-negotiable guardrails for `refinery_first`:
-- acceptance requires explicit proof of verification (command + outcome),
+- acceptance requires explicit proof of verification (tests run, output captured),
 - rejection requires actionable reason and rework direction,
-- timeout or missing result file must produce deterministic `needs_human` (never silent merge),
-- policy kill switch must be operable at runtime.
+- timeout or missing result file produces `needs_human` (never silent merge, never silent drop).
 
-## 8. Rollout Strategy (Strongly Recommended)
+The refinery is not a style police. It verifies:
 
-Do not flip globally in one step.
+1. rebase is clean,
+2. tests pass,
+3. diff matches the issue intent,
+4. no obvious integration conflicts with recent main changes.
 
-1. Shadow mode
-- Keep current merge authority.
-- Also run refinery review in parallel for sampled merges.
-- Record "would_accept/would_reject" without enforcing.
+If all four pass, it merges. Subjective "code quality" rejections are out of scope for the refinery — that's what human review (`hive review`) is for.
 
-2. Canary policy
-- Enable `refinery_first` for a subset of projects/issue tags.
-- Compare rejection/escalation and post-merge failure rates.
+## 8. Rollout
 
-3. Full rollout with kill switch
-- Make `refinery_first` default only after metrics stabilize.
-- Keep immediate rollback to `mechanical_then_refinery`.
+One step. Delete the mechanical path, ship the refinery-only path.
+
+No shadow mode. No canary. No policy toggle. The mechanical path is the source of the bugs we're fixing. Keeping it around "just in case" means keeping the code that causes the problems.
+
+If the refinery is broken, `HIVE_MERGE_QUEUE_ENABLED=false` stops the queue and the operator uses `hive finalize` manually. That's the escape hatch.
 
 ## 9. Metrics to Judge Success
 
-Track before/after and by merge policy:
+Track before/after:
+
 - merge lead time (`done -> finalized`)
 - merge queue failure rate (`failed / total`)
 - rejection reopen rate (`done -> open` after merge processing)
@@ -249,6 +223,7 @@ Track before/after and by merge policy:
 - refinery token cost per finalized issue
 
 Success should be defined as:
+
 - lower post-merge defect signal,
 - acceptable lead-time increase,
 - rejection/escalation rates not exploding,
@@ -256,40 +231,40 @@ Success should be defined as:
 
 ## 10. Test Plan Changes
 
-Update/add tests around:
-- merge queue always dispatching to refinery in `refinery_first`
-- no mechanical-authoritative merge in `refinery_first`
-- result-state transitions (`merged/rejected/needs_human`)
-- fallback behavior when refinery is unavailable
-- policy switch behavior (`mechanical_then_refinery`, `refinery_first`, `manual`)
+Delete:
 
-Likely touchpoints:
+- all tests for `_try_mechanical_merge`
+- all tests for tier-selection / fallback logic
+- all tests for `HIVE_MERGE_POLICY` config
+
+Add/update:
+
+- every queue entry dispatches to refinery
+- result-state transitions (`merged/rejected/needs_human`)
+- refinery unavailable → queue stalls (no fallback, no silent failure)
+- `HIVE_MERGE_QUEUE_ENABLED=false` → queue does not process
+
+Touchpoints:
+
 - `tests/test_merge.py`
 - `tests/test_orchestrator.py`
-- `tests/test_cli.py`
 
-## 11. Risks and Mitigations
+## 11. Risks
 
 Risk: refinery outage blocks all merges.
-Mitigation: policy fallback switch + health-based auto-downgrade to mechanical/manual.
+This is fine. A stalled queue is visible. The operator disables the queue or fixes the refinery. There is no auto-downgrade to a mechanical path that has its own bugs.
 
-Risk: queue latency spikes.
-Mitigation: tighter SLAs, queue alerts, optional secondary refinery worker pool (future).
+Risk: queue latency increases.
+Yes. Every merge now involves an LLM call. This is the cost of correctness.
 
-Risk: project-root `main` worktree has local tracked changes, causing ff-merge failures.
-Mitigation: preflight dirty-worktree guard that pauses merge queue and emits explicit system events until clean.
+Risk: dirty main worktree causes ff-merge failures.
+Mitigation: preflight dirty-worktree guard that pauses queue and emits events until clean. (This already exists.)
 
-Risk: model quality drift changes acceptance behavior.
-Mitigation: pinned model version, prompt versioning, periodic acceptance-rate audits.
+Risk: model drift changes acceptance behavior.
+Mitigation: pinned model version, prompt versioning, acceptance-rate monitoring.
 
-Risk: over-rejection creates churn.
-Mitigation: enforce rejection rubric with concrete, actionable reasons and bounded retry policy.
+## 12. Decision
 
-## 12. Recommendation
+Delete the mechanical merge path. Ship refinery-only.
 
-Proceed, but as a policy-mode addition first (`refinery_first`), not a hard replacement on day one.
-
-Reason:
-- this is a strategic product decision (quality-first merge governance),
-- it is technically straightforward to implement,
-- it has real cost/latency and operational-risk tradeoffs that should be measured in production before defaulting globally.
+The mechanical path was an optimization that became the primary source of merge bugs. The two-tier system doubled the surface area for git operation failures (EPERM, index.lock, provenance, worktree races) while providing inconsistent review coverage. Removing it is both simpler and more correct.
