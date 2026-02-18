@@ -1252,3 +1252,161 @@ async def test_refinery_merged_actually_lands_on_main(merge_entry_with_worktree,
     assert (info["git_repo"] / "feature.py").exists(), (
         "Worker's feature.py not found on main after refinery merge! merge_to_main_async was not called in the refinery success path."
     )
+
+
+# --- Tests for dead-session auto-recovery ---
+
+
+@pytest.mark.asyncio
+async def test_wait_for_refinery_raises_on_dead_session(temp_db, mock_opencode):
+    """Test _wait_for_refinery raises RefinerySessionDied on error/not_found status."""
+    from hive.merge import RefinerySessionDied
+
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Session returns {"type": "error"} — dead
+    mock_opencode.get_session_status = AsyncMock(return_value={"type": "error"})
+
+    with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(RefinerySessionDied, match="error"):
+            await mp._wait_for_refinery("dead-session", worktree_path="/tmp/worktree", timeout=30)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_refinery_raises_on_not_found(temp_db, mock_opencode):
+    """Test _wait_for_refinery raises RefinerySessionDied on not_found status."""
+    from hive.merge import RefinerySessionDied
+
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    mock_opencode.get_session_status = AsyncMock(return_value={"type": "not_found"})
+
+    with patch("hive.merge.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(RefinerySessionDied, match="not_found"):
+            await mp._wait_for_refinery("dead-session", worktree_path="/tmp/worktree", timeout=30)
+
+
+@pytest.mark.asyncio
+async def test_send_to_refinery_retries_on_dead_session(tmp_path, temp_db, mock_opencode):
+    """Test _send_to_refinery retries once when refinery session dies, then succeeds."""
+    from hive.merge import RefinerySessionDied
+
+    worktree_path = str(tmp_path / "worktree")
+    Path(worktree_path).mkdir()
+
+    issue_id = temp_db.create_issue(title="Test Issue", project="test")
+    agent_id = temp_db.create_agent(name="test-agent")
+    temp_db.conn.execute(
+        "INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name) VALUES (?, ?, ?, ?, ?)",
+        (issue_id, agent_id, "test", worktree_path, "test-branch"),
+    )
+    temp_db.conn.commit()
+    queue_id = temp_db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    entry = {
+        "id": queue_id,
+        "issue_id": issue_id,
+        "agent_id": agent_id,
+        "branch_name": "test-branch",
+        "worktree": worktree_path,
+        "issue_title": "Test Issue",
+    }
+
+    mock_opencode.create_session = AsyncMock(return_value={"id": "new-session"})
+    mock_opencode.cleanup_session = AsyncMock()
+
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # First call raises RefinerySessionDied, second call succeeds
+    call_count = 0
+
+    async def mock_inner(entry, worktree_path):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RefinerySessionDied("Session returned error")
+        return {
+            "status": "rejected",
+            "summary": "Tests failed",
+            "tests_passed": False,
+            "conflicts_resolved": 0,
+        }
+
+    with patch.object(mp, "_send_to_refinery_inner", side_effect=mock_inner):
+        with patch("hive.merge.remove_notes_file"):
+            await mp._send_to_refinery(entry)
+
+    assert call_count == 2
+
+    # Should have logged the death event
+    events = temp_db.get_events(issue_id)
+    died_events = [e for e in events if e["event_type"] == "refinery_session_died"]
+    assert len(died_events) == 1
+
+    import json
+
+    detail = json.loads(died_events[0]["detail"])
+    assert detail["retry"] is True
+
+
+@pytest.mark.asyncio
+async def test_send_to_refinery_gives_up_after_two_deaths(tmp_path, temp_db, mock_opencode):
+    """Test _send_to_refinery escalates to needs_human after two session deaths."""
+    from hive.merge import RefinerySessionDied
+
+    worktree_path = str(tmp_path / "worktree")
+    Path(worktree_path).mkdir()
+
+    issue_id = temp_db.create_issue(title="Test Issue", project="test")
+    agent_id = temp_db.create_agent(name="test-agent")
+    temp_db.conn.execute(
+        "INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name) VALUES (?, ?, ?, ?, ?)",
+        (issue_id, agent_id, "test", worktree_path, "test-branch"),
+    )
+    temp_db.conn.commit()
+    queue_id = temp_db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    entry = {
+        "id": queue_id,
+        "issue_id": issue_id,
+        "agent_id": agent_id,
+        "branch_name": "test-branch",
+        "worktree": worktree_path,
+        "issue_title": "Test Issue",
+    }
+
+    mock_opencode.create_session = AsyncMock(return_value={"id": "new-session"})
+    mock_opencode.cleanup_session = AsyncMock()
+
+    mp = MergeProcessor(temp_db, mock_opencode, "/tmp/project", "test")
+
+    # Both calls raise RefinerySessionDied
+    with patch.object(
+        mp,
+        "_send_to_refinery_inner",
+        new_callable=AsyncMock,
+        side_effect=RefinerySessionDied("Session died"),
+    ):
+        with patch("hive.merge.remove_notes_file"):
+            await mp._send_to_refinery(entry)
+
+    # Should have logged two death events
+    events = temp_db.get_events(issue_id)
+    died_events = [e for e in events if e["event_type"] == "refinery_session_died"]
+    assert len(died_events) == 2
+
+    import json
+
+    # Events are returned DESC (newest first), so index 0 is the second death
+    details = [json.loads(e["detail"]) for e in died_events]
+    retries = sorted([d["retry"] for d in details])
+    assert retries == [False, True]
+
+    # Issue should be escalated (needs_human path)
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "escalated"
+
+    # Merge queue should be failed
+    cursor = temp_db.conn.execute("SELECT status FROM merge_queue WHERE id = ?", (queue_id,))
+    row = cursor.fetchone()
+    assert row["status"] == "failed"

@@ -804,6 +804,116 @@ def test_status_shows_daemon_info(temp_db, tmp_path, capsys):
     assert "Daemon:" in captured.out
 
 
+# ── Status worker/refinery detail tests ────────────────────────────────
+
+
+def test_status_shows_worker_details(temp_db, tmp_path, capsys):
+    """Status should list each active worker with its issue."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Create issues
+    issue_id = temp_db.create_issue("Add auth module", project=tmp_path.name)
+    temp_db.update_issue_status(issue_id, "in_progress")
+
+    # Create a working agent
+    agent_id = temp_db.create_agent(name="worker-abc123", project=tmp_path.name)
+    temp_db.conn.execute(
+        "UPDATE agents SET status = 'working', current_issue = ? WHERE id = ?",
+        (issue_id, agent_id),
+    )
+    temp_db.conn.commit()
+
+    cli.status()
+    captured = capsys.readouterr()
+    assert "worker-abc123" in captured.out
+    assert issue_id in captured.out
+    assert "Add auth module" in captured.out
+
+
+def test_status_shows_refinery_reviewing(temp_db, tmp_path, capsys):
+    """Status should show refinery reviewing when a merge is running."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue_id = temp_db.create_issue("Fix login bug", project=tmp_path.name)
+    temp_db.update_issue_status(issue_id, "done")
+
+    # Insert a running merge entry
+    temp_db.conn.execute(
+        """
+        INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name, status)
+        VALUES (?, ?, ?, ?, ?, 'running')
+        """,
+        (issue_id, "agent-1", tmp_path.name, "/tmp/wt", "agent/agent-1"),
+    )
+    temp_db.conn.commit()
+
+    cli.status()
+    captured = capsys.readouterr()
+    assert "Refinery: reviewing" in captured.out
+    assert issue_id in captured.out
+    assert "Fix login bug" in captured.out
+
+
+def test_status_shows_refinery_idle(temp_db, tmp_path, capsys):
+    """Status should show refinery idle when no merge is running."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    cli.status()
+
+    captured = capsys.readouterr()
+    assert "Refinery: idle" in captured.out
+
+
+def test_status_json_includes_workers_and_refinery(temp_db, tmp_path, capsys):
+    """JSON status should include workers list and refinery object."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue_id = temp_db.create_issue("Task A", project=tmp_path.name)
+    temp_db.update_issue_status(issue_id, "in_progress")
+
+    agent_id = temp_db.create_agent(name="worker-xyz", project=tmp_path.name)
+    temp_db.conn.execute(
+        "UPDATE agents SET status = 'working', current_issue = ? WHERE id = ?",
+        (issue_id, agent_id),
+    )
+    temp_db.conn.commit()
+
+    cli.status(json_mode=True)
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+
+    assert "workers" in data
+    assert len(data["workers"]) == 1
+    assert data["workers"][0]["name"] == "worker-xyz"
+    assert data["workers"][0]["issue_id"] == issue_id
+    assert data["workers"][0]["issue_title"] == "Task A"
+
+    assert "refinery" in data
+    assert data["refinery"]["active"] is False
+
+
+def test_status_json_refinery_active(temp_db, tmp_path, capsys):
+    """JSON status should show active refinery when merge is running."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    issue_id = temp_db.create_issue("Running merge", project=tmp_path.name)
+    temp_db.conn.execute(
+        """
+        INSERT INTO merge_queue (issue_id, agent_id, project, worktree, branch_name, status)
+        VALUES (?, ?, ?, ?, ?, 'running')
+        """,
+        (issue_id, "agent-1", tmp_path.name, "/tmp/wt", "agent/agent-1"),
+    )
+    temp_db.conn.commit()
+
+    cli.status(json_mode=True)
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+
+    assert data["refinery"]["active"] is True
+    assert data["refinery"]["issue_id"] == issue_id
+    assert data["refinery"]["issue_title"] == "Running merge"
+
+
 # ── Merges summary footer tests ──────────────────────────────────────
 
 

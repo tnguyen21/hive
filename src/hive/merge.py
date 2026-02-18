@@ -23,6 +23,12 @@ from .backends import OpenCodeClient, make_model_config
 from .prompts import build_refinery_prompt, read_notes_file, read_result_file, remove_notes_file, remove_result_file
 
 
+class RefinerySessionDied(Exception):
+    """Raised when the refinery session is detected as dead (error/not_found) during polling."""
+
+    pass
+
+
 class MergeProcessor:
     """Processes the merge queue: rebase, test, merge, finalize."""
 
@@ -194,6 +200,10 @@ class MergeProcessor:
         """
         Hand a merge to the Refinery LLM for processing.
 
+        If the refinery session dies mid-review (RefinerySessionDied), this
+        method resets the session and retries once. A second death escalates
+        to needs_human.
+
         Args:
             entry: Merge queue entry dict
         """
@@ -214,137 +224,164 @@ class MergeProcessor:
         worktree_path = entry["worktree"]
 
         try:
-            session_id = await self._ensure_refinery_session()
-
-            # Record message count before sending (fence against stale results)
-            pre_send_count = self._refinery_message_count
-
-            # Remove any stale result file before sending (belt-and-suspenders)
-            remove_result_file(worktree_path)
-
-            # Build the refinery prompt
-            # Prefer worker test_command over global Config.TEST_COMMAND
-            test_cmd = entry.get("test_command") or Config.TEST_COMMAND
-            prompt = build_refinery_prompt(
-                issue_title=entry.get("issue_title", "Unknown"),
-                issue_id=issue_id,
-                branch_name=entry["branch_name"],
-                worktree_path=worktree_path,
-                agent_name=entry.get("agent_name"),
-                test_command=test_cmd,
-            )
-
-            # Send to refinery
-            await self.opencode.send_message_async(
-                session_id,
-                parts=[{"type": "text", "text": prompt}],
-                model=make_model_config(Config.REFINERY_MODEL),
-                directory=self.project_path,
-            )
-
-            # Brief delay to check if message was picked up
-            await asyncio.sleep(0.5)
-            status = await self.opencode.get_session_status(session_id, directory=self.project_path)
-            if status and status.get("type") == "idle":
-                # Message wasn't picked up, session still idle
-                raise RuntimeError("Refinery session did not pick up the message")
-
-            # Wait for refinery to finish (poll session status)
-            result = await self._wait_for_refinery(session_id, worktree_path=worktree_path, min_message_count=pre_send_count)
-
-            # Increment counters after successful refinery processing
-            self._refinery_message_count += 2  # one for the prompt sent, one for the response
-            # Estimate tokens from prompt length
-            self._refinery_token_estimate += len(prompt) // 4  # rough estimate for input
-
-            # Process result
-            if result["status"] == "merged":
-                # Merge the branch to main — the refinery fixed the code in the
-                # worktree but the branch still needs to land on main.
-                branch_name = entry["branch_name"]
-                try:
-                    await merge_to_main_async(self.project_path, branch_name)
-                except GitWorktreeError as e:
-                    self.db.update_merge_queue_status(queue_id, "failed")
-                    self.db.log_event(
-                        issue_id,
-                        agent_id,
-                        "merge_failed",
-                        {"error": str(e), "branch": branch_name, "after_refinery": True},
-                    )
-                    return
-
-                await self._finalize_issue(entry)
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "refinery_review_passed",
-                    {"conflicts_resolved": result.get("conflicts_resolved", 0)},
-                )
-            elif result["status"] == "rejected":
-                self.db.update_merge_queue_status(queue_id, "failed")
-                # Reset issue to open so it can be reworked
-                self.db.update_issue_status(issue_id, "open")
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "refinery_review_rejected",
-                    {"summary": result.get("summary", "")},
-                )
-
-                # Create structured rejection note from refinery
-                rejection_reason = result.get("summary", "Unknown reason")
-                note_content = f"[Refinery rejection] {rejection_reason}\nBranch: {entry['branch_name']}"
-
-                self.db.add_note(
-                    issue_id=issue_id,
-                    agent_id=agent_id,
-                    category="rejection",
-                    content=note_content,
-                    project=self.project_name,
-                )
-            else:
-                # needs_human or unknown
-                self.db.update_merge_queue_status(queue_id, "failed")
-                self.db.update_issue_status(issue_id, "escalated")
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "refinery_review_escalated",
-                    {"summary": result.get("summary", "")},
-                )
-
-            # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
-            try:
-                notes_data = read_notes_file(worktree_path)
-                if notes_data:
-                    for note in notes_data:
-                        self.db.add_note(
-                            issue_id=issue_id,
-                            agent_id=agent_id,
-                            content=note.get("content", ""),
-                            category=note.get("category", "discovery"),
-                            project=self.project_name,
-                        )
-                    self.db.log_event(issue_id, agent_id, "notes_harvested", {"count": len(notes_data), "source": "refinery"})
-            except Exception:
-                pass  # Best-effort
-            finally:
-                remove_notes_file(worktree_path)
-
-            # Check if refinery session should be cycled due to token usage
-            await self._maybe_cycle_refinery_session()
-
-        except Exception as e:
-            self.db.update_merge_queue_status(queue_id, "failed")
+            result = await self._send_to_refinery_inner(entry, worktree_path)
+        except RefinerySessionDied as e:
+            # First death — log, reset session, and retry once
             self.db.log_event(
                 issue_id,
                 agent_id,
-                "refinery_error",
-                {"error": str(e)},
+                "refinery_session_died",
+                {"error": str(e), "queue_id": queue_id, "retry": True},
             )
-            # Force reset refinery session so next merge gets a fresh session
-            await self._force_reset_refinery_session(f"Exception in _send_to_refinery: {str(e)}")
+            await self._force_reset_refinery_session(f"Session died: {e}")
+
+            try:
+                result = await self._send_to_refinery_inner(entry, worktree_path)
+            except RefinerySessionDied as e2:
+                # Second death — give up
+                self.db.log_event(
+                    issue_id,
+                    agent_id,
+                    "refinery_session_died",
+                    {"error": str(e2), "queue_id": queue_id, "retry": False},
+                )
+                await self._force_reset_refinery_session(f"Session died twice: {e2}")
+                result = {
+                    "status": "needs_human",
+                    "summary": f"Refinery session died twice: {e2}",
+                    "tests_passed": False,
+                    "conflicts_resolved": 0,
+                }
+            except Exception as e2:
+                self.db.update_merge_queue_status(queue_id, "failed")
+                self.db.log_event(issue_id, agent_id, "refinery_error", {"error": str(e2)})
+                await self._force_reset_refinery_session(f"Exception in retry: {e2}")
+                return
+        except Exception as e:
+            self.db.update_merge_queue_status(queue_id, "failed")
+            self.db.log_event(issue_id, agent_id, "refinery_error", {"error": str(e)})
+            await self._force_reset_refinery_session(f"Exception in _send_to_refinery: {e}")
+            return
+
+        # Process result
+        if result["status"] == "merged":
+            branch_name = entry["branch_name"]
+            try:
+                await merge_to_main_async(self.project_path, branch_name)
+            except GitWorktreeError as e:
+                self.db.update_merge_queue_status(queue_id, "failed")
+                self.db.log_event(
+                    issue_id,
+                    agent_id,
+                    "merge_failed",
+                    {"error": str(e), "branch": branch_name, "after_refinery": True},
+                )
+                return
+
+            await self._finalize_issue(entry)
+            self.db.log_event(
+                issue_id,
+                agent_id,
+                "refinery_review_passed",
+                {"conflicts_resolved": result.get("conflicts_resolved", 0)},
+            )
+        elif result["status"] == "rejected":
+            self.db.update_merge_queue_status(queue_id, "failed")
+            self.db.update_issue_status(issue_id, "open")
+            self.db.log_event(issue_id, agent_id, "refinery_review_rejected", {"summary": result.get("summary", "")})
+
+            rejection_reason = result.get("summary", "Unknown reason")
+            note_content = f"[Refinery rejection] {rejection_reason}\nBranch: {entry['branch_name']}"
+            self.db.add_note(
+                issue_id=issue_id,
+                agent_id=agent_id,
+                category="rejection",
+                content=note_content,
+                project=self.project_name,
+            )
+        else:
+            # needs_human or unknown
+            self.db.update_merge_queue_status(queue_id, "failed")
+            self.db.update_issue_status(issue_id, "escalated")
+            self.db.log_event(issue_id, agent_id, "refinery_review_escalated", {"summary": result.get("summary", "")})
+
+        # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
+        try:
+            notes_data = read_notes_file(worktree_path)
+            if notes_data:
+                for note in notes_data:
+                    self.db.add_note(
+                        issue_id=issue_id,
+                        agent_id=agent_id,
+                        content=note.get("content", ""),
+                        category=note.get("category", "discovery"),
+                        project=self.project_name,
+                    )
+                self.db.log_event(issue_id, agent_id, "notes_harvested", {"count": len(notes_data), "source": "refinery"})
+        except Exception:
+            pass  # Best-effort
+        finally:
+            remove_notes_file(worktree_path)
+
+        # Check if refinery session should be cycled due to token usage
+        await self._maybe_cycle_refinery_session()
+
+    async def _send_to_refinery_inner(self, entry: Dict[str, Any], worktree_path: str) -> Dict[str, Any]:
+        """
+        Send a merge to the refinery and wait for a result. May raise RefinerySessionDied.
+
+        Args:
+            entry: Merge queue entry dict
+            worktree_path: Path to the worktree
+
+        Returns:
+            Parsed merge result dict
+
+        Raises:
+            RefinerySessionDied: If the refinery session dies during processing
+        """
+        session_id = await self._ensure_refinery_session()
+
+        # Record message count before sending (fence against stale results)
+        pre_send_count = self._refinery_message_count
+
+        # Remove any stale result file before sending (belt-and-suspenders)
+        remove_result_file(worktree_path)
+
+        # Build the refinery prompt
+        # Prefer worker test_command over global Config.TEST_COMMAND
+        test_cmd = entry.get("test_command") or Config.TEST_COMMAND
+        prompt = build_refinery_prompt(
+            issue_title=entry.get("issue_title", "Unknown"),
+            issue_id=entry["issue_id"],
+            branch_name=entry["branch_name"],
+            worktree_path=worktree_path,
+            agent_name=entry.get("agent_name"),
+            test_command=test_cmd,
+        )
+
+        # Send to refinery
+        await self.opencode.send_message_async(
+            session_id,
+            parts=[{"type": "text", "text": prompt}],
+            model=make_model_config(Config.REFINERY_MODEL),
+            directory=self.project_path,
+        )
+
+        # Brief delay to check if message was picked up
+        await asyncio.sleep(0.5)
+        status = await self.opencode.get_session_status(session_id, directory=self.project_path)
+        if status and status.get("type") == "idle":
+            raise RuntimeError("Refinery session did not pick up the message")
+
+        # Wait for refinery to finish (poll session status)
+        result = await self._wait_for_refinery(session_id, worktree_path=worktree_path, min_message_count=pre_send_count)
+
+        # Increment counters after successful refinery processing
+        self._refinery_message_count += 2  # one for the prompt sent, one for the response
+        self._refinery_token_estimate += len(prompt) // 4  # rough estimate for input
+
+        return result
 
     async def _wait_for_refinery(self, session_id: str, worktree_path: str, timeout: int = None, min_message_count: int = 0) -> Dict[str, Any]:
         """
@@ -372,6 +409,11 @@ class MergeProcessor:
 
             try:
                 status = await self.opencode.get_session_status(session_id, directory=self.project_path)
+
+                # Detect dead session (backend returned error or not_found)
+                if status and status.get("type") in ("error", "not_found"):
+                    raise RefinerySessionDied(f"Refinery session returned {status.get('type')}")
+
                 if status and status.get("type") == "idle":
                     # Session finished — verify new messages were produced (fence against stale results)
                     messages = await self.opencode.get_messages(session_id, directory=self.project_path)
@@ -403,6 +445,8 @@ class MergeProcessor:
                 # Reset consecutive errors on successful status check
                 consecutive_errors = 0
 
+            except RefinerySessionDied:
+                raise  # Propagate dead-session signal to caller for retry
             except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors >= 5:

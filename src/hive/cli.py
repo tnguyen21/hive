@@ -689,8 +689,42 @@ class HiveCLI:
             )
             status_counts = {row[0]: row[1] for row in cursor.fetchall()}
 
-            # Get active agents
+            # Get active agents with issue titles
             active_agents = self.db.get_active_agents(project=self.project_name)
+            workers_detail = []
+            for agent in active_agents:
+                issue_title = ""
+                if agent.get("current_issue"):
+                    issue_row = self.db.get_issue(agent["current_issue"])
+                    if issue_row:
+                        issue_title = issue_row.get("title", "")
+                workers_detail.append(
+                    {
+                        "name": agent.get("name", ""),
+                        "issue_id": agent.get("current_issue", ""),
+                        "issue_title": issue_title,
+                    }
+                )
+
+            # Get running merge entry (refinery status proxy)
+            try:
+                cursor = self.db.conn.execute(
+                    """
+                    SELECT mq.issue_id, i.title as issue_title
+                    FROM merge_queue mq
+                    LEFT JOIN issues i ON mq.issue_id = i.id
+                    WHERE mq.status = 'running'
+                    LIMIT 1
+                    """
+                )
+                running_merge = cursor.fetchone()
+                refinery_info = {
+                    "active": running_merge is not None,
+                    "issue_id": running_merge["issue_id"] if running_merge else None,
+                    "issue_title": running_merge["issue_title"] if running_merge else None,
+                }
+            except Exception:
+                refinery_info = {"active": False, "issue_id": None, "issue_title": None}
 
             # Get ready queue
             ready = self.db.get_ready_queue(limit=10)
@@ -739,6 +773,8 @@ class HiveCLI:
                 "issues": status_counts,
                 "total_issues": sum(status_counts.values()),
                 "active_agents": len(active_agents),
+                "workers": workers_detail,
+                "refinery": refinery_info,
                 "ready_queue": len(ready),
                 "merge_queue": merge_stats,
                 "merge_blockers": merge_blockers,
@@ -772,6 +808,17 @@ class HiveCLI:
                 if count > 0:
                     print(f"  {s}: {count}")
             print(f"\nActive workers: {result.get('active_agents', 0)}/{Config.MAX_AGENTS}")
+            for w in result.get("workers", []):
+                title = (w.get("issue_title") or "")[:40]
+                print(f"  {w.get('name', ''):<24} {w.get('issue_id', ''):<16} {title}")
+
+            refinery = result.get("refinery", {})
+            if refinery.get("active"):
+                rtitle = (refinery.get("issue_title") or "")[:40]
+                print(f"\nRefinery: reviewing {refinery.get('issue_id', '')} ({rtitle})")
+            else:
+                print("\nRefinery: idle")
+
             print(f"Ready queue: {result.get('ready_queue', 0)} issues")
             mq = result.get("merge_queue", {})
             if isinstance(mq, dict):
