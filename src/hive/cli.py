@@ -727,6 +727,9 @@ class HiveCLI:
             daemon = self._make_daemon()
             daemon_status = daemon.status()
 
+            daemon_running = daemon_status.get("running", False)
+            refinery_info = self._check_refinery_status(daemon_running)
+
             result = {
                 "project": self.project_name,
                 "issues": status_counts,
@@ -738,10 +741,11 @@ class HiveCLI:
                 "main_worktree": main_worktree,
                 "ready_issues": [{"id": i["id"], "title": i["title"]} for i in ready[:5]],
                 "daemon": {
-                    "running": daemon_status.get("running", False),
+                    "running": daemon_running,
                     "pid": daemon_status.get("pid"),
                     "log_file": daemon_status.get("log_file"),
                 },
+                "refinery": refinery_info,
             }
         except Exception as e:
             self._error(str(e), json_mode=json_mode)
@@ -794,6 +798,19 @@ class HiveCLI:
                     print(f"  Log: {daemon_info.get('log_file')}")
             else:
                 print("\nDaemon: not running")
+
+            # Refinery info
+            ref = result.get("refinery", {})
+            ref_status = ref.get("status", "unknown")
+            policy = ref.get("merge_policy", "unknown")
+            if ref_status == "disabled":
+                print(f"Refinery: off (policy: {policy})")
+            elif ref_status == "live":
+                print(f"Refinery: live (policy: {policy})")
+            elif ref_status == "dead":
+                print(f"Refinery: dead — {ref.get('message', '')}")
+            else:
+                print(f"Refinery: {ref_status} (policy: {policy})")
 
             total = result.get("total_issues", 0)
             if total == 0:
@@ -1333,6 +1350,70 @@ class HiveCLI:
         print(f"Escalation rate: {escalation_rate}% | Mean time to resolution: {mean_duration_m}m")
 
     # ── Daemon management ────────────────────────────────────────────
+
+    def _check_refinery_status(self, daemon_running: bool) -> Dict[str, Any]:
+        """Check refinery liveness based on merge policy, daemon state, and backend."""
+        merge_policy = getattr(Config, "MERGE_POLICY", "mechanical_then_refinery")
+        uses_refinery = merge_policy in ("mechanical_then_refinery", "refinery_first")
+
+        info: Dict[str, Any] = {
+            "merge_policy": merge_policy,
+            "enabled": uses_refinery,
+        }
+
+        if not uses_refinery:
+            info["status"] = "disabled"
+            info["message"] = f"Merge policy '{merge_policy}' does not use the refinery"
+            return info
+
+        if not daemon_running:
+            info["status"] = "dead"
+            info["message"] = "Daemon not running"
+            return info
+
+        # Try to probe the backend for a live refinery session
+        backend = getattr(Config, "BACKEND", "opencode")
+        if backend == "opencode":
+            info.update(self._probe_opencode_refinery())
+        else:
+            # For non-opencode backends, infer from daemon + policy
+            info["status"] = "unknown"
+            info["message"] = f"Daemon running, {backend} backend (cannot probe directly)"
+
+        return info
+
+    def _probe_opencode_refinery(self) -> Dict[str, Any]:
+        """Sync HTTP probe for a refinery session on the opencode backend."""
+        import base64
+        import urllib.request
+        import urllib.error
+
+        base_url = getattr(Config, "OPENCODE_URL", "http://127.0.0.1:4096").rstrip("/")
+        password = getattr(Config, "OPENCODE_PASSWORD", None)
+
+        req = urllib.request.Request(f"{base_url}/session", method="GET")
+        if password:
+            username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
+            creds = base64.b64encode(f"{username}:{password}".encode()).decode()
+            req.add_header("Authorization", f"Basic {creds}")
+
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                sessions = json.loads(resp.read())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            return {"status": "unknown", "message": "Could not reach opencode server"}
+
+        # Look for a session titled "refinery"
+        for s in sessions:
+            title = s.get("title", "")
+            if title == "refinery":
+                return {
+                    "status": "live",
+                    "session_id": s.get("id"),
+                    "message": "Refinery session active",
+                }
+
+        return {"status": "dead", "message": "No refinery session found in opencode"}
 
     def _make_daemon(self) -> HiveDaemon:
         return HiveDaemon(self.project_name, str(self.project_path))
