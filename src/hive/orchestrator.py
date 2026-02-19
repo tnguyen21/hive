@@ -25,6 +25,7 @@ from .prompts import (
     read_result_file,
     remove_notes_file,
     remove_result_file,
+    render_inbox_section,
 )
 from .backends import SSEClient
 
@@ -864,6 +865,35 @@ class Orchestrator:
 
         return notes if notes else None
 
+    def _prepare_inbox_for_worker(self, agent_id: str, issue_id: str) -> Optional[str]:
+        """
+        Materialize issue-following deliveries and build the inbox section for injection.
+
+        Per spec section 6.2 and 7.1:
+        1. Materializes issue-following targets for this (agent_id, issue_id).
+        2. Queries injectable deliveries.
+        3. Marks queued deliveries as delivered.
+        4. Renders the canonical inbox section.
+        5. Logs note_delivered event.
+
+        Returns the rendered inbox section string, or None if no deliveries.
+        """
+        self.db.materialize_issue_deliveries(issue_id, agent_id, self.project_name)
+        deliveries, has_more = self.db.get_injectable_deliveries(agent_id, issue_id, self.project_name)
+        if not deliveries:
+            return None
+        for d in deliveries:
+            if d.get("status") == "queued":
+                self.db.mark_delivery_delivered(d["delivery_id"])
+        inbox_section = render_inbox_section(deliveries, has_more)
+        self.db.log_event(
+            issue_id,
+            agent_id,
+            "note_delivered",
+            {"count": len(deliveries), "delivery_ids": [d["delivery_id"] for d in deliveries]},
+        )
+        return inbox_section
+
     def _is_issue_canceled(self, issue_id: str) -> bool:
         """Check if an issue has been canceled in the database."""
         try:
@@ -1124,6 +1154,9 @@ class Orchestrator:
         if worker_notes:
             self.db.log_event(issue_id, agent.agent_id, "notes_injected", {"count": len(worker_notes)})
 
+        # NEW: delivery-based inbox injection
+        inbox_section = self._prepare_inbox_for_worker(agent.agent_id, issue_id)
+
         retry_context = build_retry_context(self.db, issue_id)
         branch_name = f"agent/{agent.name}"
         prompt = build_worker_prompt(
@@ -1135,6 +1168,7 @@ class Orchestrator:
             notes=worker_notes,
             completed_steps=completed_steps,
             retry_context=retry_context,
+            inbox_section=inbox_section,
         )
 
         system_prompt = build_system_prompt(

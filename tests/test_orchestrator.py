@@ -1981,3 +1981,151 @@ async def test_worktree_error_event_non_empty_on_timeout(temp_db, tmp_path):
     detail = json.loads(events[0]["detail"])
     assert detail["error"] != ""
     assert detail["error"] == "TimeoutError"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _prepare_inbox_for_worker and worker dispatch inbox injection
+# ---------------------------------------------------------------------------
+
+
+def _make_orch(temp_db, tmp_path):
+    """Helper: create an Orchestrator with a mock opencode client."""
+    from unittest.mock import AsyncMock
+    from hive.backends import OpenCodeClient
+
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    return Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    ), mock_opencode
+
+
+def test_prepare_inbox_no_deliveries(temp_db, tmp_path):
+    """_prepare_inbox_for_worker returns None when no injectable deliveries exist."""
+    orch, _ = _make_orch(temp_db, tmp_path)
+    issue_id = temp_db.create_issue("Task", "Do something")
+    agent_id = temp_db.create_agent("worker-1")
+
+    result = orch._prepare_inbox_for_worker(agent_id, issue_id)
+
+    assert result is None
+
+
+def test_prepare_inbox_materializes_issue_targets(temp_db, tmp_path):
+    """_prepare_inbox_for_worker materializes issue-following targets for the agent."""
+    orch, _ = _make_orch(temp_db, tmp_path)
+    issue_id = temp_db.create_issue("Task", "Do something")
+    agent_id = temp_db.create_agent("worker-1")
+
+    # Create a note with an issue-following target (no agent yet)
+    note_id = temp_db.add_note(content="Issue-targeted note", project="test")
+    temp_db.create_note_deliveries(note_id, to_issues=[issue_id])
+
+    # Before materialization: no delivery for this agent
+    deliveries_before, _ = temp_db.get_injectable_deliveries(agent_id, issue_id, "test")
+    assert len(deliveries_before) == 0
+
+    # _prepare_inbox_for_worker should materialize and then return the section
+    result = orch._prepare_inbox_for_worker(agent_id, issue_id)
+
+    # After materialization: delivery exists and section rendered
+    assert result is not None
+    assert "Notes Inbox Update" in result
+
+
+def test_prepare_inbox_marks_delivered(temp_db, tmp_path):
+    """Queued deliveries are transitioned to 'delivered' after _prepare_inbox_for_worker."""
+    orch, _ = _make_orch(temp_db, tmp_path)
+    issue_id = temp_db.create_issue("Task", "Do something")
+    agent_id = temp_db.create_agent("worker-1")
+
+    note_id = temp_db.add_note(content="Important note", project="test")
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    # Verify initial status is queued
+    deliveries_before, _ = temp_db.get_injectable_deliveries(agent_id, issue_id, "test")
+    assert len(deliveries_before) == 1
+    assert deliveries_before[0]["status"] == "queued"
+
+    orch._prepare_inbox_for_worker(agent_id, issue_id)
+
+    # Verify status is now delivered (delivery_id from before)
+    delivery_id = deliveries_before[0]["delivery_id"]
+    row = temp_db.conn.execute("SELECT status FROM note_deliveries WHERE id = ?", (delivery_id,)).fetchone()
+    assert row["status"] == "delivered"
+
+
+def test_prepare_inbox_renders_section(temp_db, tmp_path):
+    """_prepare_inbox_for_worker returns a non-empty rendered section when deliveries exist."""
+    orch, _ = _make_orch(temp_db, tmp_path)
+    issue_id = temp_db.create_issue("Task", "Do something")
+    agent_id = temp_db.create_agent("worker-1")
+
+    note_id = temp_db.add_note(content="Check the migration path", project="test")
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    result = orch._prepare_inbox_for_worker(agent_id, issue_id)
+
+    assert result is not None
+    assert "Notes Inbox Update" in result
+    assert "Check the migration path" in result
+
+
+def test_prepare_inbox_logs_event(temp_db, tmp_path):
+    """_prepare_inbox_for_worker logs a note_delivered event with count and delivery IDs."""
+    orch, _ = _make_orch(temp_db, tmp_path)
+    issue_id = temp_db.create_issue("Task", "Do something")
+    agent_id = temp_db.create_agent("worker-1")
+
+    note_id = temp_db.add_note(content="Use the new API", project="test")
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    deliveries_before, _ = temp_db.get_injectable_deliveries(agent_id, issue_id, "test")
+    delivery_id = deliveries_before[0]["delivery_id"]
+
+    orch._prepare_inbox_for_worker(agent_id, issue_id)
+
+    events = temp_db.get_events(issue_id=issue_id, event_type="note_delivered")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["count"] == 1
+    assert delivery_id in detail["delivery_ids"]
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatch_includes_inbox(temp_db, tmp_path):
+    """Worker dispatch passes inbox_section to build_worker_prompt when deliveries exist."""
+    from unittest.mock import AsyncMock, patch
+    from hive.backends import OpenCodeClient
+
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.create_session.return_value = {"id": "session-inbox-test"}
+    mock_opencode.send_message_async.return_value = None
+
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+    # Create issue and a note delivered to any agent working on it
+    issue_id = temp_db.create_issue("Test inbox task", "Do something", project="test")
+    note_id = temp_db.add_note(content="Critical: use v2 migration path", project="test")
+    temp_db.create_note_deliveries(note_id, to_issues=[issue_id])
+
+    with patch("hive.orchestrator.create_worktree_async", return_value=str(tmp_path)):
+        issue = temp_db.get_issue(issue_id)
+        await orch.spawn_worker(issue)
+
+    # Verify send_message_async was called with a prompt containing the inbox section
+    assert mock_opencode.send_message_async.called
+    call_args = mock_opencode.send_message_async.call_args
+    parts = call_args.kwargs.get("parts") or call_args.args[1] if len(call_args.args) > 1 else None
+    if parts is None and call_args.kwargs:
+        parts = call_args.kwargs.get("parts", [])
+    prompt_text = " ".join(p.get("text", "") for p in (parts or []) if isinstance(p, dict))
+    assert "Notes Inbox Update" in prompt_text
+    assert "Critical: use v2 migration path" in prompt_text

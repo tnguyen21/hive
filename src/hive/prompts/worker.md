@@ -8,7 +8,7 @@ ${description}
 
 ## CONTEXT
 
-${context}${completed_section}${notes_section}${retry_section}
+${context}${completed_section}${notes_section}${inbox_section}${retry_section}
 
 ## BEHAVIORAL CONTRACT
 

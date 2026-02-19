@@ -249,6 +249,7 @@ def build_worker_prompt(
         context=context,
         completed_section=completed_section,
         notes_section=notes_section,
+        inbox_section="",
         retry_section=retry_section,
         worktree_path=worktree_path,
     )
