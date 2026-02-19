@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "2325466e9a3c",
+  "strategy": "manual-commit",
+  "branch": "feat/notes-delivery",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/NOTES_SPEC.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/23/25466e9a3c/0/metadata.json",
+      "transcript": "/23/25466e9a3c/0/full.jsonl",
+      "context": "/23/25466e9a3c/0/context.md",
+      "content_hash": "/23/25466e9a3c/0/content_hash.txt",
+      "prompt": "/23/25466e9a3c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 117,
+    "cache_creation_tokens": 130214,
+    "cache_read_tokens": 9410745,
+    "output_tokens": 19282,
+    "api_call_count": 93
+  }
+}
