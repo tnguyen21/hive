@@ -36,3 +36,4 @@ env/
 .hive/
 .hive.toml
 .opencode/agents/queen.md
+.claude/
