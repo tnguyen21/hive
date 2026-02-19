@@ -146,6 +146,8 @@ class Orchestrator:
 
         # Track last SSE activity per session for lease renewal
         self._session_last_activity: Dict[str, datetime] = {}
+        # Track last DB lease renewal to prevent I/O thrashing on every SSE event
+        self._session_last_db_renewal: Dict[str, datetime] = {}
 
         # Running flag
         self.running = False
@@ -275,6 +277,14 @@ class Orchestrator:
         now = datetime.now()
         self._session_last_activity[session_id] = now
 
+        # Debounce DB writes: only update if enough time has passed since last update
+        # Using 10% of lease extension as the debounce interval (default 60s)
+        last_db_renewal = self._session_last_db_renewal.get(session_id)
+        if last_db_renewal:
+            debounce_interval = Config.LEASE_EXTENSION / 10
+            if (now - last_db_renewal).total_seconds() < debounce_interval:
+                return
+
         # Find agent for this session and extend its DB lease
         agent_id = self._session_to_agent.get(session_id)
         if agent_id and agent_id in self.active_agents:
@@ -290,6 +300,7 @@ class Orchestrator:
                     (agent.agent_id,),
                 )
                 self.db.conn.commit()
+                self._session_last_db_renewal[session_id] = now
             except Exception:
                 pass  # Non-critical, best-effort
 
@@ -1062,6 +1073,7 @@ class Orchestrator:
             if my_session_id in self.session_status_events:
                 del self.session_status_events[my_session_id]
             self._session_last_activity.pop(my_session_id, None)
+            self._session_last_db_renewal.pop(my_session_id, None)
 
     async def _cleanup_session(self, agent: AgentIdentity):
         """Abort and delete an agent's opencode session.
