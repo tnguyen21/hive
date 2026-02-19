@@ -2129,3 +2129,184 @@ async def test_worker_dispatch_includes_inbox(temp_db, tmp_path):
     prompt_text = " ".join(p.get("text", "") for p in (parts or []) if isinstance(p, dict))
     assert "Notes Inbox Update" in prompt_text
     assert "Critical: use v2 migration path" in prompt_text
+
+
+# ── Completion gate: unacked required notes ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_completion_blocked_by_unacked_required_notes(temp_db, tmp_path):
+    """FAIL_ASSESSMENT is returned when a must_read delivery has not been acked."""
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    issue_id = temp_db.create_issue("Gate task", "Needs ack")
+    agent_id = temp_db.create_agent("test-agent")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-gate",
+    )
+    orch.active_agents[agent_id] = agent
+
+    # Create a must_read note delivered directly to this agent
+    note_id = temp_db.add_note(content="Critical: acknowledge me", project="test", must_read=True)
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    orch._handle_agent_failure = AsyncMock()
+
+    await orch.handle_agent_complete(agent)
+
+    # Should have called _handle_agent_failure with an unacked-notes reason
+    orch._handle_agent_failure.assert_called_once()
+    result_arg = orch._handle_agent_failure.call_args[0][1]
+    assert "required note" in result_arg.reason
+    assert "hive mail ack" in result_arg.reason
+
+
+@pytest.mark.asyncio
+async def test_completion_not_blocked_when_no_required_notes(temp_db, tmp_path):
+    """Normal (non-must_read) notes do NOT block completion."""
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    issue_id = temp_db.create_issue("Normal notes task", "No must_read")
+    agent_id = temp_db.create_agent("test-agent")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-normal",
+    )
+    orch.active_agents[agent_id] = agent
+
+    # Create a normal (non-must_read) note
+    note_id = temp_db.add_note(content="FYI: some context", project="test", must_read=False)
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    # Gate should pass; assess_completion will be called and fail due to no messages,
+    # but _handle_agent_failure will be called for the assessment reason, NOT gate reason.
+    orch._handle_agent_failure = AsyncMock()
+
+    await orch.handle_agent_complete(agent)
+
+    # _handle_agent_failure may be called (assessment failure), but NOT for unacked notes
+    if orch._handle_agent_failure.called:
+        result_arg = orch._handle_agent_failure.call_args[0][1]
+        assert "required note" not in result_arg.reason
+
+    # No completion_blocked_unacked_notes event should exist
+    events = temp_db.get_events(issue_id=issue_id, event_type="completion_blocked_unacked_notes")
+    assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_completion_not_blocked_when_all_acked(temp_db, tmp_path):
+    """After acking all required notes, the gate passes."""
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    issue_id = temp_db.create_issue("Acked task", "All acked")
+    agent_id = temp_db.create_agent("test-agent")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-acked",
+    )
+    orch.active_agents[agent_id] = agent
+
+    # Create a must_read note, deliver it, then ack it
+    note_id = temp_db.add_note(content="Must read and ack", project="test", must_read=True)
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    # Find the delivery id and ack it
+    deliveries = temp_db.get_required_unacked_deliveries(agent_id, issue_id)
+    assert len(deliveries) == 1
+    temp_db.mark_delivery_acked(deliveries[0]["delivery_id"], agent_id)
+
+    # Gate should now pass (no unacked required notes)
+    orch._handle_agent_failure = AsyncMock()
+    await orch.handle_agent_complete(agent)
+
+    # No completion_blocked_unacked_notes event
+    events = temp_db.get_events(issue_id=issue_id, event_type="completion_blocked_unacked_notes")
+    assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_completion_gate_logs_event(temp_db, tmp_path):
+    """completion_blocked_unacked_notes event is logged with count and delivery IDs."""
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    issue_id = temp_db.create_issue("Event log task", "Check logging")
+    agent_id = temp_db.create_agent("test-agent")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-log",
+    )
+    orch.active_agents[agent_id] = agent
+
+    note_id = temp_db.add_note(content="Must ack this", project="test", must_read=True)
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+    deliveries_before = temp_db.get_required_unacked_deliveries(agent_id, issue_id)
+    expected_delivery_id = deliveries_before[0]["delivery_id"]
+
+    orch._handle_agent_failure = AsyncMock()
+    await orch.handle_agent_complete(agent)
+
+    events = temp_db.get_events(issue_id=issue_id, event_type="completion_blocked_unacked_notes")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["count"] == 1
+    assert expected_delivery_id in detail["delivery_ids"]
+
+
+@pytest.mark.asyncio
+async def test_completion_gate_materializes_first(temp_db, tmp_path):
+    """materialize_issue_deliveries is called before checking unacked notes."""
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages = AsyncMock(return_value=[])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
+
+    issue_id = temp_db.create_issue("Materialize task", "Issue-following note")
+    agent_id = temp_db.create_agent("test-agent")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-materialize",
+    )
+    orch.active_agents[agent_id] = agent
+
+    # Create a must_read note delivered to the issue (not the agent directly)
+    # so it won't appear in get_required_unacked_deliveries until materialized
+    note_id = temp_db.add_note(content="Issue-following must_read", project="test", must_read=True)
+    temp_db.create_note_deliveries(note_id, to_issues=[issue_id])
+
+    # Before materialization, the agent has no direct delivery
+    unacked_before = temp_db.get_required_unacked_deliveries(agent_id, issue_id)
+    assert len(unacked_before) == 0
+
+    orch._handle_agent_failure = AsyncMock()
+    await orch.handle_agent_complete(agent)
+
+    # After handle_agent_complete runs, materialization should have created a delivery
+    # and the gate should have blocked (logged the event)
+    events = temp_db.get_events(issue_id=issue_id, event_type="completion_blocked_unacked_notes")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["count"] == 1
