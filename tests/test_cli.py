@@ -1212,3 +1212,102 @@ def test_cli_mail_inbox_json_mode(temp_db, tmp_path, capsys):
     assert "count" in data
     assert data["count"] == 1
     assert len(data["deliveries"]) == 1
+
+
+# ── Observability event tests ─────────────────────────────────────────
+
+
+def test_note_sent_event_logged(temp_db, tmp_path):
+    """hive note with targets logs a note_sent event."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.note_with_targets("Heads up", issue_id=None, to_agents=["agent-obs"], to_issues=None, must_read=False)
+
+    events = temp_db.get_events(event_type="note_sent")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["to_agents"] == ["agent-obs"]
+    assert detail["must_read"] is False
+    assert "note_id" in detail
+
+
+def test_note_sent_event_includes_must_read_flag(temp_db, tmp_path):
+    """note_sent event records must_read correctly when True."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.note_with_targets("Critical", issue_id=None, to_agents=["agent-mr"], to_issues=None, must_read=True)
+
+    events = temp_db.get_events(event_type="note_sent")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["must_read"] is True
+
+
+def test_mail_read_event_logged(temp_db, tmp_path):
+    """hive mail read logs a note_read event with delivery_id."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    note_id = temp_db.add_note(agent_id=None, content="Read event test", project=tmp_path.name)
+    temp_db.create_note_deliveries(note_id, to_agents=["agent-read-ev"])
+    deliveries = temp_db.get_inbox_deliveries("agent-read-ev")
+    delivery_id = deliveries[0]["id"]
+
+    cli.mail_read(delivery_id, "agent-read-ev")
+
+    events = temp_db.get_events(agent_id="agent-read-ev", event_type="note_read")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["delivery_id"] == delivery_id
+
+
+def test_mail_read_event_not_logged_if_already_read(temp_db, tmp_path):
+    """note_read event is not logged when delivery is already read."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    note_id = temp_db.add_note(agent_id=None, content="Already read", project=tmp_path.name)
+    temp_db.create_note_deliveries(note_id, to_agents=["agent-2r"])
+    deliveries = temp_db.get_inbox_deliveries("agent-2r")
+    delivery_id = deliveries[0]["id"]
+
+    # Mark already read via DB directly
+    temp_db.mark_delivery_read(delivery_id, "agent-2r")
+
+    # Calling mail_read again should not log a second event
+    cli.mail_read(delivery_id, "agent-2r")
+
+    events = temp_db.get_events(agent_id="agent-2r", event_type="note_read")
+    # Only 0 events from CLI call (since updated=False means we don't log)
+    assert len(events) == 0
+
+
+def test_mail_ack_event_logged(temp_db, tmp_path):
+    """hive mail ack logs a note_acked event with delivery_id."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    note_id = temp_db.add_note(agent_id=None, content="Ack event test", must_read=True, project=tmp_path.name)
+    temp_db.create_note_deliveries(note_id, to_agents=["agent-ack-ev"])
+    deliveries = temp_db.get_inbox_deliveries("agent-ack-ev")
+    delivery_id = deliveries[0]["id"]
+
+    cli.mail_ack(delivery_id, "agent-ack-ev")
+
+    events = temp_db.get_events(agent_id="agent-ack-ev", event_type="note_acked")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["delivery_id"] == delivery_id
+
+
+def test_mail_ack_event_not_logged_on_non_must_read(temp_db, tmp_path):
+    """note_acked event is not logged when ack fails (non-must-read delivery)."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    note_id = temp_db.add_note(agent_id=None, content="Not must read", must_read=False, project=tmp_path.name)
+    temp_db.create_note_deliveries(note_id, to_agents=["agent-nr"])
+    deliveries = temp_db.get_inbox_deliveries("agent-nr")
+    delivery_id = deliveries[0]["id"]
+
+    cli.mail_ack(delivery_id, "agent-nr")
+
+    # No note_acked event should be logged since ack was rejected
+    events = temp_db.get_events(agent_id="agent-nr", event_type="note_acked")
+    assert len(events) == 0

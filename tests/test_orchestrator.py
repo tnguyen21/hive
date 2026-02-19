@@ -2310,3 +2310,104 @@ async def test_completion_gate_materializes_first(temp_db, tmp_path):
     assert len(events) == 1
     detail = json.loads(events[0]["detail"])
     assert detail["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_completion_proceeds_when_required_notes_acked(temp_db, tmp_path, git_repo):
+    """Completion is not blocked when all must_read notes are acked."""
+    from unittest.mock import AsyncMock, patch
+    from hive.backends import OpenCodeClient
+    from hive.utils import CompletionResult
+
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages.return_value = []
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(git_repo),
+        project_name="test",
+    )
+
+    issue_id = temp_db.create_issue("Unblocked task", "Do something", project="test")
+    agent_id = temp_db.create_agent("test-agent-unblock")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent-unblock",
+        issue_id=issue_id,
+        worktree=str(git_repo),
+        session_id="session-unblock",
+    )
+
+    # Send a must_read note to the agent and ack it
+    note_id = temp_db.add_note(content="Already read", must_read=True, project="test")
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+    deliveries = temp_db.get_inbox_deliveries(agent_id)
+    temp_db.mark_delivery_acked(deliveries[0]["id"], agent_id)
+
+    mock_result = CompletionResult(success=True, reason="done", summary="Task complete")
+    with (
+        patch("hive.orchestrator.assess_completion", return_value=mock_result),
+        patch("hive.orchestrator.has_diff_from_main_async", return_value=True),
+    ):
+        decision = await orch._decide_completion_transition(agent)
+
+    from hive.orchestrator import CompletionTransition
+
+    assert decision.transition == CompletionTransition.SUCCESS_DONE
+
+    # No completion_blocked event
+    events = temp_db.get_events(issue_id=issue_id, event_type="completion_blocked_unacked_notes")
+    assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_completion_blocked_unacked_notes_event_logged(temp_db, tmp_path):
+    """completion_blocked_unacked_notes event is logged when must_read notes are not acked."""
+    from unittest.mock import AsyncMock, patch
+    from hive.backends import OpenCodeClient
+    from hive.utils import CompletionResult
+
+    mock_opencode = AsyncMock(spec=OpenCodeClient)
+    mock_opencode.get_messages.return_value = []
+    orch = Orchestrator(
+        db=temp_db,
+        opencode_client=mock_opencode,
+        project_path=str(tmp_path),
+        project_name="test",
+    )
+
+    # Create issue and agent
+    issue_id = temp_db.create_issue("Blocked task", "Do something", project="test")
+    agent_id = temp_db.create_agent("test-agent-block")
+    agent = AgentIdentity(
+        agent_id=agent_id,
+        name="test-agent-block",
+        issue_id=issue_id,
+        worktree=str(tmp_path),
+        session_id="session-block",
+    )
+
+    # Send a must_read note to the agent — not yet acked
+    note_id = temp_db.add_note(content="Critical: do not skip migration", must_read=True, project="test")
+    temp_db.create_note_deliveries(note_id, to_agents=[agent_id])
+
+    # Simulate successful completion assessment but unacked required note
+    mock_result = CompletionResult(success=True, reason="done", summary="Task complete")
+    with (
+        patch("hive.orchestrator.assess_completion", return_value=mock_result),
+        patch("hive.orchestrator.has_diff_from_main_async", return_value=True),
+    ):
+        decision = await orch._decide_completion_transition(agent)
+
+    # Decision should be FAIL_ASSESSMENT due to unacked required note
+    from hive.orchestrator import CompletionTransition
+
+    assert decision.transition == CompletionTransition.FAIL_ASSESSMENT
+    assert "not acknowledged" in decision.result.reason
+
+    # completion_blocked_unacked_notes event should be logged
+    events = temp_db.get_events(issue_id=issue_id, event_type="completion_blocked_unacked_notes")
+    assert len(events) == 1
+    detail = json.loads(events[0]["detail"])
+    assert detail["count"] == 1
+    assert len(detail["delivery_ids"]) == 1

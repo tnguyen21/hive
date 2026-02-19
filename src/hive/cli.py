@@ -986,6 +986,17 @@ class HiveCLI:
                 "to_issues": to_issues or [],
                 "must_read": must_read,
             }
+            self.db.log_event(
+                issue_id,
+                None,
+                "note_sent",
+                {
+                    "note_id": note_id,
+                    "must_read": must_read,
+                    "to_agents": to_agents or [],
+                    "to_issues": to_issues or [],
+                },
+            )
         except Exception as e:
             self._error(str(e), json_mode=json_mode)
             return
@@ -1040,6 +1051,8 @@ class HiveCLI:
         """Mark a delivery as read."""
         try:
             updated = self.db.mark_delivery_read(delivery_id, agent_id)
+            if updated:
+                self.db.log_event(None, agent_id, "note_read", {"delivery_id": delivery_id})
         except Exception as e:
             self._error(str(e), json_mode=json_mode)
             return
@@ -1061,6 +1074,8 @@ class HiveCLI:
         """Acknowledge a must_read delivery."""
         try:
             updated = self.db.mark_delivery_acked(delivery_id, agent_id)
+            if updated:
+                self.db.log_event(None, agent_id, "note_acked", {"delivery_id": delivery_id})
         except Exception as e:
             self._error(str(e), json_mode=json_mode)
             return

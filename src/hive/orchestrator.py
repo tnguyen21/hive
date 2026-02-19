@@ -1260,6 +1260,28 @@ class Orchestrator:
                 result=result,
             )
 
+        # Completion gate: block if required deliveries are not acked (spec section 9)
+        # Materialize issue-following targets so we catch all pending required notes
+        self.db.materialize_issue_deliveries(agent.issue_id, agent.agent_id, self.project_name)
+
+        # Check for required unacked notes
+        unacked = self.db.get_required_unacked_deliveries(agent.agent_id, agent.issue_id)
+        if unacked:
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "completion_blocked_unacked_notes",
+                {"count": len(unacked), "delivery_ids": [d["delivery_id"] for d in unacked]},
+            )
+            return CompletionDecision(
+                transition=CompletionTransition.FAIL_ASSESSMENT,
+                result=CompletionResult(
+                    success=False,
+                    reason=f"Cannot complete: {len(unacked)} required note(s) not acknowledged. Acknowledge via: hive mail ack <delivery_id>",
+                    summary=f"Blocked by {len(unacked)} unacknowledged required note(s)",
+                ),
+            )
+
         has_commits = await has_diff_from_main_async(agent.worktree)
         if not has_commits:
             return CompletionDecision(
