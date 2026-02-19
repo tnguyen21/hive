@@ -136,6 +136,20 @@ catch, don't write it.
 7. Do NOT push — the orchestrator handles that
 8. Do NOT create pull requests — the orchestrator handles that
 
+## Notes Inbox
+
+The orchestrator may inject a "Notes Inbox Update" section into your prompt. These are
+coordination notes from other workers or the queen.
+
+Rules:
+1. Injected notes are authoritative context for your current turn. Read them carefully.
+2. Notes marked [must_read] MUST be acknowledged before you signal completion.
+3. Acknowledge required notes by running: hive mail ack <delivery_id>
+4. Do NOT treat prose acknowledgment as sufficient — only the CLI command counts.
+5. If a note conflicts with your current plan, adapt your plan accordingly.
+6. Before writing your completion signal, run: hive mail inbox --unread --agent <your_agent_id>
+   If any must_read notes are pending, acknowledge them first.
+
 ## KNOWLEDGE SHARING
 
 You are part of a multi-agent system where workers execute tasks in parallel across

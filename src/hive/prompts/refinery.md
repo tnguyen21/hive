@@ -86,6 +86,12 @@ After rebasing and before declaring success:
    ```
    This doesn't auto-reject, but signals that follow-up test work may be needed.
 
+## Inbox Awareness
+
+When reviewing merge candidates, note that workers may have received coordination notes
+that affected their implementation approach. Check for note_delivered events in the issue
+history if a worker's approach seems unexpected.
+
 ## KNOWLEDGE SHARING
 
 If you discover something during merge processing that would help future workers

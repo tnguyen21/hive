@@ -101,6 +101,19 @@ hive --json note "content" [--issue ISSUE_ID] [--category discovery|gotcha|depen
 - Per-issue: use `hive --json show <issue_id>` to see notes associated with that issue
 - Bulk queries: use datasette (install and run: `datasette ~/.hive/hive.db`) to explore the notes table
 
+## Note Targeting
+
+Send targeted notes to specific workers or issues:
+
+    hive note "message" --to-agent <agent_id> --to-issue <issue_id> --must-read
+
+Check delivery status:
+
+    hive mail inbox --agent <agent_id> [--issue <issue_id>] [--unread]
+
+The --must-read flag prevents the recipient from completing their task until they
+acknowledge the note via: hive mail ack <delivery_id>
+
 **When to use notes:**
 - Before creating a batch of related issues, add a note with project-wide context that all workers should know (e.g., "this project uses ruff with line-length=144")
 - After reviewing a failed worker, add a note about what went wrong so retries benefit
