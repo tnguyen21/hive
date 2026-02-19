@@ -76,3 +76,27 @@ git diff {BASE}...HEAD
 #### A. Unnecessary Markdown Files
 Flag: NOTES.md, PLAN.md, ARCH...
 
+### Prompt 10
+
+Base directory for this skill: /Users/tau/.claude/plugins/cache/slop-guard/slop-guard/0.1.0/skills/slop-guard
+
+# De-Slop Skill
+
+You have access to `slop-guard`, a CLI tool that detects AI writing patterns in prose. Use it to analyze and then revise text to sound less like AI output.
+
+## Step 0: Ensure slop-guard is installed
+
+Before anything else, check if `slop-guard` is on PATH:
+
+```bash
+which slop-guard
+```
+
+If not found, check for cargo:
+
+```bash
+which cargo
+```
+
+- If `cargo` exists: ask the...
+
