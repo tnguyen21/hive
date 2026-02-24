@@ -1,0 +1,391 @@
+read @docs/NOTES_SPEC.md
+
+we're gonna try to implement this again
+
+take a look at the git commit history. when we tried to do this in the past we borked it and had to revert a lot of work
+
+can you iterate on the spec with any call outs/lessons learned from our hacking and reversion in git history?
+
+---
+
+please update the spec with the notes from your post mortem. all of these seem reasonable.
+
+agree with 9 and 10
+
+---
+
+okay -- let's cut a new branch and flesh out issues from the spec to delegate to workeres
+
+---
+
+yeah what happened initially; why were issues failing? dont kick off things yet answer my question
+
+---
+
+how do we prevent this in the future? is there a way to create worktrees for workers to avoid this?
+
+---
+
+can you come up with a way we can test that this is effective and genuinely works?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+keep going
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+i sudo'd and ran the xattr permission command you mentioned earlirer, so it might not be reproducible right now
+
+---
+
+[Request interrupted by user]
+
+---
+
+okay this is all noisy anyways -- what i really want to test right now is how to test the notes system and see if it's actually effecive at enabling inter-agent communication during execution
+
+---
+
+yeah can you write this runbook and add it to the @docs/NOTES_SPEC.md at the bottom
+
+---
+
+oh sory; yeah let's start up the daemon. make sure we're using the latest hive code with recent fixes. let it implement and then we can test
+
+---
+
+poke
+
+---
+
+we have workers multiple workers working on the same issue? seems like a bug
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User asked me to read `docs/NOTES_SPEC.md` (already loaded), look at git history for previous failed implementation attempts, and iterate on the spec with lessons learned.
+
+2. **Git History Analysis**: I examined:
+   - 22 commits reverted at `84b9647` back to `cab6319`
+   - Only 4 were notes-related (`ff5c73d`, `bafe6a6`, `0f986ac`, `8ed5cdd`)
+   - 18 were collateral (merge policy, codex backend, worktree EPERM, TOCTOU guards)
+   - Post-revert, many fixes had to be re-implemented
+   - I examined each of the 4 notes implementation commits in detail
+
+3. **Post-mortem findings**: 10 lessons identified:
+   - Branch isolation needed
+   - CLI flat convention violated by `note send` subcommand
+   - `mail` as subcommand group is acceptable
+   - `category` column is legacy
+   - DB migration safety with DEFAULT 0
+   - Orchestrator integration was sound
+   - Tests deleted in revert (TDD needed)
+   - Section 7.2 injection policy already safe
+   - `from_issue_id` ergonomics
+   - SQLite partial indexes confirmed working
+
+4. **Spec Updates**: User approved all findings. I made edits to NOTES_SPEC.md:
+   - Changed status to "rev 2 — post-mortem applied"
+   - Added section 3.1 "Lessons from Previous Attempt"
+   - Added legacy fields note to section 5.1
+   - Tightened section 7.2 with implementation note
+   - Rewrote section 10 to flatten CLI (no `send` subcommand)
+   - Added migration safety notes to section 15.2
+   - Updated files-to-touch table
+   - Rewrote section 15.4 with TDD discipline and expanded steps
+   - Updated section 15.5 test plan with step cross-references
+
+5. **Branch and Issues**: User asked to cut a branch and create issues.
+   - Created `feat/notes-delivery` branch
+   - Created 7 hive issues with dependency chains:
+     - `w-ec019b4551d3`: DB schema + CRUD (no deps)
+     - `w-53aac51f9001`: CLI commands (depends on DB)
+     - `w-780ac05a1882`: Inbox rendering (depends on DB)
+     - `w-8ee1ecb10389`: Orchestrator injection (depends on DB + rendering)
+     - `w-c2769dd67c8d`: Completion gate (depends on DB + orchestrator)
+     - `w-39bc018c4ce3`: Prompt templates (no deps)
+     - `w-66ce2a161749`: Observability (depends on DB + CLI + orchestrator)
+
+6. **Worktree EPERM Fix**: Workers failed with `com.apple.provenance` causing `Operation not permitted` on `.git/refs/heads/agent/*.lock`. 
+   - Applied detached worktree two-step approach from reverted commit `500eeb3`
+   - Changed `git worktree add -b <branch> <dir> <base>` to `git worktree add --detach <dir> <base>` then `git checkout -b <branch>` inside worktree
+   - Tests passed, committed as `ec3c8d5`
+
+7. **Testing the fix**: User asked how to test the worktree fix. I explored:
+   - `chmod 555` on `.git/refs/heads` - too strict (blocks mkdir too)
+   - `chmod 555` on `.git/refs/heads/agent` - blocks .lock creation but checkout -b also fails
+   - `xattr -w com.apple.provenance` - doesn't reproduce from non-sandboxed process
+   - Found that `checkout -b` from inside worktree ALSO writes to main `.git/refs/heads/`
+   - User said they already sudo'd the xattr fix so it's not reproducible
+
+8. **User redirected**: Said the worktree testing is noisy, wants to focus on testing the notes system effectiveness for inter-agent communication.
+
+9. **Live Validation Runbook**: I proposed test levels and the user asked me to write a runbook and add it to the spec. Added section 18 with 5 test scenarios:
+   - 18.1: Smoke test (injection + ack gate)
+   - 18.2: Conflict prevention test
+   - 18.3: Issue-following reassignment test
+   - 18.4: Negative control (no false blocks)
+   - 18.5: Queen-driven live coordination
+
+10. **Starting workers**: User said to start the daemon. I:
+    - Reinstalled hive with `uv tool install --force --reinstall .`
+    - Started daemon
+    - Retried failed issues (`w-ec019b4551d3` and `w-39bc018c4ce3`)
+    - Both wave 1 workers started running
+
+11. **User noticed spec was reverted**: The NOTES_SPEC.md was modified externally (by user or linter), reverting some of my changes (sections 3.1, 10, 15.2, 15.4, 15.5 back to original). The system told me this was intentional.
+
+12. **Duplicate worker bug**: User noticed multiple workers on the same issue. I investigated:
+    - `w-780ac05a1882` had 2 workers: `worker-3b03433140c3` + `worker-1445ce490d13`
+    - `w-8ee1ecb10389` had 2 workers: `worker-5e388beed744` + `worker-12d0a13d4a69`
+    - Dependencies weren't being enforced (blocked issues being worked)
+    - Investigated the `_spawning_issues` TOCTOU guard and `claim_issue` atomic claim
+    - Was in the middle of investigating the root cause when summary was requested
+
+Key bugs found:
+1. TOCTOU race in issue claiming allowing duplicate workers
+2. Dependency gate not being enforced (blocked issues dispatched)
+
+Current state: 6 active agents, some on duplicate issues, investigating the orchestrator bug.
+
+Summary:
+1. Primary Request and Intent:
+   - Re-implement the Notes Delivery System (docs/NOTES_SPEC.md) for inter-agent communication in the Hive multi-agent orchestrator
+   - Learn from the previous failed attempt (22 commits reverted at `84b9647`) and update the spec with post-mortem lessons
+   - Create a feature branch and decompose the spec into worker-assignable issues with proper dependency ordering
+   - Fix the macOS `com.apple.provenance` worktree EPERM issue that blocks worker spawning
+   - Write a live validation runbook for testing notes system effectiveness
+   - Start the daemon and let workers implement the issues
+   - Investigate a bug where multiple workers are assigned to the same issue and dependency gates aren't enforced
+
+2. Key Technical Concepts:
+   - **Notes Delivery System**: Routed note delivery with `note_deliveries` table, agent-global vs issue-following vs materialized delivery types, `must_read` flag, completion gate blocking
+   - **macOS com.apple.provenance**: Extended attribute inherited from Claude Code sandbox that blocks git ref creation (`Operation not permitted` on `.lock` files in `.git/refs/heads/`)
+   - **Detached worktree two-step**: `git worktree add --detach` (no ref needed) then `git checkout -b` inside worktree (avoids ref-lock contention)
+   - **TOCTOU guard**: `_spawning_issues` set in orchestrator prevents duplicate spawn_worker calls during async yields
+   - **Dependency gate**: DB query in `get_ready_queue` and `claim_issue` that checks all blockers are `done/finalized/canceled` before allowing work
+   - **Flat CLI convention**: Hive CLI uses flat commands (`hive list`, not `hive issues list`). `hive mail` is the one accepted subcommand-group exception
+   - **TDD discipline**: Tests written before implementation for each step, each step committed independently on feature branch
+   - **Wave-based execution**: Issues ordered by dependencies — Wave 1 (DB + prompts), Wave 2 (CLI + rendering), Wave 3 (orchestrator), Wave 4 (gate), Wave 5 (observability)
+
+3. Files and Code Sections:
+   - **`docs/NOTES_SPEC.md`**
+     - The core specification for the notes delivery system
+     - Updated with post-mortem section 3.1 (lessons learned), flattened CLI in section 10, migration safety notes in 15.2, TDD discipline in 15.4, step-linked test plan in 15.5, and live validation runbook in section 18
+     - NOTE: The spec was externally modified/reverted — sections 3.1, 10, 15.2, 15.4, 15.5 may have been reverted to original content. Section 18 (runbook) may also have been removed.
+   
+   - **`src/hive/git.py`** — Worktree creation fix
+     - Changed from single-step `git worktree add -b` to two-step detached approach
+     - Committed as `ec3c8d5` on `feat/notes-delivery` branch
+     ```python
+     # Two-step worktree creation: detached first, then create branch.
+     max_retries = 4
+     for attempt in range(max_retries):
+         try:
+             subprocess.run(
+                 ["git", "worktree", "add", "--detach", str(worktree_dir), base_branch],
+                 cwd=str(project_path), check=True, capture_output=True, text=True,
+             )
+             break
+         except subprocess.CalledProcessError as e:
+             is_transient = "invalid reference" in e.stderr or "index.lock" in e.stderr
+             if is_transient and attempt < max_retries - 1:
+                 time.sleep(1.0 * (attempt + 1))
+                 continue
+             raise GitWorktreeError(f"Failed to create worktree: {e.stderr}") from e
+     
+     try:
+         subprocess.run(
+             ["git", "checkout", "-b", branch_name],
+             cwd=str(worktree_dir), check=True, capture_output=True, text=True,
+         )
+     except subprocess.CalledProcessError as e:
+         subprocess.run(["git", "worktree", "remove", "--force", str(worktree_dir)], capture_output=True, cwd=str(project_path))
+         raise GitWorktreeError(f"Failed to create branch in worktree: {e.stderr}") from e
+     return str(worktree_dir)
+     ```
+
+   - **`src/hive/orchestrator.py`** — Main loop and spawn logic
+     - Lines 684-702: Main loop fetches ready issues and spawns workers
+     - Lines 719-732: `spawn_worker` with `_spawning_issues` TOCTOU guard
+     - Lines 734-767: `_spawn_worker_inner` — creates agent, worktree, then atomic `claim_issue`
+     - Lines 840-865: `_gather_notes_for_worker` — current legacy notes injection
+     - Lines 1123-1138: Worker dispatch where `build_worker_prompt` is called with notes
+     - Bug found: duplicate workers assigned to same issue, dependency gate not enforced
+
+   - **`src/hive/db.py`** — Database layer
+     - `add_note()` at line 981: current signature without `must_read`
+     - `get_ready_queue()` at line 392: includes dependency check (`NOT EXISTS` subquery)
+     - `claim_issue()` at line 438: atomic claim with dependency re-check
+     - `_ensure_column()` at line 242: idempotent column addition pattern
+     - `transaction()` at line 230: context manager for DB transactions
+     - Notes table schema at line 134: no `must_read` column, no `note_deliveries` table yet
+
+   - **`src/hive/cli.py`** — CLI layer
+     - `add_note()` at line 935: current simple note creation
+     - Note parser at line 1777: basic `content` + `--issue` + `--category`
+     - `_error()` helper at line 31: standard error pattern
+     - `daemon.start()` at line 108-126: spawns hive binary via `subprocess.Popen`
+
+   - **`src/hive/prompts.py`** — Prompt building
+     - `build_worker_prompt()` at line 125: current signature without `inbox_section`
+     - Notes section building at line 166: simple `[category] content (from source)` format
+     - `read_notes_file()` and `remove_notes_file()`: JSONL file I/O
+
+   - **`src/hive/daemon.py`** — Daemon management
+     - `start()` at line 79: spawns `hive start --foreground` via `subprocess.Popen`
+     - Uses `shutil.which("hive")` to find the binary — this binary inherits provenance from Claude Code sandbox
+
+4. Errors and fixes:
+   - **macOS provenance EPERM on worktree creation**: Workers failed with `fatal: cannot lock ref ... Unable to create ... .lock: Operation not permitted`
+     - Fixed by switching to detached worktree + checkout -b two-step in `src/hive/git.py`
+     - User confirmed approach via question prompt
+   - **Issue creation with wrong tags**: `hive create --tags "python,db,large"` failed because `db` is not an allowed tag
+     - Fixed by using `sql` instead of `db`
+   - **Issue creation with wrong flag syntax**: `hive create --title X --description Y` failed — these are positional args not flags
+     - Fixed by checking `hive create --help` and using positional args
+   - **DB schema issue auto-claimed and failed**: Daemon was running and auto-picked up the issue before worktree fix was deployed, hit EPERM
+     - Fixed by stopping daemon, retrying issue, reinstalling hive, restarting daemon
+   - **Codex backend model mismatch**: Stale session used `claude-sonnet-4-5-20250929` which isn't supported on codex
+     - Resolved by daemon restart which cleaned up stale sessions
+   - **Spec reverted externally**: The NOTES_SPEC.md was modified outside the conversation, reverting post-mortem sections. System indicated this was intentional.
+   - **Duplicate workers on same issue (CURRENT BUG)**: Two workers assigned to `w-780ac05a1882` and two to `w-8ee1ecb10389`. Also dependency-blocked issues being dispatched. Under investigation.
+
+5. Problem Solving:
+   - **Solved**: Post-mortem analysis of previous notes implementation failure — identified 10 lessons, updated spec
+   - **Solved**: Worktree EPERM fix — detached worktree approach, committed and deployed
+   - **Solved**: Issue decomposition — 7 issues with proper dependency chain created
+   - **Solved**: Daemon startup with latest code — reinstalled from source, restarted
+   - **Ongoing**: Duplicate worker assignment bug — investigating TOCTOU race in orchestrator main loop and dependency gate enforcement. Found that `_spawning_issues` guard exists but may not be sufficient. `claim_issue` has atomic check but something is bypassing it.
+
+6. All user messages:
+   - "read @docs/NOTES_SPEC.md we're gonna try to implement this again take a look at the git commit history. when we tried to do this in the past we borked it and had to revert a lot of work can you iterate on the spec with any call outs/lessons learned from our hacking and reversion in git history?"
+   - "please update the spec with the notes from your post mortem. all of these seem reasonable. agree with 9 and 10"
+   - "okay -- let's cut a new branch and flesh out issues from the spec to delegate to workers"
+   - "yeah what happened initially; why were issues failing? dont kick off things yet answer my question"
+   - "how do we prevent this in the future? is there a way to create worktrees for workers to avoid this?" (selected "Detached worktree (Recommended)")
+   - "can you come up with a way we can test that this is effective and genuinely works?"
+   - "keep going" (after interrupted tool use)
+   - "i sudo'd and ran the xattr permission command you mentioned earlier, so it might not be reproducible right now"
+   - "okay this is all noisy anyways -- what i really want to test right now is how to test the notes system and see if it's actually effective at enabling inter-agent communication during execution"
+   - "yeah can you write this runbook and add it to the @docs/NOTES_SPEC.md at the bottom"
+   - "can can you run the tests mentioned in 1 and 2" (referring to runbook tests 18.1 and 18.2)
+   - "oh sorry; yeah let's start up the daemon. make sure we're using the latest hive code with recent fixes. let it implement and then we can test"
+   - "poke" (checking on progress)
+   - "/compact remember enough to be able to keep the hive operating"
+   - "we have workers multiple workers working on the same issue? seems like a bug"
+
+7. Pending Tasks:
+   - **Investigate and fix duplicate worker assignment bug** — multiple workers on same issue (`w-780ac05a1882`, `w-8ee1ecb10389`) and dependency gate not enforced
+   - **Monitor notes delivery implementation progress** — 7 issues created, workers running (with bugs)
+   - **Run live validation runbook tests** (18.1-18.5) once implementation lands
+   - **Verify the NOTES_SPEC.md state** — spec was externally modified, sections may have been reverted
+
+8. Current Work:
+   Investigating a bug where multiple workers are assigned to the same issue and dependency-blocked issues are being dispatched. Found:
+   - `w-780ac05a1882` (inbox rendering) has 2 workers: `worker-3b03433140c3` (codex/sonnet-4-5) + `worker-1445ce490d13` (claude/sonnet-4-6)
+   - `w-8ee1ecb10389` (orchestrator injection) has 2 workers: `worker-5e388beed744` (codex/sonnet-4-5) + `worker-12d0a13d4a69` (claude/sonnet-4-6)
+   - Issues `w-53aac51f9001` (CLI) and `w-8ee1ecb10389` (orchestrator) are being worked despite having unresolved `depends_on` dependencies
+   - Was examining the orchestrator main loop (`src/hive/orchestrator.py` lines 684-732), the `_spawning_issues` TOCTOU guard, and `claim_issue` atomic claim logic
+   - Was about to check whether two backends (claude WS + codex/opencode SSE) are running concurrently, each with their own dispatch loop, which would explain the duplicate assignments
+
+9. Optional Next Step:
+   Continue investigating the duplicate worker bug. The user said "we have workers multiple workers working on the same issue? seems like a bug" — I was examining the orchestrator's `_spawn_worker_inner` and backend configuration. The key clue is that duplicate workers have different models (`claude-sonnet-4-6` vs `claude-sonnet-4-5-20250929`) and different session ID formats (`ws-*` vs `019c*`), suggesting two backends are simultaneously spawning workers. Need to check if the orchestrator is running both a claude WS backend and a codex/opencode backend concurrently, each claiming and dispatching independently.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+<task-notification>
+<task-id>b2416fb</task-id>
+<tool-use-id>toolu_016C4ew44SqUfKRq9k7KaNtY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/tasks/b2416fb.output</output-file>
+<status>completed</status>
+<summary>Background command "Monitor progress (2 min wait)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-tau-projects-hive/tasks/b2416fb.output
+
+---
+
+[Request interrupted by user]
+
+---
+
+<task-notification>
+<task-id>b0da471</task-id>
+<tool-use-id>toolu_01CBSK2u7bQAdgvCN2czbQ1T</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/tasks/b0da471.output</output-file>
+<status>completed</status>
+<summary>Background command "Monitor progress (2 min wait)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-tau-projects-hive/tasks/b0da471.output
+
+---
+
+<task-notification>
+<task-id>b8e56eb</task-id>
+<tool-use-id>toolu_01Ko5cmR5zS5hTmMV5nWG1sx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/tasks/b8e56eb.output</output-file>
+<status>completed</status>
+<summary>Background command "Monitor last worker (another 2 min)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-tau-projects-hive/tasks/b8e56eb.output
+
+---
+
+<task-notification>
+<task-id>bd21aec</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/tasks/bd21aec.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for final merge (2 min)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-tau-projects-hive/tasks/bd21aec.output
+
+---
+
+<task-notification>
+<task-id>bd64987</task-id>
+<tool-use-id>toolu_016boQBchSbHfE1QoSj54wxB</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Monitor last worker (2 min wait)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+[Request interrupted by user]
+
+---
+
+can you run any of the testing on your own?
+
+---
+
+can we be relatively confident and just start using this in main?
+
+---
+
+no i mean if it works it works; there seems to be an uncommitted test so let's throw that in as wel
+
+---
+
+kill the current worker/test issue
