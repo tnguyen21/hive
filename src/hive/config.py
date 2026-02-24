@@ -46,6 +46,7 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "claude_ws_host": ("HIVE_CLAUDE_WS_HOST", str, "127.0.0.1"),
     "claude_ws_port": ("HIVE_CLAUDE_WS_PORT", int, 8765),
     "claude_ws_max_concurrent": ("HIVE_CLAUDE_WS_MAX_CONCURRENT", int, 3),
+    "claude_skip_permissions": ("HIVE_CLAUDE_SKIP_PERMISSIONS", bool, False),
     # Codex App Server backend settings
     "codex_cmd": ("HIVE_CODEX_CMD", str, "codex app-server --listen stdio://"),
     "codex_approval_policy": ("HIVE_CODEX_APPROVAL_POLICY", str, "never"),

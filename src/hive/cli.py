@@ -1481,8 +1481,12 @@ class HiveCLI:
 
     # ── Queen Bee TUI ─────────────────────────────────────────────────
 
-    def queen(self, *, backend: str | None = None):
+    def queen(self, *, backend: str | None = None, skip_permissions: bool = False):
         """Launch Queen Bee TUI using the configured backend."""
+        # Propagate to daemon and workers via env var (before daemon.start())
+        if skip_permissions:
+            os.environ["HIVE_CLAUDE_SKIP_PERMISSIONS"] = "1"
+
         daemon = self._make_daemon()
         daemon_status = daemon.status()
         if not daemon_status["running"]:
@@ -1497,7 +1501,7 @@ class HiveCLI:
 
         effective = backend or Config.BACKEND
         if effective == "claude":
-            self._queen_claude()
+            self._queen_claude(skip_permissions=skip_permissions)
         elif effective == "codex":
             self._queen_codex()
         else:
@@ -1614,7 +1618,7 @@ permission:
         state_file = self.project_path / ".hive" / "queen-state.md"
         state_file.unlink(missing_ok=True)
 
-    def _queen_claude(self):
+    def _queen_claude(self, *, skip_permissions: bool = False):
         """Launch Queen Bee as an interactive Claude CLI session."""
         # Claude CLI refuses to launch inside another Claude Code session.
         # Since the queen is a top-level interactive session (not nested), clear the guard.
@@ -1633,9 +1637,16 @@ permission:
             Config.DEFAULT_MODEL,
             "--append-system-prompt",
             short_prompt,
-            "--allowedTools",
-            "Bash(hive:*) Bash(git:*) Bash(ls:*) Bash(find:*) Bash(rg:*) Read Edit Write",
         ]
+        if skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        else:
+            cmd.extend(
+                [
+                    "--allowedTools",
+                    "Bash(hive:*) Bash(git:*) Bash(ls:*) Bash(find:*) Bash(rg:*) Read Edit Write",
+                ]
+            )
 
         print("Launching Queen Bee TUI (Claude CLI)...\n")
 
@@ -1911,6 +1922,12 @@ def main():
         default=None,
         help="Override backend (default: from config/HIVE_BACKEND)",
     )
+    queen_parser.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        default=False,
+        help="Pass --dangerously-skip-permissions to Claude CLI (queen and workers)",
+    )
 
     # setup/init command
     subparsers.add_parser("setup", help="Create default .hive.toml config")
@@ -2099,7 +2116,7 @@ def main():
             cli.stop(json_mode=json_mode)
 
         elif args.command == "queen":
-            cli.queen(backend=args.backend)
+            cli.queen(backend=args.backend, skip_permissions=args.dangerously_skip_permissions)
 
         elif args.command == "note":
             to_agents = getattr(args, "to_agents", None)

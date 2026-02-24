@@ -142,7 +142,8 @@ class ClaudeWSBackend(HiveBackend):
         async with self._spawn_semaphore:
             # Strip CLAUDECODE env var so workers don't think they're nested sessions
             spawn_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-            proc = await asyncio.create_subprocess_exec(
+
+            cli_args = [
                 claude_bin,
                 "--sdk-url",
                 f"ws://{self.host}:{self.port}/agent/{session_id}",
@@ -154,8 +155,13 @@ class ClaudeWSBackend(HiveBackend):
                 "--verbose",
                 "--model",
                 resolved_model,
-                "-p",
-                "",
+            ]
+            if Config.CLAUDE_SKIP_PERMISSIONS:
+                cli_args.append("--dangerously-skip-permissions")
+            cli_args.extend(["-p", ""])
+
+            proc = await asyncio.create_subprocess_exec(
+                *cli_args,
                 cwd=directory,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
