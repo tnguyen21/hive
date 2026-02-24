@@ -682,7 +682,9 @@ class Orchestrator:
                         continue
 
                 # Normal operation - check if we can spawn more agents
-                if len(self.active_agents) < Config.MAX_AGENTS:
+                # Count both registered agents and in-flight spawns to avoid
+                # transient over-spawning during concurrent teardown/spawn.
+                if len(self.active_agents) + len(self._spawning_issues) < Config.MAX_AGENTS:
                     # Get ready work
                     ready = self.db.get_ready_queue(project=self.project_name, limit=1)
 
@@ -1111,11 +1113,21 @@ class Orchestrator:
             logger.debug(f"Best-effort cleanup failed ({label}): {e}")
 
     async def _teardown_agent(self, agent: AgentIdentity, *, remove_worktree: bool = False):
-        """Best-effort cleanup for session, in-memory registration, and worktree."""
+        """Best-effort cleanup for session, in-memory registration, worktree, and DB state.
+
+        Always marks the agent row as terminal ('failed') so stale 'working'
+        rows don't accumulate across retries.  The merge processor stores its
+        own copy of worktree/branch in the merge_queue table, so clearing the
+        agent row's references is safe.
+        """
         await self._best_effort_cleanup("cleanup_session", self._cleanup_session(agent))
 
         if agent.agent_id in self.active_agents:
             self._unregister_agent(agent.agent_id)
+
+        # Mark agent as terminal in DB — prevents ghost 'working' rows from
+        # accumulating when agents are retried / agent-switched.
+        self._mark_agent_failed(agent.agent_id)
 
         if remove_worktree and agent.worktree:
             await self._best_effort_cleanup("remove_worktree", remove_worktree_async(agent.worktree))
@@ -1339,6 +1351,7 @@ class Orchestrator:
 
             post_action = PostAction.TEARDOWN
             decision: Optional[CompletionDecision] = None
+            remove_worktree_on_teardown = False
 
             try:
                 # Always clean up the result file if it exists
@@ -1369,6 +1382,7 @@ class Orchestrator:
                 match decision.transition:
                     case CompletionTransition.SKIP_TERMINAL_ISSUE:
                         status = decision.terminal_status or "unknown"
+                        remove_worktree_on_teardown = True
                         self.db.log_event(
                             agent.issue_id,
                             agent.agent_id,
@@ -1377,6 +1391,7 @@ class Orchestrator:
                         )
 
                     case CompletionTransition.FAIL_BUDGET:
+                        remove_worktree_on_teardown = True
                         self.db.log_event(
                             agent.issue_id,
                             agent.agent_id,
@@ -1387,6 +1402,7 @@ class Orchestrator:
                             await self._handle_agent_failure(agent, decision.result)
 
                     case CompletionTransition.FAIL_VALIDATION_NO_DIFF:
+                        remove_worktree_on_teardown = True
                         self.db.log_event(
                             agent.issue_id,
                             agent.agent_id,
@@ -1400,6 +1416,7 @@ class Orchestrator:
                             await self._handle_agent_failure(agent, decision.result)
 
                     case CompletionTransition.FAIL_ASSESSMENT:
+                        remove_worktree_on_teardown = True
                         if decision.result is not None:
                             await self._handle_agent_failure(agent, decision.result)
 
@@ -1469,7 +1486,7 @@ class Orchestrator:
                 )
             finally:
                 if post_action == PostAction.TEARDOWN:
-                    await self._teardown_agent(agent)
+                    await self._teardown_agent(agent, remove_worktree=remove_worktree_on_teardown)
 
     def _choose_escalation(self, issue_id: str) -> EscalationDecision:
         """Decide escalation tier based on anomaly/retry/switch counts."""
