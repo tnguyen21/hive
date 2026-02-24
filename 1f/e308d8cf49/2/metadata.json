@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "1fe308d8cf49",
+  "session_id": "96a4db26-66cd-40c7-9b73-c6d745ced79f",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-24T01:24:21.305619Z",
+  "branch": "fix/agent-db-leak-and-worktree-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/hive/orchestrator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "60c4f4f76bb2",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 172868,
+    "cache_read_tokens": 1872652,
+    "output_tokens": 2930,
+    "api_call_count": 31
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-24T01:24:20.917962Z",
+    "agent_lines": 0,
+    "human_added": 17,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-tau-projects-hive/96a4db26-66cd-40c7-9b73-c6d745ced79f.jsonl"
+}
