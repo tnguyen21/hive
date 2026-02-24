@@ -600,6 +600,8 @@ class Orchestrator:
     async def start(self):
         """Start the orchestrator."""
         self.running = True
+        self._budget_paused = False
+        self.db.log_system_event("daemon_started")
         self._setup_sse_handlers()
 
         # Start SSE/WS server in background FIRST — other init steps may need

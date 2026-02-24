@@ -690,10 +690,10 @@ class Database:
         return cursor.fetchone()[0]
 
     def get_run_token_total(self) -> int:
-        """Get total tokens used across all issues in this daemon run.
+        """Get total tokens used in the current daemon run.
 
-        Uses all tokens_used events in the DB. For per-run isolation, the
-        daemon should use a fresh DB or track a run_id boundary event.
+        Only counts tokens_used events after the most recent daemon_started
+        event, so restarting the daemon resets the budget.
         """
         cursor = self.conn.execute(
             """
@@ -703,6 +703,10 @@ class Database:
             )
             FROM events
             WHERE event_type = 'tokens_used' AND json_valid(detail)
+              AND created_at >= COALESCE(
+                (SELECT MAX(created_at) FROM events WHERE event_type = 'daemon_started'),
+                '1970-01-01'
+              )
             """
         )
         return cursor.fetchone()[0]
