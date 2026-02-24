@@ -767,6 +767,13 @@ class HiveCLI:
             daemon = self._make_daemon()
             daemon_status = daemon.status()
 
+            # Surface issues needing human attention (escalated/failed)
+            attention_cursor = self.db.conn.execute(
+                "SELECT id, title, status FROM issues WHERE project = ? AND status IN ('escalated', 'failed') ORDER BY updated_at DESC",
+                (self.project_name,),
+            )
+            attention_issues = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in attention_cursor.fetchall()]
+
             result = {
                 "project": self.project_name,
                 "issues": status_counts,
@@ -779,6 +786,7 @@ class HiveCLI:
                 "merge_blockers": merge_blockers,
                 "main_worktree": main_worktree,
                 "ready_issues": [{"id": i["id"], "title": i["title"]} for i in ready[:5]],
+                "attention_issues": attention_issues,
                 "daemon": {
                     "running": daemon_status.get("running", False),
                     "pid": daemon_status.get("pid"),
@@ -800,6 +808,7 @@ class HiveCLI:
                 "done",
                 "finalized",
                 "failed",
+                "escalated",
                 "blocked",
                 "canceled",
             ]:
@@ -829,6 +838,12 @@ class HiveCLI:
                 print(f"Merge queue: {', '.join(parts) if parts else 'empty'}")
             else:
                 print(f"Merge queue: {mq} pending")
+
+            attention = result.get("attention_issues", [])
+            if attention:
+                print(f"\nNeeds attention ({len(attention)}):")
+                for ai in attention[:10]:
+                    print(f"  {ai['id']:<16} [{ai['status']}] {ai['title'][:40]}")
 
             blockers = result.get("merge_blockers", [])
             if blockers:
