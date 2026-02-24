@@ -123,8 +123,8 @@ def test_cli_show_issue_json(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     data = json.loads(captured.out)
-    assert data["issue"]["id"] == issue_id
-    assert data["issue"]["title"] == "Test issue"
+    assert data["id"] == issue_id
+    assert data["title"] == "Test issue"
     assert "dependencies" in data
     assert "dependents" in data
 
@@ -236,8 +236,8 @@ def test_cli_show_format_json(temp_db, tmp_path, capsys):
     assert not captured_text.out.strip().startswith("{")
 
     # Verify json format output has correct structure
-    assert expected["issue"]["id"] == issue_id
-    assert expected["issue"]["title"] == "Format test"
+    assert expected["id"] == issue_id
+    assert expected["title"] == "Format test"
 
 
 def test_cli_show_format_json_matches_global_json_flag(temp_db, tmp_path, capsys):
@@ -252,7 +252,7 @@ def test_cli_show_format_json_matches_global_json_flag(temp_db, tmp_path, capsys
     # The dispatch logic: show_json = json_mode or show_format == "json"
     # So when show_format=="json", it must produce the same result.
     data = json.loads(out_via_method)
-    assert data["issue"]["title"] == "Comparison issue"
+    assert data["title"] == "Comparison issue"
     assert "dependencies" in data
     assert "dependents" in data
     assert "recent_events" in data

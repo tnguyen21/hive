@@ -85,7 +85,8 @@ class HiveCLI:
             )
 
             result = {
-                "issue_id": issue_id,
+                "id": issue_id,
+                "issue_id": issue_id,  # compat alias
                 "title": title,
                 "status": "open",
                 "tags": tag_list or [],
@@ -213,7 +214,7 @@ class HiveCLI:
             self._parse_tags(issue_dict)
 
             result = {
-                "issue": issue_dict,
+                **issue_dict,
                 "dependencies": dependencies,
                 "dependents": dependents,
                 "recent_events": events,
@@ -224,20 +225,19 @@ class HiveCLI:
         if json_mode:
             print(json.dumps(result, default=str))
         else:
-            issue = result["issue"]
-            print(f"\nIssue: {issue['id']}")
-            print(f"Title: {issue['title']}")
-            print(f"Status: {issue['status']}")
-            print(f"Priority: {issue['priority']}")
-            print(f"Type: {issue['type']}")
-            print(f"Assignee: {issue['assignee'] or 'None'}")
-            if issue.get("tags"):
-                print(f"Tags: {', '.join(issue['tags'])}")
-            if issue.get("model"):
-                print(f"Model: {issue['model']}")
-            print(f"Created: {issue['created_at']}")
-            if issue["description"]:
-                print(f"\nDescription:\n{issue['description']}")
+            print(f"\nIssue: {result['id']}")
+            print(f"Title: {result['title']}")
+            print(f"Status: {result['status']}")
+            print(f"Priority: {result['priority']}")
+            print(f"Type: {result['type']}")
+            print(f"Assignee: {result['assignee'] or 'None'}")
+            if result.get("tags"):
+                print(f"Tags: {', '.join(result['tags'])}")
+            if result.get("model"):
+                print(f"Model: {result['model']}")
+            print(f"Created: {result['created_at']}")
+            if result["description"]:
+                print(f"\nDescription:\n{result['description']}")
             deps = result.get("dependencies", [])
             if deps:
                 print("\nDepends on:")

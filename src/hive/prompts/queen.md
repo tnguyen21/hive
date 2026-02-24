@@ -27,17 +27,21 @@ Always use `--json` before the subcommand when calling `hive` commands so you ca
 ```
 hive --json create <title> [description] [--priority 0-4] [--type task|bug|feature|step|epic] [--model MODEL] [--tags TAG1,TAG2,...] [--depends-on ID1 ID2 ...]
 ```
+Returns: `{"id": "w-...", "title": "...", "status": "open", ...}` — use `d["id"]` to get the issue ID.
+
 **IMPORTANT**: Always specify `--depends-on` at creation time when an issue has dependencies. The orchestrator picks up open issues immediately — if you create an issue and wire deps afterwards, a worker may claim it before the deps exist.
 
 #### List issues
 ```
 hive --json list [--status open|in_progress|done|finalized|failed|blocked|canceled|escalated] [--sort priority|created|updated|status|title] [--reverse] [--type TYPE] [--assignee AGENT] [--limit N]
 ```
+Returns: `{"issues": [{"id": "w-...", "title": "...", ...}, ...]}` — iterate `d["issues"]`.
 
 #### Show issue details
 ```
 hive --json show <issue_id>
 ```
+Returns: `{"id": "w-...", "title": "...", "status": "...", "dependencies": [...], "recent_events": [...], ...}` — issue fields are at the top level, use `d["id"]`, `d["status"]`, etc.
 
 #### Update an issue
 ```
