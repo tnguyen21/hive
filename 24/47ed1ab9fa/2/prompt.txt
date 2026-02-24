@@ -1,0 +1,173 @@
+critical error; somehow we can create worktrees/agents for work when we flood the orchestrator with a bunch of issues at once. e.g. i created 18 issues and now we hav e50 agents. what?
+
+please help me fix this
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+import sys, json
+      d = json.load(sys.stdin)
+      print(f'Total working agents: {len(d[\"agents\"])}')
+      from collections import Counter
+      issues = Counter(a.get('current_issue_title','?') for a in d['agents'])
+      for title, count in issues.most_common():
+          print(f'  {count}x {title}')
+      ")
+  ⎿  Total working agents: 54
+       3x Client photos — placeholder gallery
+       3x Tech mobile UX — personal schedule view
+       3x Reports and analytics dashboard
+       3x Recurring appointments
+       3x Service add-ons — multi-service appointments
+       3x Break time and time-off blocks on schedule
+       3x Appointment notes and activity history
+       3x Delete and archive operations for techs and clients
+       3x Simulated SMS notifications on status changes
+       3x Commission tracking on daily board
+       3x Payment tracking and checkout flow
+       3x Conflict detection and availability checking
+       3x Booking flow creates real appointment
+       3x Calendar month view
+       3x Edit + reschedule appointments
+       3x Create appointment from dashboard
+       3x Client CRUD — add client form + edit client
+       3x Multi-day mock data seeding
+hive is active so you cna inspect its state via hive commands as well
+
+---
+
+[Request interrupted by user]
+
+---
+
+keep going
+
+---
+
+}
+
+⏺ Issues #5 and #6 are open (waiting on their dependency). The other 4 must have been picked up already. Let me check.
+
+⏺ Bash(hive --json show w-093d2b1a6898 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{d[\"id\"]}: {d[\"title\"]} —
+      {d[\"status\"]}' + (f' (agent:…)
+  ⎿  Error: Exit code 1
+     Traceback (most recent call last):
+       File "<string>", line 1, in <module>
+     KeyError: 'id'
+
+     Traceback (most recent call last):
+       File "<string>", line 1, in <module>
+     KeyError: 'id'
+
+⏺ Bash(hive --json show w-77d128c1c148 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{d[\"id\"]}: {d[\"title\"]} —
+      {d[\"status\"]}' + (f' (agent:…)
+  ⎿  Error: Sibling tool call errored
+
+⏺ Bash(hive --json show w-e44ac8a3e099 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{d[\"id\"]}: {d[\"title\"]} —
+      {d[\"status\"]}' + (f' (agent:…)
+  ⎿  Error: Sibling tool call errored
+
+⏺ Bash(hive --json show w-e7d1fd63a453 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{d[\"id\"]}: {d[\"title\"]} —
+      {d[\"status\"]}' + (f' (agent:…)
+  ⎿  Error: Sibling tool call errored
+
+can we check our prompt. queen seems ot confuse id with issue_id or whatever when creating issues
+
+---
+
+[Request interrupted by user]
+
+---
+
+maybe not creating just whaever this error is.
+
+---
+
+Status shows the daemon is running (pid 66617) but: 0 active agents, 0 ready queue, 6 open issues. The open issues aren't making it to the
+  ready queue. Let me dig into why.
+
+⏺ Bash(hive --json list --status open 2>&1)
+  ⎿  {"count": 6, "issues": [{"id": "w-093d2b1a6898", "title": "Extend mock store: updateAppointment + getAppointmentById", "description":
+      "Add a general-purpose appointment update action and a direct lookup helper to the mock store.\n\n## What to implement\n\n### 1. UPD
+     ATE_APPOINTMENT reducer action\nIn `apps/web/src/lib/mock-store.tsx`, add a new reducer case `UPDATE_APPOINTMENT` that accepts `{ id:
+     … +177 lines (ctrl+o to expand)
+
+⏺ Bash(hive --json agents 2>&1)
+  ⎿  {"count": 24, "agents": [{"id": "agent-85ab67fb3a6d", "name": "worker-efed1f28f87d", "status": "failed", "session_id": null, "worktre
+     e": "/Users/tau/projects/nailbook/.worktrees/worker-efed1f28f87d", "current_issue": null, "model": "claude-sonnet-4-6", "lease_expire
+     s_at": "2026-02-24 02:46:06", "last_progress_at": "2026-02-24 02:36:06", "metadata": "{\"issue_id\": \"w-e7d1fd63a453\"}", "created_a
+     … +81 lines (ctrl+o to expand)
+
+⏺ Bash(hive --json events --limit 20 2>&1)
+  ⎿  Error: Exit code 2
+     usage: hive [-h] [--db DB] [--project PROJECT] [--json] command ...
+     hive: error: argument command: invalid choice: 'events' (choose from create, list, show, review, update, cancel, finalize, retry, epic,
+     dep, agents, logs, merges, status, metrics, start, stop, queen, setup, init, note, mail, doctor, debug)
+
+     usage: hive [-h] [--db DB] [--project PROJECT] [--json] command ...
+     hive: error: argument command: invalid choice: 'events' (choose from create, list, show, review, update, cancel, finalize, retry, epic,
+     dep, agents, logs, merges, status, metrics, start, stop, queen, setup, init, note, mail, doctor, debug)
+
+⏺ Yikes — all 24 agents are failed. Every single worker that was spawned crashed. The 4 assigned issues are stuck on dead agents, and the 2
+  unassigned ones aren't being picked up because the ready queue is empty (the orchestrator likely stopped trying after repeated failures).
+
+  Let me check the orchestrator log to see what's actually killing these workers.
+
+---
+
+⏺ Bash(entire hooks claude-code session-start 2>&1 || true)
+  ⎿  failed to parse hook input: empty input
+
+⏺ OK, here's the diagnosis:
+
+  Root cause: .claude/CLAUDE.md contains the Queen Bee identity block that tells the model "You do NOT write code." Workers in worktrees
+  inherit this file, Claude Code auto-loads it, and every worker immediately bails without writing any output.
+
+  The fix:
+  1. Strip the queen block from .claude/CLAUDE.md
+  2. Reset the 6 stuck issues so workers can be dispatched again
+
+  Let me fix it.
+
+---
+
+[Request interrupted by user]
+
+---
+
+is this accurate; another agent is working on this right now
+
+---
+
+can we make a change to show issues wiht other statuses too (escalated, etc)
+
+---
+
+[Request interrupted by user]
+
+---
+
+in hive status
+
+---
+
+⎿  Preparing worktree (new branch 'debug-test-2')
+     HEAD is now at 0c27b92 fix: remove entire hooks from settings.json for worker compat
+
+⏺ Bash(cd /Users/tau/projects/nailbook/.worktrees/debug-worker && claude -p "Say hello and write the word 'test' to .hive-result.jsonl"
+      --output-format stream-json --m…)
+  ⎿  Error: Claude Code cannot be launched inside another Claude Code session.
+     Nested sessions share runtime resources and will crash all active sessions.
+     To bypass this check, unset the CLAUDECODE environment variable.
+
+⏺ Found it. Claude Code refuses to launch inside another Claude Code session — the CLAUDECODE env var is set. The daemon inherits this and
+  passes it to workers. Let me verify.
+
+for the claude backend we need to unset something
+
+---
+
+for the claude backend; is there a way we can pass forward the dangerously-skip-permissions flag when running hive queen
