@@ -36,7 +36,6 @@ def temp_db():
 def test_config_defaults():
     """Cost guardrail config fields have sensible defaults."""
     assert Config.MAX_TOKENS_PER_ISSUE == 200_000
-    assert Config.MAX_TOKENS_PER_RUN == 2_000_000
     assert Config.ANOMALY_WINDOW_MINUTES == 10
     assert Config.ANOMALY_FAILURE_THRESHOLD == 3
 
@@ -44,7 +43,6 @@ def test_config_defaults():
 def test_config_env_override(monkeypatch):
     """Cost guardrail config can be overridden via env vars."""
     monkeypatch.setenv("HIVE_MAX_TOKENS_PER_ISSUE", "500000")
-    monkeypatch.setenv("HIVE_MAX_TOKENS_PER_RUN", "5000000")
     monkeypatch.setenv("HIVE_ANOMALY_WINDOW_MINUTES", "5")
     monkeypatch.setenv("HIVE_ANOMALY_FAILURE_THRESHOLD", "10")
 
@@ -52,7 +50,6 @@ def test_config_env_override(monkeypatch):
     Config._apply_env()
 
     assert Config.MAX_TOKENS_PER_ISSUE == 500_000
-    assert Config.MAX_TOKENS_PER_RUN == 5_000_000
     assert Config.ANOMALY_WINDOW_MINUTES == 5
     assert Config.ANOMALY_FAILURE_THRESHOLD == 10
 
@@ -92,23 +89,6 @@ def test_get_issue_token_total_isolates_issues(temp_db):
 
     assert temp_db.get_issue_token_total(issue1) == 1500
     assert temp_db.get_issue_token_total(issue2) == 18000
-
-
-def test_get_run_token_total_empty(temp_db):
-    """Returns 0 when no token events exist."""
-    assert temp_db.get_run_token_total() == 0
-
-
-def test_get_run_token_total_sums_all(temp_db):
-    """Sums tokens across all issues."""
-    issue1 = temp_db.create_issue("Issue 1", project="test")
-    issue2 = temp_db.create_issue("Issue 2", project="test")
-    agent_id = temp_db.create_agent("worker-1")
-
-    temp_db.log_event(issue1, agent_id, "tokens_used", {"input_tokens": 1000, "output_tokens": 500})
-    temp_db.log_event(issue2, agent_id, "tokens_used", {"input_tokens": 2000, "output_tokens": 1000})
-
-    assert temp_db.get_run_token_total() == 4500
 
 
 def test_count_events_since_minutes(temp_db):
@@ -307,6 +287,3 @@ async def test_anomaly_detection_allows_normal_retry(temp_db):
 
     escalated_events = temp_db.get_events(issue_id=issue_id, event_type="escalated")
     assert len(escalated_events) == 0
-
-
-# ── Per-run budget cap (unit-level) ──────────────────────────────────────

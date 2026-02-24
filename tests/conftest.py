@@ -108,7 +108,6 @@ async def integration_orchestrator(fake_server, temp_db, temp_git_repo):
     - POLL_INTERVAL=0.1: fast polling
     - LEASE_DURATION=4: short enough for stall tests (check_interval=1)
     - MERGE_QUEUE_ENABLED=False: no merge processing (tested separately)
-    - MAX_TOKENS_PER_RUN=0: disable run budget (0 is falsy)
     - ANOMALY_FAILURE_THRESHOLD=0: disable anomaly detection (0 is falsy)
     """
     from hive.backends import OpenCodeClient
@@ -122,7 +121,6 @@ async def integration_orchestrator(fake_server, temp_db, temp_git_repo):
         patch.object(Config, "LEASE_EXTENSION", 2),
         patch.object(Config, "MERGE_QUEUE_ENABLED", False),
         patch.object(Config, "PERMISSION_SAFETY_NET_INTERVAL", 60),
-        patch.object(Config, "MAX_TOKENS_PER_RUN", 0),
         patch.object(Config, "ANOMALY_FAILURE_THRESHOLD", 0),
     ):
         async with OpenCodeClient(base_url=fake_server.url) as opencode_client:

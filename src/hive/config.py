@@ -37,7 +37,6 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "refinery_model": ("HIVE_REFINERY_MODEL", str, "claude-opus-4-6"),
     # Cost guardrails
     "max_tokens_per_issue": ("HIVE_MAX_TOKENS_PER_ISSUE", int, 200_000),
-    "max_tokens_per_run": ("HIVE_MAX_TOKENS_PER_RUN", int, 2_000_000),
     "anomaly_window_minutes": ("HIVE_ANOMALY_WINDOW_MINUTES", int, 10),
     "anomaly_failure_threshold": ("HIVE_ANOMALY_FAILURE_THRESHOLD", int, 3),
     # Backend selection

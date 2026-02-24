@@ -160,9 +160,6 @@ class Orchestrator:
         self._degraded_since: Optional[datetime] = None
         self._backoff_delay = 5  # Initial backoff delay in seconds
 
-        # Cost guardrails
-        self._budget_paused = False
-
         # Guard against TOCTOU race in main_loop: tracks issue_ids currently
         # being spawned. Prevents duplicate spawn_worker calls when
         # create_worktree_async yields control back to the event loop.
@@ -600,7 +597,6 @@ class Orchestrator:
     async def start(self):
         """Start the orchestrator."""
         self.running = True
-        self._budget_paused = False
         self.db.log_system_event("daemon_started")
         self._setup_sse_handlers()
 
@@ -668,20 +664,6 @@ class Orchestrator:
                         await asyncio.sleep(self._backoff_delay)
                         self._backoff_delay = min(60, self._backoff_delay * 2)  # Cap at 60 seconds
                         continue  # Skip scheduling and stall checks
-
-                # Per-run budget cap — stop spawning if total token spend exceeds limit
-                if Config.MAX_TOKENS_PER_RUN:
-                    run_tokens = self.db.get_run_token_total()
-                    if run_tokens > Config.MAX_TOKENS_PER_RUN:
-                        if not self._budget_paused:
-                            logger.warning(f"Run budget exceeded ({run_tokens} tokens). Pausing new spawns.")
-                            self._budget_paused = True
-                            self.db.log_system_event("budget_paused", {"total_tokens": run_tokens})
-                        await asyncio.sleep(Config.POLL_INTERVAL)
-                        # Still check for stalled agents even when budget-paused
-                        if self._opencode_healthy:
-                            await self.check_stalled_agents()
-                        continue
 
                 # Normal operation - check if we can spawn more agents
                 # Count both registered agents and in-flight spawns to avoid

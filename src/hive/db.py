@@ -689,28 +689,6 @@ class Database:
         )
         return cursor.fetchone()[0]
 
-    def get_run_token_total(self) -> int:
-        """Get total tokens used in the current daemon run.
-
-        Only counts tokens_used events after the most recent daemon_started
-        event, so restarting the daemon resets the budget.
-        """
-        cursor = self.conn.execute(
-            """
-            SELECT COALESCE(
-                SUM(json_extract(detail, '$.input_tokens') + json_extract(detail, '$.output_tokens')),
-                0
-            )
-            FROM events
-            WHERE event_type = 'tokens_used' AND json_valid(detail)
-              AND created_at >= COALESCE(
-                (SELECT MAX(created_at) FROM events WHERE event_type = 'daemon_started'),
-                '1970-01-01'
-              )
-            """
-        )
-        return cursor.fetchone()[0]
-
     def count_events_since_minutes(self, issue_id: str, event_type: str, minutes: int) -> int:
         """Count events of a given type for an issue within the last N minutes.
 
