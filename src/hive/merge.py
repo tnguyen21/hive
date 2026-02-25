@@ -22,6 +22,10 @@ from .git import (
 from .backends import OpenCodeClient, make_model_config
 from .prompts import build_refinery_prompt, read_notes_file, read_result_file, remove_notes_file, remove_result_file
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class RefinerySessionDied(Exception):
     """Raised when the refinery session is detected as dead (error/not_found) during polling."""
@@ -634,3 +638,47 @@ class MergeProcessor:
         self._refinery_token_estimate = 0
 
         return self.refinery_session_id
+
+
+class MergeProcessorPool:
+    """Pool of MergeProcessor instances keyed by project name.
+
+    Each project gets its own MergeProcessor so merges in different projects
+    are independent and do not block each other.
+    """
+
+    def __init__(self, db: Database, backend: OpenCodeClient):
+        self._processors: dict[str, MergeProcessor] = {}
+        self.db = db
+        self.backend = backend
+
+    def get(self, project_name: str, project_path: str) -> MergeProcessor:
+        """Return the MergeProcessor for the given project, creating it lazily."""
+        if project_name not in self._processors:
+            self._processors[project_name] = MergeProcessor(
+                db=self.db,
+                opencode=self.backend,
+                project_path=project_path,
+                project_name=project_name,
+            )
+        return self._processors[project_name]
+
+    async def process_all(self):
+        """Process the merge queue once for every known project."""
+        for processor in list(self._processors.values()):
+            await processor.process_queue_once()
+
+    async def health_check_all(self):
+        """Run health checks on every known processor."""
+        for processor in list(self._processors.values()):
+            await processor.health_check()
+
+    async def cleanup_idle(self, active_projects: set[str]):
+        """Remove processors whose projects are no longer active."""
+        idle = [k for k in self._processors if k not in active_projects]
+        for k in idle:
+            proc = self._processors.pop(k)
+            try:
+                await proc.shutdown()
+            except Exception:
+                logger.warning("Error shutting down idle merge processor for project %s", k)

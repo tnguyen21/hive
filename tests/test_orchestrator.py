@@ -658,10 +658,9 @@ async def test_merge_processor_loop_health_check(temp_db, tmp_path):
         project_name="test-project",
     )
 
-    # Mock merge processor and config
-    orch.merge_processor = AsyncMock()
-    orch.merge_processor.process_queue_once = AsyncMock()
-    orch.merge_processor.health_check = AsyncMock()
+    # Mock pool methods (the loop now delegates to the pool)
+    orch.merge_pool.process_all = AsyncMock()
+    orch.merge_pool.health_check_all = AsyncMock()
 
     with patch("hive.orchestrator.Config") as mock_config:
         mock_config.MERGE_QUEUE_ENABLED = True
@@ -688,7 +687,7 @@ async def test_merge_processor_loop_health_check(temp_db, tmp_path):
 
     # Verify health check was called at least once
     # (exact count depends on timing, but should be at least 1)
-    assert orch.merge_processor.health_check.call_count >= 1
+    assert orch.merge_pool.health_check_all.call_count >= 1
 
 
 # --- Notes harvest/inject tests ---

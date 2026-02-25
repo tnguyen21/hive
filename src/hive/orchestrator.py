@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Dict, List, Optional
 from .config import Config, WORKER_PERMISSIONS
 from .db import Database
 from .git import create_worktree_async, get_commit_hash, has_diff_from_main_async, remove_worktree_async
-from .merge import MergeProcessor
+from .merge import MergeProcessorPool
 from .utils import generate_id, AgentIdentity, CompletionResult
 from .backends import OpenCodeClient, make_model_config
 from .prompts import (
@@ -119,13 +119,12 @@ class Orchestrator:
         self.project_path = Path(project_path).resolve()
         self.project_name = project_name
 
-        # Merge processor
-        self.merge_processor = MergeProcessor(
-            db=db,
-            opencode=opencode_client,
-            project_path=project_path,
-            project_name=project_name,
-        )
+        # Merge processor pool (one processor per project, lazy-created)
+        self.merge_pool = MergeProcessorPool(db=db, backend=opencode_client)
+
+        # Backwards-compat alias: ensure the pool has a processor for the
+        # default project so callers that used merge_processor directly still work.
+        self.merge_processor = self.merge_pool.get(project_name, project_path)
 
         # Track active agents
         self.active_agents: Dict[str, AgentIdentity] = {}
@@ -1885,13 +1884,13 @@ class Orchestrator:
         while self.running:
             try:
                 if Config.MERGE_QUEUE_ENABLED:
-                    await self.merge_processor.process_queue_once()
+                    await self.merge_pool.process_all()
 
                 # Health check every 6 iterations (~60s at 10s poll interval)
                 health_check_counter += 1
                 if health_check_counter >= 6:
                     health_check_counter = 0
-                    await self.merge_processor.health_check()
+                    await self.merge_pool.health_check_all()
 
             except Exception as e:
                 logger.error(f"Error in merge processor: {e}")
