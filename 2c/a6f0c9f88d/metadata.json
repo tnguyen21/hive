@@ -6,9 +6,7 @@
   "checkpoints_count": 1,
   "files_touched": [
     "docs/REFINERY_FIRST_MERGE_SPEC.md",
-    "docs/codebase_review.md",
-    "src/hive/backends/backend_claude.py",
-    "src/hive/config.py"
+    "docs/codebase_review.md"
   ],
   "sessions": [
     {
