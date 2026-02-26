@@ -21,35 +21,282 @@ from .git import GitWorktreeError, get_worktree_dirty_status
 from .utils import detect_project
 
 
-def cli_command(fn):
-    """Decorator that adds try/except error handling and json_mode JSON output to CLI methods.
+def cli_command(*, formatter):
+    """Decorator that separates data-gathering from output formatting.
 
-    Decorated methods should:
-    - Return the JSON-serializable result dict on success.
-    - Handle human-readable output internally, guarded by ``if not json_mode:``.
-    - Raise exceptions for unexpected failures (decorator catches them).
-    - May still call ``self._error()`` for intentional validation exits.
+    Decorated methods return a JSON-serialisable dict — nothing else.
+    The decorator routes the result to either ``json.dumps`` (when ``--json``
+    is active) or the provided *formatter* function (for human-readable text).
 
-    On success with json_mode=True the decorator prints ``json.dumps(result, default=str)``.
-    On any uncaught Exception the decorator prints the error (JSON or stderr) and exits 1.
+    ``json_mode`` is popped from kwargs by the decorator so the wrapped
+    method never sees it.
     """
 
-    @wraps(fn)
-    def wrapper(self, *args, **kwargs):
-        json_mode = kwargs.get("json_mode", False)
-        try:
-            result = fn(self, *args, **kwargs)
-            if json_mode and result is not None:
-                print(json.dumps(result, default=str))
-            return result
-        except Exception as e:
-            if json_mode:
-                print(json.dumps({"error": str(e)}))
-            else:
-                print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            json_mode = kwargs.pop("json_mode", False)
+            try:
+                result = fn(self, *args, **kwargs)
+                if result is not None:
+                    if json_mode:
+                        print(json.dumps(result, default=str))
+                    else:
+                        output = formatter(result)
+                        if output:
+                            print(output)
+                return result
+            except Exception as e:
+                if json_mode:
+                    print(json.dumps({"error": str(e)}))
+                else:
+                    print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
 
-    return wrapper
+        return wrapper
+
+    return decorator
+
+
+# ── Formatter functions ──────────────────────────────────────────────
+#
+# Each takes a result dict and returns a string (or empty string to
+# suppress output).  The @cli_command decorator prints the return value.
+
+
+def _fmt_message(result):
+    """Generic: print result['message']."""
+    return result.get("message", "")
+
+
+def _fmt_create(result):
+    lines = [f"Created issue: {result['id']}"]
+    lines.append(f"  Title: {result['title']}")
+    lines.append(f"  Priority: {result['priority']}")
+    if result.get("tags"):
+        lines.append(f"  Tags: {', '.join(result['tags'])}")
+    if result.get("depends_on"):
+        lines.append(f"  Depends on: {', '.join(result['depends_on'])}")
+    return "\n".join(lines)
+
+
+def _fmt_list_issues(result):
+    issues = result.get("issues", [])
+    if not issues:
+        return "No issues found.\n  Create one with: hive create 'title' 'description'"
+    lines = [f"\n{'ID':<12} {'Status':<12} {'Pri':<4} {'Type':<10} {'Title':<40}"]
+    lines.append("-" * 80)
+    for issue in issues:
+        itype = issue.get("type", "")[:10]
+        lines.append(f"{issue['id']:<12} {issue['status']:<12} {issue['priority']:<4} {itype:<10} {issue['title'][:40]}")
+    lines.append(f"\nTotal: {len(issues)} issues")
+    return "\n".join(lines)
+
+
+def _fmt_show(result):
+    lines = [f"\nIssue: {result['id']}"]
+    lines.append(f"Title: {result['title']}")
+    lines.append(f"Status: {result['status']}")
+    lines.append(f"Priority: {result['priority']}")
+    lines.append(f"Type: {result['type']}")
+    lines.append(f"Assignee: {result['assignee'] or 'None'}")
+    if result.get("tags"):
+        lines.append(f"Tags: {', '.join(result['tags'])}")
+    if result.get("model"):
+        lines.append(f"Model: {result['model']}")
+    lines.append(f"Created: {result['created_at']}")
+    if result.get("description"):
+        lines.append(f"\nDescription:\n{result['description']}")
+    deps = result.get("dependencies", [])
+    if deps:
+        lines.append("\nDepends on:")
+        for dep in deps:
+            lines.append(f"  - {dep['id']}: {dep['title']} ({dep['status']})")
+    events = result.get("recent_events", [])
+    if events:
+        lines.append(f"\nEvents ({len(events)}):")
+        for event in events[:10]:
+            lines.append(f"  [{event['created_at']}] {event['event_type']}")
+            if event["detail"]:
+                detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+                for key, value in detail.items():
+                    lines.append(f"    {key}: {value}")
+    return "\n".join(lines)
+
+
+def _fmt_review(result):
+    rows = result.get("review", [])
+    if not rows:
+        return "No done issues pending review."
+    # Single-issue review: detailed view
+    if result.get("detail"):
+        item = rows[0]
+        merge_state = item.get("merge_status") or "-"
+        assignee = item.get("assignee") or "-"
+        lines = [f"\nReview: {item['id']}"]
+        lines.append(f"  Title:    {item['title']}")
+        lines.append(f"  Status:   {item.get('status', '-')}")
+        lines.append(f"  Assignee: {assignee}")
+        lines.append(f"  Merge:    {merge_state}")
+        lines.append(f"  Updated:  {item.get('updated_at', '-')}")
+        if item.get("description"):
+            lines.append(f"\n  Description:\n    {item['description']}")
+        lines.append("\n  Commands:")
+        if item.get("diff_hint"):
+            lines.append(f"    Diff:     {item['diff_hint']}")
+        if item.get("worktree_hint"):
+            lines.append(f"    Worktree: {item['worktree_hint']}")
+        if item.get("merge_hint"):
+            lines.append(f"    Merge:    {item['merge_hint']}")
+        lines.append(f"    Finalize: {item['finalize_hint']}")
+        return "\n".join(lines)
+    # Multi-issue listing
+    lines = [f"\n{'Issue':<14} {'Merge':<10} {'Assignee':<16} {'Title':<40}"]
+    lines.append("-" * 88)
+    for item in rows:
+        merge_state = item.get("merge_status") or "-"
+        assignee = item.get("assignee") or "-"
+        lines.append(f"{item['id']:<14} {merge_state:<10} {assignee:<16} {item['title'][:40]}")
+    lines.append(f"\nTotal: {len(rows)} issue(s) pending finalization")
+    lines.append("\nPer-issue review commands:")
+    for item in rows:
+        lines.append(f"\n{item['id']}:")
+        if item.get("diff_hint"):
+            lines.append(f"  Diff:     {item['diff_hint']}")
+        if item.get("worktree_hint"):
+            lines.append(f"  Worktree: {item['worktree_hint']}")
+        if item.get("merge_hint"):
+            lines.append(f"  Merge:    {item['merge_hint']}")
+        lines.append(f"  Finalize: {item['finalize_hint']}")
+    return "\n".join(lines)
+
+
+def _fmt_epic(result):
+    lines = [result.get("message", f"Created epic {result.get('epic_id', '')}")]
+    for step in result.get("steps", []):
+        lines.append(f"  Step {step['index']}: {step['id']} - {step['title']}")
+    return "\n".join(lines)
+
+
+def _fmt_add_note(result):
+    return f"Added note #{result['note_id']} [{result.get('category', 'discovery')}]"
+
+
+def _fmt_note_with_targets(result):
+    return f"Sent note #{result['note_id']} with {result['delivery_count']} delivery(ies)"
+
+
+def _fmt_status(result):
+    lines = ["\n=== Hive Status ==="]
+    lines.append(f"\nProject: {result.get('project', '')}")
+    lines.append("\nIssues:")
+    for s in ["open", "in_progress", "done", "finalized", "failed", "escalated", "blocked", "canceled"]:
+        count = result.get("issues", {}).get(s, 0)
+        if count > 0:
+            lines.append(f"  {s}: {count}")
+    lines.append(f"\nActive workers: {result.get('active_agents', 0)}/{Config.MAX_AGENTS}")
+    for w in result.get("workers", []):
+        title = (w.get("issue_title") or "")[:40]
+        lines.append(f"  {w.get('name', ''):<24} {w.get('issue_id', ''):<16} {title}")
+
+    refinery = result.get("refinery", {})
+    if refinery.get("active"):
+        rtitle = (refinery.get("issue_title") or "")[:40]
+        lines.append(f"\nRefinery: reviewing {refinery.get('issue_id', '')} ({rtitle})")
+    else:
+        lines.append("\nRefinery: idle")
+
+    lines.append(f"Ready queue: {result.get('ready_queue', 0)} issues")
+    mq = result.get("merge_queue", {})
+    if isinstance(mq, dict):
+        parts = []
+        for k in ["queued", "running", "merged", "failed"]:
+            v = mq.get(k, 0)
+            if v > 0:
+                parts.append(f"{v} {k}")
+        lines.append(f"Merge queue: {', '.join(parts) if parts else 'empty'}")
+    else:
+        lines.append(f"Merge queue: {mq} pending")
+
+    attention = result.get("attention_issues", [])
+    if attention:
+        lines.append(f"\nNeeds attention ({len(attention)}):")
+        for ai in attention[:10]:
+            lines.append(f"  {ai['id']:<16} [{ai['status']}] {ai['title'][:40]}")
+
+    blockers = result.get("merge_blockers", [])
+    if blockers:
+        lines.append("\nMerge blockers:")
+        for blocker in blockers:
+            lines.append(f"  - {blocker.get('message', blocker.get('type', 'unknown blocker'))}")
+            changes = blocker.get("changes") or []
+            for line in changes[:5]:
+                lines.append(f"    {line}")
+
+    daemon_info = result.get("daemon", {})
+    if daemon_info.get("running"):
+        lines.append(f"\nDaemon: running (PID {daemon_info.get('pid')})")
+        if daemon_info.get("log_file"):
+            lines.append(f"  Log: {daemon_info.get('log_file')}")
+    else:
+        lines.append("\nDaemon: not running")
+
+    total = result.get("total_issues", 0)
+    if total == 0:
+        lines.append("\n  No issues yet. Create one with: hive create 'title' 'description'")
+    return "\n".join(lines)
+
+
+def _fmt_list_agents(result):
+    # Single-agent detail mode
+    if "agents" not in result:
+        lines = [f"\nAgent: {result.get('id', '')}"]
+        lines.append(f"Name: {result.get('name', '')}")
+        lines.append(f"Status: {result.get('status', '')}")
+        if result.get("current_issue"):
+            lines.append(f"Current issue: {result['current_issue']}")
+        events = result.get("recent_events", [])
+        if events:
+            lines.append(f"\nRecent events ({len(events)}):")
+            for event in events[:5]:
+                lines.append(f"  [{event['created_at']}] {event['event_type']}")
+        return "\n".join(lines)
+    # List mode
+    agents = result.get("agents", [])
+    if not agents:
+        return "No agents found."
+    lines = [f"\n{'ID':<16} {'Name':<16} {'Status':<10} {'Current Issue':<30}"]
+    lines.append("-" * 72)
+    for agent in agents:
+        issue_title = agent.get("current_issue_title", agent.get("current_issue", "")) or "-"
+        lines.append(f"{agent['id']:<16} {agent['name']:<16} {agent['status']:<10} {str(issue_title)[:30]}")
+    return "\n".join(lines)
+
+
+def _fmt_mail_inbox(result):
+    deliveries = result.get("deliveries", [])
+    if not deliveries:
+        return "No deliveries found."
+    header = f"{'ID':<6} {'Note':<6} {'Status':<10} {'Must Read':<10} {'From':<16} Content"
+    lines = [header, "-" * len(header)]
+    for d in deliveries:
+        content_preview = (d.get("content") or "")[:40]
+        must_read_label = "yes" if d.get("must_read") else "no"
+        from_agent = d.get("from_agent_id") or "-"
+        lines.append(f"{d['id']:<6} {d['note_id']:<6} {d['status']:<10} {must_read_label:<10} {from_agent:<16} {content_preview}")
+    return "\n".join(lines)
+
+
+def _fmt_mail_read(result):
+    if result.get("updated"):
+        return f"Delivery #{result['delivery_id']} marked read."
+    return f"Delivery #{result['delivery_id']} unchanged (already read or not found)."
+
+
+def _fmt_mail_ack(result):
+    if result.get("updated"):
+        return f"Delivery #{result['delivery_id']} acked."
+    return f"Delivery #{result['delivery_id']} unchanged (not must_read, already acked, or not found)."
 
 
 class HiveCLI:
@@ -90,7 +337,7 @@ class HiveCLI:
 
     # ── Issue management ─────────────────────────────────────────────
 
-    @cli_command
+    @cli_command(formatter=_fmt_create)
     def create(
         self,
         title: str,
@@ -100,8 +347,6 @@ class HiveCLI:
         model: Optional[str] = None,
         tags: Optional[str] = None,
         depends_on: Optional[list] = None,
-        *,
-        json_mode: bool = False,
     ):
         """Create a new issue."""
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
@@ -116,29 +361,20 @@ class HiveCLI:
             depends_on=depends_on,
         )
 
-        result = {
+        return {
             "id": issue_id,
             "issue_id": issue_id,  # compat alias
             "title": title,
+            "priority": priority,
             "status": "open",
             "tags": tag_list or [],
             "depends_on": depends_on or [],
             "message": f"Created issue {issue_id}: {title}",
         }
 
-        if not json_mode:
-            print(f"Created issue: {result['issue_id']}")
-            print(f"  Title: {title}")
-            print(f"  Priority: {priority}")
-            if result.get("tags"):
-                print(f"  Tags: {', '.join(result['tags'])}")
-            if depends_on:
-                print(f"  Depends on: {', '.join(depends_on)}")
-        return result
-
     _DONE_STATUSES = ("done", "finalized", "canceled")
 
-    @cli_command
+    @cli_command(formatter=_fmt_list_issues)
     def list_issues(
         self,
         status: Optional[str] = None,
@@ -148,8 +384,6 @@ class HiveCLI:
         assignee: Optional[str] = None,
         limit: int = 50,
         todo: bool = False,
-        *,
-        json_mode: bool = False,
     ):
         """List all issues."""
         query = "SELECT * FROM issues WHERE project = ?"
@@ -184,23 +418,10 @@ class HiveCLI:
             self._parse_tags(issue_dict)
             issues.append(issue_dict)
 
-        result = {"count": len(issues), "issues": issues}
+        return {"count": len(issues), "issues": issues}
 
-        if not json_mode:
-            if not issues:
-                print("No issues found.")
-                print("  Create one with: hive create 'title' 'description'")
-                return result
-            print(f"\n{'ID':<12} {'Status':<12} {'Pri':<4} {'Type':<10} {'Title':<40}")
-            print("-" * 80)
-            for issue in issues:
-                itype = issue.get("type", "")[:10]
-                print(f"{issue['id']:<12} {issue['status']:<12} {issue['priority']:<4} {itype:<10} {issue['title'][:40]}")
-            print(f"\nTotal: {len(issues)} issues")
-        return result
-
-    @cli_command
-    def show(self, issue_id: str, *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_show)
+    def show(self, issue_id: str):
         """Show issue details and events."""
         issue = self.db.get_issue(issue_id)
         if not issue:
@@ -237,44 +458,14 @@ class HiveCLI:
         issue_dict = dict(issue)
         self._parse_tags(issue_dict)
 
-        result = {
+        return {
             **issue_dict,
             "dependencies": dependencies,
             "dependents": dependents,
             "recent_events": events,
         }
 
-        if not json_mode:
-            print(f"\nIssue: {result['id']}")
-            print(f"Title: {result['title']}")
-            print(f"Status: {result['status']}")
-            print(f"Priority: {result['priority']}")
-            print(f"Type: {result['type']}")
-            print(f"Assignee: {result['assignee'] or 'None'}")
-            if result.get("tags"):
-                print(f"Tags: {', '.join(result['tags'])}")
-            if result.get("model"):
-                print(f"Model: {result['model']}")
-            print(f"Created: {result['created_at']}")
-            if result["description"]:
-                print(f"\nDescription:\n{result['description']}")
-            deps = result.get("dependencies", [])
-            if deps:
-                print("\nDepends on:")
-                for dep in deps:
-                    print(f"  - {dep['id']}: {dep['title']} ({dep['status']})")
-            events = result.get("recent_events", [])
-            if events:
-                print(f"\nEvents ({len(events)}):")
-                for event in events[:10]:
-                    print(f"  [{event['created_at']}] {event['event_type']}")
-                    if event["detail"]:
-                        detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
-                        for key, value in detail.items():
-                            print(f"    {key}: {value}")
-        return result
-
-    @cli_command
+    @cli_command(formatter=_fmt_message)
     def update(
         self,
         issue_id: str,
@@ -284,8 +475,6 @@ class HiveCLI:
         status: Optional[str] = None,
         model: Optional[str] = None,
         tags: Optional[str] = None,
-        *,
-        json_mode: bool = False,
     ):
         """Update an issue."""
         issue = self.db.get_issue(issue_id)
@@ -346,14 +535,10 @@ class HiveCLI:
                 },
             )
 
-        result = {"issue_id": issue_id, "message": f"Updated issue {issue_id}"}
+        return {"issue_id": issue_id, "message": f"Updated issue {issue_id}"}
 
-        if not json_mode:
-            print(result.get("message", f"Updated issue {issue_id}"))
-        return result
-
-    @cli_command
-    def cancel(self, issue_id: str, reason: str = "", *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_message)
+    def cancel(self, issue_id: str, reason: str = ""):
         """Cancel an issue."""
         issue = self.db.get_issue(issue_id)
         if not issue:
@@ -362,19 +547,15 @@ class HiveCLI:
         self.db.update_issue_status(issue_id, "canceled")
         self.db.log_event(issue_id, None, "canceled", {"reason": reason})
 
-        result = {
+        return {
             "issue_id": issue_id,
             "status": "canceled",
             "reason": reason,
             "message": f"Canceled issue {issue_id}",
         }
 
-        if not json_mode:
-            print(result.get("message", f"Canceled issue {issue_id}"))
-        return result
-
-    @cli_command
-    def finalize(self, issue_id: str, resolution: str = "", *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_message)
+    def finalize(self, issue_id: str, resolution: str = ""):
         """Finalize/close an issue."""
         issue = self.db.get_issue(issue_id)
         if not issue:
@@ -394,19 +575,15 @@ class HiveCLI:
         self.db.conn.commit()
         self.db.log_event(issue_id, None, "finalized", {"resolution": resolution})
 
-        result = {
+        return {
             "issue_id": issue_id,
             "status": "finalized",
             "resolution": resolution,
             "message": f"Finalized issue {issue_id}",
         }
 
-        if not json_mode:
-            print(result.get("message", f"Finalized issue {issue_id}"))
-        return result
-
-    @cli_command
-    def review(self, issue_id: str | None = None, limit: int = 20, *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_review)
+    def review(self, issue_id: str | None = None, limit: int = 20):
         """List done issues that are pending finalization with review hints.
 
         If issue_id is given, show review info for that specific issue regardless of status.
@@ -492,59 +669,10 @@ class HiveCLI:
         if issue_id and not rows:
             raise ValueError(f"Issue {issue_id} not found in project {self.project_name}")
 
-        result = {"count": len(rows), "review": rows}
+        return {"count": len(rows), "detail": bool(issue_id), "review": rows}
 
-        if not json_mode:
-            if not rows:
-                print("No done issues pending review.")
-                return result
-
-            # Single-issue review: detailed view
-            if issue_id:
-                item = rows[0]
-                merge_state = item.get("merge_status") or "-"
-                assignee = item.get("assignee") or "-"
-                print(f"\nReview: {item['id']}")
-                print(f"  Title:    {item['title']}")
-                print(f"  Status:   {item.get('status', '-')}")
-                print(f"  Assignee: {assignee}")
-                print(f"  Merge:    {merge_state}")
-                print(f"  Updated:  {item.get('updated_at', '-')}")
-                if item.get("description"):
-                    print(f"\n  Description:\n    {item['description']}")
-                print("\n  Commands:")
-                if item.get("diff_hint"):
-                    print(f"    Diff:     {item['diff_hint']}")
-                if item.get("worktree_hint"):
-                    print(f"    Worktree: {item['worktree_hint']}")
-                if item.get("merge_hint"):
-                    print(f"    Merge:    {item['merge_hint']}")
-                print(f"    Finalize: {item['finalize_hint']}")
-                return result
-
-            # Multi-issue listing
-            print(f"\n{'Issue':<14} {'Merge':<10} {'Assignee':<16} {'Title':<40}")
-            print("-" * 88)
-            for item in rows:
-                merge_state = item.get("merge_status") or "-"
-                assignee = item.get("assignee") or "-"
-                print(f"{item['id']:<14} {merge_state:<10} {assignee:<16} {item['title'][:40]}")
-
-            print(f"\nTotal: {len(rows)} issue(s) pending finalization")
-            print("\nPer-issue review commands:")
-            for item in rows:
-                print(f"\n{item['id']}:")
-                if item.get("diff_hint"):
-                    print(f"  Diff:     {item['diff_hint']}")
-                if item.get("worktree_hint"):
-                    print(f"  Worktree: {item['worktree_hint']}")
-                if item.get("merge_hint"):
-                    print(f"  Merge:    {item['merge_hint']}")
-                print(f"  Finalize: {item['finalize_hint']}")
-        return result
-
-    @cli_command
-    def retry(self, issue_id: str, notes: str = "", *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_message)
+    def retry(self, issue_id: str, notes: str = ""):
         """Retry a failed/blocked issue."""
         issue = self.db.get_issue(issue_id)
         if not issue:
@@ -563,18 +691,14 @@ class HiveCLI:
 
         self.db.log_event(issue_id, None, "manual_retry", {"notes": notes})
 
-        result = {
+        return {
             "issue_id": issue_id,
             "status": "open",
             "notes": notes,
             "message": f"Reset issue {issue_id} to 'open' for retry",
         }
 
-        if not json_mode:
-            print(result.get("message", f"Retrying issue {issue_id}"))
-        return result
-
-    @cli_command
+    @cli_command(formatter=_fmt_epic)
     def epic(
         self,
         title: str,
@@ -582,8 +706,6 @@ class HiveCLI:
         steps_json: str = "[]",
         model: Optional[str] = None,
         tags: Optional[str] = None,
-        *,
-        json_mode: bool = False,
     ):
         """Create a epic (multi-step workflow)."""
         try:
@@ -627,7 +749,7 @@ class HiveCLI:
                 if isinstance(dep_idx, int) and dep_idx in step_map:
                     self.db.add_dependency(step_map[i], step_map[dep_idx], "blocks")
 
-        result = {
+        return {
             "epic_id": parent_id,
             "title": title,
             "steps_count": len(steps),
@@ -635,20 +757,12 @@ class HiveCLI:
             "message": f"Created epic {parent_id} with {len(steps)} steps",
         }
 
-        if not json_mode:
-            print(result.get("message", f"Created epic {result.get('epic_id', '')}"))
-            for step in result.get("steps", []):
-                print(f"  Step {step['index']}: {step['id']} - {step['title']}")
-        return result
-
-    @cli_command
+    @cli_command(formatter=_fmt_message)
     def dep_add(
         self,
         issue_id: str,
         depends_on: str,
         dep_type: str = "blocks",
-        *,
-        json_mode: bool = False,
     ):
         """Add a dependency between issues."""
         # Verify both issues exist
@@ -659,19 +773,15 @@ class HiveCLI:
 
         self.db.add_dependency(issue_id, depends_on, dep_type)
 
-        result = {
+        return {
             "issue_id": issue_id,
             "depends_on": depends_on,
             "type": dep_type,
             "message": f"Added {dep_type} dependency: {issue_id} depends on {depends_on}",
         }
 
-        if not json_mode:
-            print(result.get("message", "Added dependency"))
-        return result
-
-    @cli_command
-    def dep_remove(self, issue_id: str, depends_on: str, *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_message)
+    def dep_remove(self, issue_id: str, depends_on: str):
         """Remove a dependency between issues."""
         self.db.conn.execute(
             "DELETE FROM dependencies WHERE issue_id = ? AND depends_on = ?",
@@ -679,15 +789,11 @@ class HiveCLI:
         )
         self.db.conn.commit()
 
-        result = {
+        return {
             "issue_id": issue_id,
             "depends_on": depends_on,
             "message": f"Removed dependency: {issue_id} no longer depends on {depends_on}",
         }
-
-        if not json_mode:
-            print(result.get("message", "Removed dependency"))
-        return result
 
     def merges(self, status: Optional[str] = None, *, json_mode: bool = False):
         """List merge queue entries."""
@@ -722,8 +828,8 @@ class HiveCLI:
             summary_parts = [f"{count} {s}" for s, count in status_counts.items() if count > 0]
             print(f"\n{', '.join(summary_parts)}")
 
-    @cli_command
-    def status(self, *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_status)
+    def status(self):
         """Show orchestrator status."""
         # Count issues by status
         cursor = self.db.conn.execute(
@@ -823,7 +929,7 @@ class HiveCLI:
         )
         attention_issues = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in attention_cursor.fetchall()]
 
-        result = {
+        return {
             "project": self.project_name,
             "issues": status_counts,
             "total_issues": sum(status_counts.values()),
@@ -843,78 +949,8 @@ class HiveCLI:
             },
         }
 
-        if not json_mode:
-            print("\n=== Hive Status ===")
-            print(f"\nProject: {result.get('project', self.project_name)}")
-            print("\nIssues:")
-            for s in [
-                "open",
-                "in_progress",
-                "done",
-                "finalized",
-                "failed",
-                "escalated",
-                "blocked",
-                "canceled",
-            ]:
-                count = result.get("issues", {}).get(s, 0)
-                if count > 0:
-                    print(f"  {s}: {count}")
-            print(f"\nActive workers: {result.get('active_agents', 0)}/{Config.MAX_AGENTS}")
-            for w in result.get("workers", []):
-                title = (w.get("issue_title") or "")[:40]
-                print(f"  {w.get('name', ''):<24} {w.get('issue_id', ''):<16} {title}")
-
-            refinery = result.get("refinery", {})
-            if refinery.get("active"):
-                rtitle = (refinery.get("issue_title") or "")[:40]
-                print(f"\nRefinery: reviewing {refinery.get('issue_id', '')} ({rtitle})")
-            else:
-                print("\nRefinery: idle")
-
-            print(f"Ready queue: {result.get('ready_queue', 0)} issues")
-            mq = result.get("merge_queue", {})
-            if isinstance(mq, dict):
-                parts = []
-                for k in ["queued", "running", "merged", "failed"]:
-                    v = mq.get(k, 0)
-                    if v > 0:
-                        parts.append(f"{v} {k}")
-                print(f"Merge queue: {', '.join(parts) if parts else 'empty'}")
-            else:
-                print(f"Merge queue: {mq} pending")
-
-            attention = result.get("attention_issues", [])
-            if attention:
-                print(f"\nNeeds attention ({len(attention)}):")
-                for ai in attention[:10]:
-                    print(f"  {ai['id']:<16} [{ai['status']}] {ai['title'][:40]}")
-
-            blockers = result.get("merge_blockers", [])
-            if blockers:
-                print("\nMerge blockers:")
-                for blocker in blockers:
-                    print(f"  - {blocker.get('message', blocker.get('type', 'unknown blocker'))}")
-                    changes = blocker.get("changes") or []
-                    for line in changes[:5]:
-                        print(f"    {line}")
-
-            # Daemon info
-            daemon_info = result.get("daemon", {})
-            if daemon_info.get("running"):
-                print(f"\nDaemon: running (PID {daemon_info.get('pid')})")
-                if daemon_info.get("log_file"):
-                    print(f"  Log: {daemon_info.get('log_file')}")
-            else:
-                print("\nDaemon: not running")
-
-            total = result.get("total_issues", 0)
-            if total == 0:
-                print("\n  No issues yet. Create one with: hive create 'title' 'description'")
-        return result
-
-    @cli_command
-    def list_agents(self, agent_id: Optional[str] = None, status: Optional[str] = None, *, json_mode: bool = False):
+    @cli_command(formatter=_fmt_list_agents)
+    def list_agents(self, agent_id: Optional[str] = None, status: Optional[str] = None):
         """List agents, or show details for a specific agent if agent_id is provided."""
         # If agent_id is provided, show that agent's details
         if agent_id:
@@ -933,20 +969,7 @@ class HiveCLI:
             # Get recent events for this agent
             agent["recent_events"] = self.db.get_events(agent_id=agent_id, limit=10)
 
-            result = agent
-
-            if not json_mode:
-                print(f"\nAgent: {result.get('id', agent_id)}")
-                print(f"Name: {result.get('name', '')}")
-                print(f"Status: {result.get('status', '')}")
-                if result.get("current_issue"):
-                    print(f"Current issue: {result['current_issue']}")
-                events = result.get("recent_events", [])
-                if events:
-                    print(f"\nRecent events ({len(events)}):")
-                    for event in events[:5]:
-                        print(f"  [{event['created_at']}] {event['event_type']}")
-            return result
+            return agent
 
         # Otherwise, list all agents
         query = "SELECT * FROM agents WHERE project = ?"
@@ -968,34 +991,21 @@ class HiveCLI:
                 if issue:
                     agent["current_issue_title"] = issue.get("title", "unknown")
 
-        result = {"count": len(agents), "agents": agents}
-
-        if not json_mode:
-            if not agents:
-                print("No agents found.")
-                return result
-            print(f"\n{'ID':<16} {'Name':<16} {'Status':<10} {'Current Issue':<30}")
-            print("-" * 72)
-            for agent in agents:
-                issue_title = agent.get("current_issue_title", agent.get("current_issue", "")) or "-"
-                print(f"{agent['id']:<16} {agent['name']:<16} {agent['status']:<10} {str(issue_title)[:30]}")
-        return result
+        return {"count": len(agents), "agents": agents}
 
     # ── Notes ─────────────────────────────────────────────────────────
 
-    @cli_command
+    @cli_command(formatter=_fmt_add_note)
     def add_note(
         self,
         content: str,
         issue_id: Optional[str] = None,
         category: str = "discovery",
-        *,
-        json_mode: bool = False,
     ):
         """Add a note to the knowledge base."""
         note_id = self.db.add_note(agent_id=None, issue_id=issue_id, content=content, category=category, project=self.project_name)
 
-        result = {
+        return {
             "note_id": note_id,
             "content": content,
             "category": category,
@@ -1003,11 +1013,7 @@ class HiveCLI:
             "message": f"Added note #{note_id}",
         }
 
-        if not json_mode:
-            print(f"Added note #{result['note_id']} [{category}]")
-        return result
-
-    @cli_command
+    @cli_command(formatter=_fmt_note_with_targets)
     def note_with_targets(
         self,
         content: str,
@@ -1015,8 +1021,6 @@ class HiveCLI:
         to_agents: Optional[List[str]] = None,
         to_issues: Optional[List[str]] = None,
         must_read: bool = False,
-        *,
-        json_mode: bool = False,
     ):
         """Add a note with explicit delivery targets (agents/issues)."""
         note_id = self.db.add_note(
@@ -1027,13 +1031,6 @@ class HiveCLI:
             must_read=must_read,
         )
         delivery_count = self.db.create_note_deliveries(note_id, to_agents=to_agents, to_issues=to_issues)
-        result = {
-            "note_id": note_id,
-            "delivery_count": delivery_count,
-            "to_agents": to_agents or [],
-            "to_issues": to_issues or [],
-            "must_read": must_read,
-        }
         self.db.log_event(
             issue_id,
             None,
@@ -1046,84 +1043,52 @@ class HiveCLI:
             },
         )
 
-        if not json_mode:
-            print(f"Sent note #{note_id} with {delivery_count} delivery(ies)")
-        return result
+        return {
+            "note_id": note_id,
+            "delivery_count": delivery_count,
+            "to_agents": to_agents or [],
+            "to_issues": to_issues or [],
+            "must_read": must_read,
+        }
 
     # ── Mail (note delivery inbox) ───────────────────────────────────
 
-    @cli_command
+    @cli_command(formatter=_fmt_mail_inbox)
     def mail_inbox(
         self,
         agent_id: str,
         issue_id: Optional[str] = None,
         unread_only: bool = False,
-        *,
-        json_mode: bool = False,
     ):
         """Show note delivery inbox for an agent."""
         deliveries = self.db.get_inbox_deliveries(agent_id, issue_id=issue_id, unread_only=unread_only)
-        result = {"count": len(deliveries), "deliveries": deliveries}
+        return {"count": len(deliveries), "deliveries": deliveries}
 
-        if not json_mode:
-            if not deliveries:
-                print("No deliveries found.")
-                return result
-
-            # Table: ID, Note, Status, Must Read, From, Content (truncated)
-            header = f"{'ID':<6} {'Note':<6} {'Status':<10} {'Must Read':<10} {'From':<16} Content"
-            print(header)
-            print("-" * len(header))
-            for d in deliveries:
-                content_preview = (d.get("content") or "")[:40]
-                must_read_label = "yes" if d.get("must_read") else "no"
-                from_agent = d.get("from_agent_id") or "-"
-                print(f"{d['id']:<6} {d['note_id']:<6} {d['status']:<10} {must_read_label:<10} {from_agent:<16} {content_preview}")
-        return result
-
-    @cli_command
+    @cli_command(formatter=_fmt_mail_read)
     def mail_read(
         self,
         delivery_id: int,
         agent_id: str,
-        *,
-        json_mode: bool = False,
     ):
         """Mark a delivery as read."""
         updated = self.db.mark_delivery_read(delivery_id, agent_id)
         if updated:
             self.db.log_event(None, agent_id, "note_read", {"delivery_id": delivery_id})
 
-        result = {"delivery_id": delivery_id, "updated": updated}
+        return {"delivery_id": delivery_id, "updated": updated}
 
-        if not json_mode:
-            if updated:
-                print(f"Delivery #{delivery_id} marked read.")
-            else:
-                print(f"Delivery #{delivery_id} unchanged (already read or not found).")
-        return result
-
-    @cli_command
+    @cli_command(formatter=_fmt_mail_ack)
     def mail_ack(
         self,
         delivery_id: int,
         agent_id: str,
-        *,
-        json_mode: bool = False,
     ):
         """Acknowledge a must_read delivery."""
         updated = self.db.mark_delivery_acked(delivery_id, agent_id)
         if updated:
             self.db.log_event(None, agent_id, "note_acked", {"delivery_id": delivery_id})
 
-        result = {"delivery_id": delivery_id, "updated": updated}
-
-        if not json_mode:
-            if updated:
-                print(f"Delivery #{delivery_id} acked.")
-            else:
-                print(f"Delivery #{delivery_id} unchanged (not must_read, already acked, or not found).")
-        return result
+        return {"delivery_id": delivery_id, "updated": updated}
 
     # ── Event log (tail-style, not tool-backed) ─────────────────────
 
