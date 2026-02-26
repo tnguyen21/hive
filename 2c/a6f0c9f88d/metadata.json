@@ -2,9 +2,11 @@
   "cli_version": "0.4.5",
   "checkpoint_id": "2ca6f0c9f88d",
   "strategy": "manual-commit",
-  "branch": "fix/align-max-agents-default",
+  "branch": "main",
   "checkpoints_count": 1,
   "files_touched": [
+    "docs/REFINERY_FIRST_MERGE_SPEC.md",
+    "docs/codebase_review.md",
     "src/hive/backends/backend_claude.py",
     "src/hive/config.py"
   ],
