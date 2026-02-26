@@ -17,7 +17,7 @@ from pathlib import Path
 _SENSITIVE_FIELDS = {"opencode_password"}
 
 _FIELDS: dict[str, tuple[str, type, object]] = {
-    "max_agents": ("HIVE_MAX_AGENTS", int, 10),
+    "max_agents": ("HIVE_MAX_AGENTS", int, 3),
     "poll_interval": ("HIVE_POLL_INTERVAL", int, 5),
     "lease_duration": ("HIVE_LEASE_DURATION", int, 900),
     "lease_extension": ("HIVE_LEASE_EXTENSION", int, 600),
@@ -44,7 +44,7 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     # Claude WS backend settings
     "claude_ws_host": ("HIVE_CLAUDE_WS_HOST", str, "127.0.0.1"),
     "claude_ws_port": ("HIVE_CLAUDE_WS_PORT", int, 8765),
-    "claude_ws_max_concurrent": ("HIVE_CLAUDE_WS_MAX_CONCURRENT", int, 3),
+    "claude_ws_max_concurrent": ("HIVE_CLAUDE_WS_MAX_CONCURRENT", int, None),  # deprecated: falls back to max_agents
     "claude_skip_permissions": ("HIVE_CLAUDE_SKIP_PERMISSIONS", bool, False),
     # Codex App Server backend settings
     "codex_cmd": ("HIVE_CODEX_CMD", str, "codex app-server --listen stdio://"),

@@ -35,8 +35,8 @@
     - **Unified interface**: This single class implements both the session
       management AND event streaming interfaces (HiveBackend). The orchestrator
       passes the same instance as both `opencode_client` and `sse_client`.
-    - **Concurrency**: Controlled via CLAUDE_WS_MAX_CONCURRENT config (semaphore
-      on process spawning) to avoid overwhelming the machine.
+    - **Concurrency**: Controlled via MAX_AGENTS config (semaphore on process
+      spawning) to avoid overwhelming the machine.
 """
 
 import asyncio
@@ -98,8 +98,9 @@ class ClaudeWSBackend(HiveBackend):
         # SSE-compatible event handlers
         self._handlers: Dict[str, Callable] = {}
 
-        # Concurrency limiter
-        self._spawn_semaphore = asyncio.Semaphore(Config.CLAUDE_WS_MAX_CONCURRENT)
+        # Concurrency limiter — use dedicated override if set, otherwise MAX_AGENTS
+        concurrency = Config.CLAUDE_WS_MAX_CONCURRENT or Config.MAX_AGENTS
+        self._spawn_semaphore = asyncio.Semaphore(concurrency)
 
         # Server lifecycle
         self.running = False
