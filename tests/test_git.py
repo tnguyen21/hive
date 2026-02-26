@@ -7,6 +7,7 @@ import pytest
 
 from hive.git import (
     GitWorktreeError,
+    _run_git,
     abort_rebase,
     create_worktree,
     delete_branch,
@@ -341,4 +342,67 @@ def test_has_diff_from_main_no_commits(git_repo):
     assert result is False
 
     # Clean up
+    remove_worktree(worktree_path)
+
+
+# --- Tests for _run_git base helper ---
+
+
+def test_run_git_check_true_raises_on_failure(git_repo):
+    """INV-1: _run_git with check=True raises GitWorktreeError on non-zero exit."""
+    with pytest.raises(GitWorktreeError):
+        _run_git("rev-parse", "nonexistent-branch-xyz", cwd=str(git_repo), check=True)
+
+
+def test_run_git_check_false_returns_stdout_on_failure(git_repo):
+    """INV-2: _run_git with check=False returns stdout (empty) even on non-zero exit."""
+    # git rev-parse --verify on nonexistent ref exits non-zero; stdout is empty
+    result = _run_git("rev-parse", "--verify", "nonexistent-branch-xyz", cwd=str(git_repo), check=False)
+    assert result == ""  # no exception, empty stdout
+
+
+def test_run_git_successful_command_returns_stripped_stdout(git_repo):
+    """INV-1/INV-3: successful git command returns stripped stdout."""
+    result = _run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=str(git_repo))
+    assert result == "main"
+
+
+def test_run_git_custom_cwd_is_used(tmp_path):
+    """Custom cwd is passed through to subprocess — non-git dir causes failure."""
+    non_git = tmp_path / "notgit"
+    non_git.mkdir()
+    with pytest.raises(GitWorktreeError):
+        _run_git("status", cwd=str(non_git), check=True)
+
+
+def test_run_git_error_message_contains_stderr(git_repo):
+    """GitWorktreeError message contains the git stderr output."""
+    with pytest.raises(GitWorktreeError) as exc_info:
+        _run_git("rev-parse", "does-not-exist", cwd=str(git_repo))
+    # git writes something to stderr on failure
+    assert str(exc_info.value) != ""
+
+
+# --- Spot-check INV-3: public methods return identical values after refactor ---
+
+
+def test_get_commit_hash_returns_40char_sha(git_repo):
+    """INV-3: get_commit_hash still returns a 40-char hex SHA."""
+    commit_hash = get_commit_hash(str(git_repo))
+    assert commit_hash is not None
+    assert len(commit_hash) == 40
+    assert all(c in "0123456789abcdef" for c in commit_hash)
+
+
+def test_get_worktree_dirty_status_returns_tuple(git_repo):
+    """INV-3: get_worktree_dirty_status returns (bool, str) tuple with correct values."""
+    is_dirty, output = get_worktree_dirty_status(str(git_repo))
+    assert is_dirty is False
+    assert output == ""
+
+
+def test_has_diff_from_main_consistent_with_run_git(git_repo):
+    """INV-3: has_diff_from_main returns False for fresh worktree (no diverging commits)."""
+    worktree_path = create_worktree(str(git_repo), "inv3-spot-check")
+    assert has_diff_from_main(worktree_path) is False
     remove_worktree(worktree_path)
