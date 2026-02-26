@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,37 @@ from .daemon import HiveDaemon
 from .db import Database, validate_tags
 from .git import GitWorktreeError, get_worktree_dirty_status
 from .utils import detect_project
+
+
+def cli_command(fn):
+    """Decorator that adds try/except error handling and json_mode JSON output to CLI methods.
+
+    Decorated methods should:
+    - Return the JSON-serializable result dict on success.
+    - Handle human-readable output internally, guarded by ``if not json_mode:``.
+    - Raise exceptions for unexpected failures (decorator catches them).
+    - May still call ``self._error()`` for intentional validation exits.
+
+    On success with json_mode=True the decorator prints ``json.dumps(result, default=str)``.
+    On any uncaught Exception the decorator prints the error (JSON or stderr) and exits 1.
+    """
+
+    @wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        json_mode = kwargs.get("json_mode", False)
+        try:
+            result = fn(self, *args, **kwargs)
+            if json_mode and result is not None:
+                print(json.dumps(result, default=str))
+            return result
+        except Exception as e:
+            if json_mode:
+                print(json.dumps({"error": str(e)}))
+            else:
+                print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    return wrapper
 
 
 class HiveCLI:
@@ -58,6 +90,7 @@ class HiveCLI:
 
     # ── Issue management ─────────────────────────────────────────────
 
+    @cli_command
     def create(
         self,
         title: str,
@@ -71,34 +104,29 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Create a new issue."""
-        try:
-            tag_list = [t.strip() for t in tags.split(",")] if tags else None
-            issue_id = self.db.create_issue(
-                title=title,
-                description=description,
-                priority=priority,
-                issue_type=issue_type,
-                project=self.project_name,
-                model=model,
-                tags=tag_list,
-                depends_on=depends_on,
-            )
+        tag_list = [t.strip() for t in tags.split(",")] if tags else None
+        issue_id = self.db.create_issue(
+            title=title,
+            description=description,
+            priority=priority,
+            issue_type=issue_type,
+            project=self.project_name,
+            model=model,
+            tags=tag_list,
+            depends_on=depends_on,
+        )
 
-            result = {
-                "id": issue_id,
-                "issue_id": issue_id,  # compat alias
-                "title": title,
-                "status": "open",
-                "tags": tag_list or [],
-                "depends_on": depends_on or [],
-                "message": f"Created issue {issue_id}: {title}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "id": issue_id,
+            "issue_id": issue_id,  # compat alias
+            "title": title,
+            "status": "open",
+            "tags": tag_list or [],
+            "depends_on": depends_on or [],
+            "message": f"Created issue {issue_id}: {title}",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(f"Created issue: {result['issue_id']}")
             print(f"  Title: {title}")
             print(f"  Priority: {priority}")
@@ -106,10 +134,11 @@ class HiveCLI:
                 print(f"  Tags: {', '.join(result['tags'])}")
             if depends_on:
                 print(f"  Depends on: {', '.join(depends_on)}")
-        return result.get("issue_id")
+        return result
 
     _DONE_STATUSES = ("done", "finalized", "canceled")
 
+    @cli_command
     def list_issues(
         self,
         status: Optional[str] = None,
@@ -123,108 +152,99 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """List all issues."""
-        try:
-            query = "SELECT * FROM issues WHERE project = ?"
-            params: List[Any] = [self.project_name]
+        query = "SELECT * FROM issues WHERE project = ?"
+        params: List[Any] = [self.project_name]
 
-            if todo:
-                placeholders = ",".join("?" for _ in self._DONE_STATUSES)
-                query += f" AND status NOT IN ({placeholders})"
-                params.extend(self._DONE_STATUSES)
-            elif status:
-                query += " AND status = ?"
-                params.append(status)
-            if assignee:
-                query += " AND assignee = ?"
-                params.append(assignee)
-            if issue_type:
-                query += " AND type = ?"
-                params.append(issue_type)
+        if todo:
+            placeholders = ",".join("?" for _ in self._DONE_STATUSES)
+            query += f" AND status NOT IN ({placeholders})"
+            params.extend(self._DONE_STATUSES)
+        elif status:
+            query += " AND status = ?"
+            params.append(status)
+        if assignee:
+            query += " AND assignee = ?"
+            params.append(assignee)
+        if issue_type:
+            query += " AND type = ?"
+            params.append(issue_type)
 
-            # Resolve sort column (default to priority if unknown)
-            sort_col = self._SORT_COLUMNS.get(sort_by, "priority")
-            direction = "DESC" if reverse else "ASC"
-            query += f" ORDER BY {sort_col} {direction}"
+        # Resolve sort column (default to priority if unknown)
+        sort_col = self._SORT_COLUMNS.get(sort_by, "priority")
+        direction = "DESC" if reverse else "ASC"
+        query += f" ORDER BY {sort_col} {direction}"
 
-            query += " LIMIT ?"
-            params.append(str(limit))
+        query += " LIMIT ?"
+        params.append(str(limit))
 
-            cursor = self.db.conn.execute(query, params)
-            issues = []
-            for row in cursor.fetchall():
-                issue_dict = dict(row)
-                self._parse_tags(issue_dict)
-                issues.append(issue_dict)
+        cursor = self.db.conn.execute(query, params)
+        issues = []
+        for row in cursor.fetchall():
+            issue_dict = dict(row)
+            self._parse_tags(issue_dict)
+            issues.append(issue_dict)
 
-            result = {"count": len(issues), "issues": issues}
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {"count": len(issues), "issues": issues}
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
-            issues = result.get("issues", [])
+        if not json_mode:
             if not issues:
                 print("No issues found.")
                 print("  Create one with: hive create 'title' 'description'")
-                return
+                return result
             print(f"\n{'ID':<12} {'Status':<12} {'Pri':<4} {'Type':<10} {'Title':<40}")
             print("-" * 80)
             for issue in issues:
                 itype = issue.get("type", "")[:10]
                 print(f"{issue['id']:<12} {issue['status']:<12} {issue['priority']:<4} {itype:<10} {issue['title'][:40]}")
             print(f"\nTotal: {len(issues)} issues")
+        return result
 
+    @cli_command
     def show(self, issue_id: str, *, json_mode: bool = False):
         """Show issue details and events."""
-        try:
-            issue = self.db.get_issue(issue_id)
-            if not issue:
-                raise ValueError(f"Issue not found: {issue_id}")
+        issue = self.db.get_issue(issue_id)
+        if not issue:
+            raise ValueError(f"Issue not found: {issue_id}")
 
-            # Get dependencies
-            cursor = self.db.conn.execute(
-                """
-                SELECT i.id, i.title, i.status
-                FROM dependencies d
-                JOIN issues i ON d.depends_on = i.id
-                WHERE d.issue_id = ?
-                """,
-                (issue_id,),
-            )
-            dependencies = [dict(row) for row in cursor.fetchall()]
+        # Get dependencies
+        cursor = self.db.conn.execute(
+            """
+            SELECT i.id, i.title, i.status
+            FROM dependencies d
+            JOIN issues i ON d.depends_on = i.id
+            WHERE d.issue_id = ?
+            """,
+            (issue_id,),
+        )
+        dependencies = [dict(row) for row in cursor.fetchall()]
 
-            # Get dependents (issues blocked by this one)
-            cursor = self.db.conn.execute(
-                """
-                SELECT i.id, i.title, i.status
-                FROM dependencies d
-                JOIN issues i ON d.issue_id = i.id
-                WHERE d.depends_on = ?
-                """,
-                (issue_id,),
-            )
-            dependents = [dict(row) for row in cursor.fetchall()]
+        # Get dependents (issues blocked by this one)
+        cursor = self.db.conn.execute(
+            """
+            SELECT i.id, i.title, i.status
+            FROM dependencies d
+            JOIN issues i ON d.issue_id = i.id
+            WHERE d.depends_on = ?
+            """,
+            (issue_id,),
+        )
+        dependents = [dict(row) for row in cursor.fetchall()]
 
-            # Get recent events
-            events = self.db.get_events(issue_id=issue_id, limit=10)
+        # Get recent events
+        events = self.db.get_events(issue_id=issue_id, limit=10)
 
-            # Parse tags from JSON
-            issue_dict = dict(issue)
-            self._parse_tags(issue_dict)
+        # Parse tags from JSON
+        issue_dict = dict(issue)
+        self._parse_tags(issue_dict)
 
-            result = {
-                **issue_dict,
-                "dependencies": dependencies,
-                "dependents": dependents,
-                "recent_events": events,
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            **issue_dict,
+            "dependencies": dependencies,
+            "dependents": dependents,
+            "recent_events": events,
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(f"\nIssue: {result['id']}")
             print(f"Title: {result['title']}")
             print(f"Status: {result['status']}")
@@ -252,7 +272,9 @@ class HiveCLI:
                         detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
                         for key, value in detail.items():
                             print(f"    {key}: {value}")
+        return result
 
+    @cli_command
     def update(
         self,
         issue_id: str,
@@ -266,311 +288,293 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Update an issue."""
-        try:
-            issue = self.db.get_issue(issue_id)
-            if not issue:
-                raise ValueError(f"Issue not found: {issue_id}")
+        issue = self.db.get_issue(issue_id)
+        if not issue:
+            raise ValueError(f"Issue not found: {issue_id}")
 
-            tag_list = [t.strip() for t in tags.split(",")] if tags is not None else None
+        tag_list = [t.strip() for t in tags.split(",")] if tags is not None else None
 
-            updates = []
-            params = []
+        updates = []
+        params = []
 
-            if title is not None:
-                updates.append("title = ?")
-                params.append(title)
-            if description is not None:
-                updates.append("description = ?")
-                params.append(description)
-            if priority is not None:
-                updates.append("priority = ?")
-                params.append(priority)
-            if status is not None:
-                updates.append("status = ?")
-                params.append(status)
-                # When re-opening an issue, clear the assignee so it
-                # re-enters the ready queue and can be claimed by a new agent.
-                if status == "open":
-                    updates.append("assignee = NULL")
-            if model is not None:
-                updates.append("model = ?")
-                params.append(model)
-            if tag_list is not None:
-                validated_tags = validate_tags(tag_list)
-                updates.append("tags = ?")
-                params.append(json.dumps(validated_tags))
+        if title is not None:
+            updates.append("title = ?")
+            params.append(title)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if priority is not None:
+            updates.append("priority = ?")
+            params.append(priority)
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+            # When re-opening an issue, clear the assignee so it
+            # re-enters the ready queue and can be claimed by a new agent.
+            if status == "open":
+                updates.append("assignee = NULL")
+        if model is not None:
+            updates.append("model = ?")
+            params.append(model)
+        if tag_list is not None:
+            validated_tags = validate_tags(tag_list)
+            updates.append("tags = ?")
+            params.append(json.dumps(validated_tags))
 
-            if updates:
-                query = f"UPDATE issues SET {', '.join(updates)}, updated_at = datetime('now') WHERE id = ?"
-                params.append(issue_id)
-                self.db.conn.execute(query, params)
-                self.db.conn.commit()
+        if updates:
+            query = f"UPDATE issues SET {', '.join(updates)}, updated_at = datetime('now') WHERE id = ?"
+            params.append(issue_id)
+            self.db.conn.execute(query, params)
+            self.db.conn.commit()
 
-                self.db.log_event(
-                    issue_id,
-                    None,
-                    "updated",
-                    {
-                        "fields": [
-                            k
-                            for k, v in [
-                                ("title", title),
-                                ("description", description),
-                                ("priority", priority),
-                                ("status", status),
-                                ("model", model),
-                            ]
-                            if v is not None
+            self.db.log_event(
+                issue_id,
+                None,
+                "updated",
+                {
+                    "fields": [
+                        k
+                        for k, v in [
+                            ("title", title),
+                            ("description", description),
+                            ("priority", priority),
+                            ("status", status),
+                            ("model", model),
                         ]
-                    },
-                )
+                        if v is not None
+                    ]
+                },
+            )
 
-            result = {"issue_id": issue_id, "message": f"Updated issue {issue_id}"}
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {"issue_id": issue_id, "message": f"Updated issue {issue_id}"}
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", f"Updated issue {issue_id}"))
+        return result
 
+    @cli_command
     def cancel(self, issue_id: str, reason: str = "", *, json_mode: bool = False):
         """Cancel an issue."""
-        try:
-            issue = self.db.get_issue(issue_id)
-            if not issue:
-                raise ValueError(f"Issue not found: {issue_id}")
+        issue = self.db.get_issue(issue_id)
+        if not issue:
+            raise ValueError(f"Issue not found: {issue_id}")
 
-            self.db.update_issue_status(issue_id, "canceled")
-            self.db.log_event(issue_id, None, "canceled", {"reason": reason})
+        self.db.update_issue_status(issue_id, "canceled")
+        self.db.log_event(issue_id, None, "canceled", {"reason": reason})
 
-            result = {
-                "issue_id": issue_id,
-                "status": "canceled",
-                "reason": reason,
-                "message": f"Canceled issue {issue_id}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "issue_id": issue_id,
+            "status": "canceled",
+            "reason": reason,
+            "message": f"Canceled issue {issue_id}",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", f"Canceled issue {issue_id}"))
+        return result
 
+    @cli_command
     def finalize(self, issue_id: str, resolution: str = "", *, json_mode: bool = False):
         """Finalize/close an issue."""
-        try:
-            issue = self.db.get_issue(issue_id)
-            if not issue:
-                raise ValueError(f"Issue not found: {issue_id}")
+        issue = self.db.get_issue(issue_id)
+        if not issue:
+            raise ValueError(f"Issue not found: {issue_id}")
 
-            self.db.update_issue_status(issue_id, "finalized")
-            # If this issue was sitting in the merge queue (manual review mode),
-            # mark those entries complete so they don't get processed later.
-            self.db.conn.execute(
-                """
-                UPDATE merge_queue
-                SET status = 'merged', completed_at = datetime('now')
-                WHERE issue_id = ? AND status IN ('queued', 'running')
-                """,
-                (issue_id,),
-            )
-            self.db.conn.commit()
-            self.db.log_event(issue_id, None, "finalized", {"resolution": resolution})
+        self.db.update_issue_status(issue_id, "finalized")
+        # If this issue was sitting in the merge queue (manual review mode),
+        # mark those entries complete so they don't get processed later.
+        self.db.conn.execute(
+            """
+            UPDATE merge_queue
+            SET status = 'merged', completed_at = datetime('now')
+            WHERE issue_id = ? AND status IN ('queued', 'running')
+            """,
+            (issue_id,),
+        )
+        self.db.conn.commit()
+        self.db.log_event(issue_id, None, "finalized", {"resolution": resolution})
 
-            result = {
-                "issue_id": issue_id,
-                "status": "finalized",
-                "resolution": resolution,
-                "message": f"Finalized issue {issue_id}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "issue_id": issue_id,
+            "status": "finalized",
+            "resolution": resolution,
+            "message": f"Finalized issue {issue_id}",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", f"Finalized issue {issue_id}"))
+        return result
 
+    @cli_command
     def review(self, issue_id: str | None = None, limit: int = 20, *, json_mode: bool = False):
         """List done issues that are pending finalization with review hints.
 
         If issue_id is given, show review info for that specific issue regardless of status.
         """
-        try:
-            if issue_id:
-                cursor = self.db.conn.execute(
-                    """
-                    SELECT
-                        i.id,
-                        i.title,
-                        i.status,
-                        i.description,
-                        i.updated_at,
-                        i.assignee,
-                        mq.status AS merge_status,
-                        mq.branch_name,
-                        mq.worktree,
-                        mq.enqueued_at
-                    FROM issues i
-                    LEFT JOIN merge_queue mq
-                        ON mq.id = (
-                            SELECT mq2.id
-                            FROM merge_queue mq2
-                            WHERE mq2.issue_id = i.id
-                            ORDER BY mq2.id DESC
-                            LIMIT 1
-                        )
-                    WHERE i.project = ? AND i.id = ?
-                    """,
-                    (self.project_name, issue_id),
-                )
-            else:
-                cursor = self.db.conn.execute(
-                    """
-                    SELECT
-                        i.id,
-                        i.title,
-                        i.updated_at,
-                        i.assignee,
-                        mq.status AS merge_status,
-                        mq.branch_name,
-                        mq.worktree,
-                        mq.enqueued_at
-                    FROM issues i
-                    LEFT JOIN merge_queue mq
-                        ON mq.id = (
-                            SELECT mq2.id
-                            FROM merge_queue mq2
-                            WHERE mq2.issue_id = i.id
-                            ORDER BY mq2.id DESC
-                            LIMIT 1
-                        )
-                    WHERE i.project = ? AND i.status = 'done'
-                    ORDER BY i.updated_at DESC
-                    LIMIT ?
-                    """,
-                    (self.project_name, limit),
-                )
-
-            rows = []
-            project_q = shlex.quote(str(self.project_path))
-            for row in cursor.fetchall():
-                item = dict(row)
-                branch = item.get("branch_name")
-                worktree = item.get("worktree")
-                iid = item["id"]
-
-                item["diff_hint"] = None
-                item["merge_hint"] = None
-                item["finalize_hint"] = f'hive finalize {iid} --resolution "manual review complete"'
-
-                if branch:
-                    branch_q = shlex.quote(branch)
-                    item["diff_hint"] = f"git -C {project_q} diff main...{branch_q}"
-                    item["merge_hint"] = f"git -C {project_q} merge --ff-only {branch_q}"
-                if worktree:
-                    item["worktree_hint"] = f"git -C {shlex.quote(worktree)} log --oneline -n 5"
-                else:
-                    item["worktree_hint"] = None
-
-                rows.append(item)
-
-            if issue_id and not rows:
-                self._error(f"Issue {issue_id} not found in project {self.project_name}", json_mode=json_mode)
-                return
-
-            result = {"count": len(rows), "review": rows}
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-
-        if json_mode:
-            print(json.dumps(result, default=str))
-            return
-
-        rows = result["review"]
-        if not rows:
-            print("No done issues pending review.")
-            return
-
-        # Single-issue review: detailed view
         if issue_id:
-            item = rows[0]
-            merge_state = item.get("merge_status") or "-"
-            assignee = item.get("assignee") or "-"
-            print(f"\nReview: {item['id']}")
-            print(f"  Title:    {item['title']}")
-            print(f"  Status:   {item.get('status', '-')}")
-            print(f"  Assignee: {assignee}")
-            print(f"  Merge:    {merge_state}")
-            print(f"  Updated:  {item.get('updated_at', '-')}")
-            if item.get("description"):
-                print(f"\n  Description:\n    {item['description']}")
-            print("\n  Commands:")
-            if item.get("diff_hint"):
-                print(f"    Diff:     {item['diff_hint']}")
-            if item.get("worktree_hint"):
-                print(f"    Worktree: {item['worktree_hint']}")
-            if item.get("merge_hint"):
-                print(f"    Merge:    {item['merge_hint']}")
-            print(f"    Finalize: {item['finalize_hint']}")
-            return
+            cursor = self.db.conn.execute(
+                """
+                SELECT
+                    i.id,
+                    i.title,
+                    i.status,
+                    i.description,
+                    i.updated_at,
+                    i.assignee,
+                    mq.status AS merge_status,
+                    mq.branch_name,
+                    mq.worktree,
+                    mq.enqueued_at
+                FROM issues i
+                LEFT JOIN merge_queue mq
+                    ON mq.id = (
+                        SELECT mq2.id
+                        FROM merge_queue mq2
+                        WHERE mq2.issue_id = i.id
+                        ORDER BY mq2.id DESC
+                        LIMIT 1
+                    )
+                WHERE i.project = ? AND i.id = ?
+                """,
+                (self.project_name, issue_id),
+            )
+        else:
+            cursor = self.db.conn.execute(
+                """
+                SELECT
+                    i.id,
+                    i.title,
+                    i.updated_at,
+                    i.assignee,
+                    mq.status AS merge_status,
+                    mq.branch_name,
+                    mq.worktree,
+                    mq.enqueued_at
+                FROM issues i
+                LEFT JOIN merge_queue mq
+                    ON mq.id = (
+                        SELECT mq2.id
+                        FROM merge_queue mq2
+                        WHERE mq2.issue_id = i.id
+                        ORDER BY mq2.id DESC
+                        LIMIT 1
+                    )
+                WHERE i.project = ? AND i.status = 'done'
+                ORDER BY i.updated_at DESC
+                LIMIT ?
+                """,
+                (self.project_name, limit),
+            )
 
-        # Multi-issue listing
-        print(f"\n{'Issue':<14} {'Merge':<10} {'Assignee':<16} {'Title':<40}")
-        print("-" * 88)
-        for item in rows:
-            merge_state = item.get("merge_status") or "-"
-            assignee = item.get("assignee") or "-"
-            print(f"{item['id']:<14} {merge_state:<10} {assignee:<16} {item['title'][:40]}")
+        rows = []
+        project_q = shlex.quote(str(self.project_path))
+        for row in cursor.fetchall():
+            item = dict(row)
+            branch = item.get("branch_name")
+            worktree = item.get("worktree")
+            iid = item["id"]
 
-        print(f"\nTotal: {len(rows)} issue(s) pending finalization")
-        print("\nPer-issue review commands:")
-        for item in rows:
-            print(f"\n{item['id']}:")
-            if item.get("diff_hint"):
-                print(f"  Diff:     {item['diff_hint']}")
-            if item.get("worktree_hint"):
-                print(f"  Worktree: {item['worktree_hint']}")
-            if item.get("merge_hint"):
-                print(f"  Merge:    {item['merge_hint']}")
-            print(f"  Finalize: {item['finalize_hint']}")
+            item["diff_hint"] = None
+            item["merge_hint"] = None
+            item["finalize_hint"] = f'hive finalize {iid} --resolution "manual review complete"'
 
+            if branch:
+                branch_q = shlex.quote(branch)
+                item["diff_hint"] = f"git -C {project_q} diff main...{branch_q}"
+                item["merge_hint"] = f"git -C {project_q} merge --ff-only {branch_q}"
+            if worktree:
+                item["worktree_hint"] = f"git -C {shlex.quote(worktree)} log --oneline -n 5"
+            else:
+                item["worktree_hint"] = None
+
+            rows.append(item)
+
+        if issue_id and not rows:
+            raise ValueError(f"Issue {issue_id} not found in project {self.project_name}")
+
+        result = {"count": len(rows), "review": rows}
+
+        if not json_mode:
+            if not rows:
+                print("No done issues pending review.")
+                return result
+
+            # Single-issue review: detailed view
+            if issue_id:
+                item = rows[0]
+                merge_state = item.get("merge_status") or "-"
+                assignee = item.get("assignee") or "-"
+                print(f"\nReview: {item['id']}")
+                print(f"  Title:    {item['title']}")
+                print(f"  Status:   {item.get('status', '-')}")
+                print(f"  Assignee: {assignee}")
+                print(f"  Merge:    {merge_state}")
+                print(f"  Updated:  {item.get('updated_at', '-')}")
+                if item.get("description"):
+                    print(f"\n  Description:\n    {item['description']}")
+                print("\n  Commands:")
+                if item.get("diff_hint"):
+                    print(f"    Diff:     {item['diff_hint']}")
+                if item.get("worktree_hint"):
+                    print(f"    Worktree: {item['worktree_hint']}")
+                if item.get("merge_hint"):
+                    print(f"    Merge:    {item['merge_hint']}")
+                print(f"    Finalize: {item['finalize_hint']}")
+                return result
+
+            # Multi-issue listing
+            print(f"\n{'Issue':<14} {'Merge':<10} {'Assignee':<16} {'Title':<40}")
+            print("-" * 88)
+            for item in rows:
+                merge_state = item.get("merge_status") or "-"
+                assignee = item.get("assignee") or "-"
+                print(f"{item['id']:<14} {merge_state:<10} {assignee:<16} {item['title'][:40]}")
+
+            print(f"\nTotal: {len(rows)} issue(s) pending finalization")
+            print("\nPer-issue review commands:")
+            for item in rows:
+                print(f"\n{item['id']}:")
+                if item.get("diff_hint"):
+                    print(f"  Diff:     {item['diff_hint']}")
+                if item.get("worktree_hint"):
+                    print(f"  Worktree: {item['worktree_hint']}")
+                if item.get("merge_hint"):
+                    print(f"  Merge:    {item['merge_hint']}")
+                print(f"  Finalize: {item['finalize_hint']}")
+        return result
+
+    @cli_command
     def retry(self, issue_id: str, notes: str = "", *, json_mode: bool = False):
         """Retry a failed/blocked issue."""
-        try:
-            issue = self.db.get_issue(issue_id)
-            if not issue:
-                raise ValueError(f"Issue not found: {issue_id}")
+        issue = self.db.get_issue(issue_id)
+        if not issue:
+            raise ValueError(f"Issue not found: {issue_id}")
 
-            # Reset to open and unassign
-            self.db.conn.execute(
-                """
-                UPDATE issues
-                SET status = 'open', assignee = NULL, updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (issue_id,),
-            )
-            self.db.conn.commit()
+        # Reset to open and unassign
+        self.db.conn.execute(
+            """
+            UPDATE issues
+            SET status = 'open', assignee = NULL, updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (issue_id,),
+        )
+        self.db.conn.commit()
 
-            self.db.log_event(issue_id, None, "manual_retry", {"notes": notes})
+        self.db.log_event(issue_id, None, "manual_retry", {"notes": notes})
 
-            result = {
-                "issue_id": issue_id,
-                "status": "open",
-                "notes": notes,
-                "message": f"Reset issue {issue_id} to 'open' for retry",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "issue_id": issue_id,
+            "status": "open",
+            "notes": notes,
+            "message": f"Reset issue {issue_id} to 'open' for retry",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", f"Retrying issue {issue_id}"))
+        return result
 
+    @cli_command
     def epic(
         self,
         title: str,
@@ -585,66 +589,59 @@ class HiveCLI:
         try:
             steps = json.loads(steps_json)
         except json.JSONDecodeError as e:
-            if json_mode:
-                print(json.dumps({"error": f"Invalid steps JSON: {e}"}))
-            else:
-                print(f"Error: Invalid steps JSON: {e}", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError(f"Invalid steps JSON: {e}") from e
 
-        try:
-            tag_list = [t.strip() for t in tags.split(",")] if tags else None
+        tag_list = [t.strip() for t in tags.split(",")] if tags else None
 
-            # Create parent epic issue
-            parent_id = self.db.create_issue(
-                title=title,
-                description=description,
-                issue_type="epic",
+        # Create parent epic issue
+        parent_id = self.db.create_issue(
+            title=title,
+            description=description,
+            issue_type="epic",
+            project=self.project_name,
+            tags=tag_list,
+        )
+
+        # Map of step indices to issue IDs
+        step_map: Dict[int, str] = {}
+        created_steps = []
+
+        # Create all step issues
+        for i, step in enumerate(steps):
+            step_id = self.db.create_issue(
+                title=step["title"],
+                description=step.get("description", ""),
+                priority=step.get("priority", 2),
+                issue_type="step",
                 project=self.project_name,
-                tags=tag_list,
+                parent_id=parent_id,
+                model=model,
             )
+            step_map[i] = step_id
+            created_steps.append({"index": i, "id": step_id, "title": step["title"]})
 
-            # Map of step indices to issue IDs
-            step_map: Dict[int, str] = {}
-            created_steps = []
+        # Wire up dependencies
+        for i, step in enumerate(steps):
+            needs = step.get("needs", [])
+            for dep_idx in needs:
+                if isinstance(dep_idx, int) and dep_idx in step_map:
+                    self.db.add_dependency(step_map[i], step_map[dep_idx], "blocks")
 
-            # Create all step issues
-            for i, step in enumerate(steps):
-                step_id = self.db.create_issue(
-                    title=step["title"],
-                    description=step.get("description", ""),
-                    priority=step.get("priority", 2),
-                    issue_type="step",
-                    project=self.project_name,
-                    parent_id=parent_id,
-                    model=model,
-                )
-                step_map[i] = step_id
-                created_steps.append({"index": i, "id": step_id, "title": step["title"]})
+        result = {
+            "epic_id": parent_id,
+            "title": title,
+            "steps_count": len(steps),
+            "steps": created_steps,
+            "message": f"Created epic {parent_id} with {len(steps)} steps",
+        }
 
-            # Wire up dependencies
-            for i, step in enumerate(steps):
-                needs = step.get("needs", [])
-                for dep_idx in needs:
-                    if isinstance(dep_idx, int) and dep_idx in step_map:
-                        self.db.add_dependency(step_map[i], step_map[dep_idx], "blocks")
-
-            result = {
-                "epic_id": parent_id,
-                "title": title,
-                "steps_count": len(steps),
-                "steps": created_steps,
-                "message": f"Created epic {parent_id} with {len(steps)} steps",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", f"Created epic {result.get('epic_id', '')}"))
             for step in result.get("steps", []):
                 print(f"  Step {step['index']}: {step['id']} - {step['title']}")
+        return result
 
+    @cli_command
     def dep_add(
         self,
         issue_id: str,
@@ -654,50 +651,43 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Add a dependency between issues."""
-        try:
-            # Verify both issues exist
-            if not self.db.get_issue(issue_id):
-                raise ValueError(f"Issue not found: {issue_id}")
-            if not self.db.get_issue(depends_on):
-                raise ValueError(f"Dependency not found: {depends_on}")
+        # Verify both issues exist
+        if not self.db.get_issue(issue_id):
+            raise ValueError(f"Issue not found: {issue_id}")
+        if not self.db.get_issue(depends_on):
+            raise ValueError(f"Dependency not found: {depends_on}")
 
-            self.db.add_dependency(issue_id, depends_on, dep_type)
+        self.db.add_dependency(issue_id, depends_on, dep_type)
 
-            result = {
-                "issue_id": issue_id,
-                "depends_on": depends_on,
-                "type": dep_type,
-                "message": f"Added {dep_type} dependency: {issue_id} depends on {depends_on}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "issue_id": issue_id,
+            "depends_on": depends_on,
+            "type": dep_type,
+            "message": f"Added {dep_type} dependency: {issue_id} depends on {depends_on}",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", "Added dependency"))
+        return result
 
+    @cli_command
     def dep_remove(self, issue_id: str, depends_on: str, *, json_mode: bool = False):
         """Remove a dependency between issues."""
-        try:
-            self.db.conn.execute(
-                "DELETE FROM dependencies WHERE issue_id = ? AND depends_on = ?",
-                (issue_id, depends_on),
-            )
-            self.db.conn.commit()
+        self.db.conn.execute(
+            "DELETE FROM dependencies WHERE issue_id = ? AND depends_on = ?",
+            (issue_id, depends_on),
+        )
+        self.db.conn.commit()
 
-            result = {
-                "issue_id": issue_id,
-                "depends_on": depends_on,
-                "message": f"Removed dependency: {issue_id} no longer depends on {depends_on}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "issue_id": issue_id,
+            "depends_on": depends_on,
+            "message": f"Removed dependency: {issue_id} no longer depends on {depends_on}",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(result.get("message", "Removed dependency"))
+        return result
 
     def merges(self, status: Optional[str] = None, *, json_mode: bool = False):
         """List merge queue entries."""
@@ -732,132 +722,128 @@ class HiveCLI:
             summary_parts = [f"{count} {s}" for s, count in status_counts.items() if count > 0]
             print(f"\n{', '.join(summary_parts)}")
 
+    @cli_command
     def status(self, *, json_mode: bool = False):
         """Show orchestrator status."""
+        # Count issues by status
+        cursor = self.db.conn.execute(
+            """
+            SELECT status, COUNT(*) as count
+            FROM issues
+            WHERE project = ?
+            GROUP BY status
+            """,
+            (self.project_name,),
+        )
+        status_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # Get active agents with issue titles
+        active_agents = self.db.get_active_agents(project=self.project_name)
+        workers_detail = []
+        for agent in active_agents:
+            issue_title = ""
+            if agent.get("current_issue"):
+                issue_row = self.db.get_issue(agent["current_issue"])
+                if issue_row:
+                    issue_title = issue_row.get("title", "")
+            workers_detail.append(
+                {
+                    "name": agent.get("name", ""),
+                    "issue_id": agent.get("current_issue", ""),
+                    "issue_title": issue_title,
+                }
+            )
+
+        # Get running merge entry (refinery status proxy)
         try:
-            # Count issues by status
             cursor = self.db.conn.execute(
                 """
-                SELECT status, COUNT(*) as count
-                FROM issues
-                WHERE project = ?
-                GROUP BY status
-                """,
-                (self.project_name,),
+                SELECT mq.issue_id, i.title as issue_title
+                FROM merge_queue mq
+                LEFT JOIN issues i ON mq.issue_id = i.id
+                WHERE mq.status = 'running'
+                LIMIT 1
+                """
             )
-            status_counts = {row[0]: row[1] for row in cursor.fetchall()}
+            running_merge = cursor.fetchone()
+            refinery_info = {
+                "active": running_merge is not None,
+                "issue_id": running_merge["issue_id"] if running_merge else None,
+                "issue_title": running_merge["issue_title"] if running_merge else None,
+            }
+        except Exception:
+            refinery_info = {"active": False, "issue_id": None, "issue_title": None}
 
-            # Get active agents with issue titles
-            active_agents = self.db.get_active_agents(project=self.project_name)
-            workers_detail = []
-            for agent in active_agents:
-                issue_title = ""
-                if agent.get("current_issue"):
-                    issue_row = self.db.get_issue(agent["current_issue"])
-                    if issue_row:
-                        issue_title = issue_row.get("title", "")
-                workers_detail.append(
-                    {
-                        "name": agent.get("name", ""),
-                        "issue_id": agent.get("current_issue", ""),
-                        "issue_title": issue_title,
-                    }
-                )
+        # Get ready queue
+        ready = self.db.get_ready_queue(limit=10)
 
-            # Get running merge entry (refinery status proxy)
-            try:
-                cursor = self.db.conn.execute(
-                    """
-                    SELECT mq.issue_id, i.title as issue_title
-                    FROM merge_queue mq
-                    LEFT JOIN issues i ON mq.issue_id = i.id
-                    WHERE mq.status = 'running'
-                    LIMIT 1
-                    """
-                )
-                running_merge = cursor.fetchone()
-                refinery_info = {
-                    "active": running_merge is not None,
-                    "issue_id": running_merge["issue_id"] if running_merge else None,
-                    "issue_title": running_merge["issue_title"] if running_merge else None,
+        # Get merge queue stats
+        merge_stats = self.db.get_merge_queue_stats()
+
+        # Merge preflight visibility: report when dirty main worktree blocks merges.
+        main_worktree = {
+            "dirty": False,
+            "changes": [],
+            "status": "clean",
+        }
+        merge_blockers: List[Dict[str, Any]] = []
+        try:
+            dirty, dirty_output = get_worktree_dirty_status(str(self.project_path))
+            if dirty:
+                changes = dirty_output.splitlines()
+                main_worktree = {
+                    "dirty": True,
+                    "changes": changes[:20],
+                    "status": "dirty",
                 }
-            except Exception:
-                refinery_info = {"active": False, "issue_id": None, "issue_title": None}
-
-            # Get ready queue
-            ready = self.db.get_ready_queue(limit=10)
-
-            # Get merge queue stats
-            merge_stats = self.db.get_merge_queue_stats()
-
-            # Merge preflight visibility: report when dirty main worktree blocks merges.
+                if merge_stats.get("queued", 0) > 0 or merge_stats.get("running", 0) > 0:
+                    merge_blockers.append(
+                        {
+                            "type": "dirty_main_worktree",
+                            "message": "Merges are paused: main worktree has uncommitted tracked changes",
+                            "changes": changes[:20],
+                        }
+                    )
+        except GitWorktreeError as e:
             main_worktree = {
                 "dirty": False,
                 "changes": [],
-                "status": "clean",
+                "status": "error",
+                "error": str(e),
             }
-            merge_blockers: List[Dict[str, Any]] = []
-            try:
-                dirty, dirty_output = get_worktree_dirty_status(str(self.project_path))
-                if dirty:
-                    changes = dirty_output.splitlines()
-                    main_worktree = {
-                        "dirty": True,
-                        "changes": changes[:20],
-                        "status": "dirty",
-                    }
-                    if merge_stats.get("queued", 0) > 0 or merge_stats.get("running", 0) > 0:
-                        merge_blockers.append(
-                            {
-                                "type": "dirty_main_worktree",
-                                "message": "Merges are paused: main worktree has uncommitted tracked changes",
-                                "changes": changes[:20],
-                            }
-                        )
-            except GitWorktreeError as e:
-                main_worktree = {
-                    "dirty": False,
-                    "changes": [],
-                    "status": "error",
-                    "error": str(e),
-                }
 
-            # Get daemon status
-            daemon = self._make_daemon()
-            daemon_status = daemon.status()
+        # Get daemon status
+        daemon = self._make_daemon()
+        daemon_status = daemon.status()
 
-            # Surface issues needing human attention (escalated/failed)
-            attention_cursor = self.db.conn.execute(
-                "SELECT id, title, status FROM issues WHERE project = ? AND status IN ('escalated', 'failed') ORDER BY updated_at DESC",
-                (self.project_name,),
-            )
-            attention_issues = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in attention_cursor.fetchall()]
+        # Surface issues needing human attention (escalated/failed)
+        attention_cursor = self.db.conn.execute(
+            "SELECT id, title, status FROM issues WHERE project = ? AND status IN ('escalated', 'failed') ORDER BY updated_at DESC",
+            (self.project_name,),
+        )
+        attention_issues = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in attention_cursor.fetchall()]
 
-            result = {
-                "project": self.project_name,
-                "issues": status_counts,
-                "total_issues": sum(status_counts.values()),
-                "active_agents": len(active_agents),
-                "workers": workers_detail,
-                "refinery": refinery_info,
-                "ready_queue": len(ready),
-                "merge_queue": merge_stats,
-                "merge_blockers": merge_blockers,
-                "main_worktree": main_worktree,
-                "ready_issues": [{"id": i["id"], "title": i["title"]} for i in ready[:5]],
-                "attention_issues": attention_issues,
-                "daemon": {
-                    "running": daemon_status.get("running", False),
-                    "pid": daemon_status.get("pid"),
-                    "log_file": daemon_status.get("log_file"),
-                },
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "project": self.project_name,
+            "issues": status_counts,
+            "total_issues": sum(status_counts.values()),
+            "active_agents": len(active_agents),
+            "workers": workers_detail,
+            "refinery": refinery_info,
+            "ready_queue": len(ready),
+            "merge_queue": merge_stats,
+            "merge_blockers": merge_blockers,
+            "main_worktree": main_worktree,
+            "ready_issues": [{"id": i["id"], "title": i["title"]} for i in ready[:5]],
+            "attention_issues": attention_issues,
+            "daemon": {
+                "running": daemon_status.get("running", False),
+                "pid": daemon_status.get("pid"),
+                "log_file": daemon_status.get("log_file"),
+            },
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print("\n=== Hive Status ===")
             print(f"\nProject: {result.get('project', self.project_name)}")
             print("\nIssues:")
@@ -925,34 +911,31 @@ class HiveCLI:
             total = result.get("total_issues", 0)
             if total == 0:
                 print("\n  No issues yet. Create one with: hive create 'title' 'description'")
+        return result
 
+    @cli_command
     def list_agents(self, agent_id: Optional[str] = None, status: Optional[str] = None, *, json_mode: bool = False):
         """List agents, or show details for a specific agent if agent_id is provided."""
         # If agent_id is provided, show that agent's details
         if agent_id:
-            try:
-                cursor = self.db.conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
-                row = cursor.fetchone()
-                if not row:
-                    raise ValueError(f"Agent not found: {agent_id}")
+            cursor = self.db.conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"Agent not found: {agent_id}")
 
-                agent = dict(row)
+            agent = dict(row)
 
-                # Get current issue details
-                if agent.get("current_issue"):
-                    issue = self.db.get_issue(agent["current_issue"])
-                    agent["current_issue_details"] = issue
+            # Get current issue details
+            if agent.get("current_issue"):
+                issue = self.db.get_issue(agent["current_issue"])
+                agent["current_issue_details"] = issue
 
-                # Get recent events for this agent
-                agent["recent_events"] = self.db.get_events(agent_id=agent_id, limit=10)
+            # Get recent events for this agent
+            agent["recent_events"] = self.db.get_events(agent_id=agent_id, limit=10)
 
-                result = agent
-            except Exception as e:
-                self._error(str(e), json_mode=json_mode)
+            result = agent
 
-            if json_mode:
-                print(json.dumps(result, default=str))
-            else:
+            if not json_mode:
                 print(f"\nAgent: {result.get('id', agent_id)}")
                 print(f"Name: {result.get('name', '')}")
                 print(f"Status: {result.get('status', '')}")
@@ -963,48 +946,44 @@ class HiveCLI:
                     print(f"\nRecent events ({len(events)}):")
                     for event in events[:5]:
                         print(f"  [{event['created_at']}] {event['event_type']}")
-            return
+            return result
 
         # Otherwise, list all agents
-        try:
-            query = "SELECT * FROM agents WHERE project = ?"
-            params = [self.project_name]
+        query = "SELECT * FROM agents WHERE project = ?"
+        params = [self.project_name]
 
-            if status:
-                query += " AND status = ?"
-                params.append(status)
+        if status:
+            query += " AND status = ?"
+            params.append(status)
 
-            query += " ORDER BY created_at DESC"
+        query += " ORDER BY created_at DESC"
 
-            cursor = self.db.conn.execute(query, params)
-            agents = [dict(row) for row in cursor.fetchall()]
+        cursor = self.db.conn.execute(query, params)
+        agents = [dict(row) for row in cursor.fetchall()]
 
-            # Enrich with current issue info
-            for agent in agents:
-                if agent.get("current_issue"):
-                    issue = self.db.get_issue(agent["current_issue"])
-                    if issue:
-                        agent["current_issue_title"] = issue.get("title", "unknown")
+        # Enrich with current issue info
+        for agent in agents:
+            if agent.get("current_issue"):
+                issue = self.db.get_issue(agent["current_issue"])
+                if issue:
+                    agent["current_issue_title"] = issue.get("title", "unknown")
 
-            result = {"count": len(agents), "agents": agents}
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {"count": len(agents), "agents": agents}
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
-            agents = result.get("agents", [])
+        if not json_mode:
             if not agents:
                 print("No agents found.")
-                return
+                return result
             print(f"\n{'ID':<16} {'Name':<16} {'Status':<10} {'Current Issue':<30}")
             print("-" * 72)
             for agent in agents:
                 issue_title = agent.get("current_issue_title", agent.get("current_issue", "")) or "-"
                 print(f"{agent['id']:<16} {agent['name']:<16} {agent['status']:<10} {str(issue_title)[:30]}")
+        return result
 
     # ── Notes ─────────────────────────────────────────────────────────
 
+    @cli_command
     def add_note(
         self,
         content: str,
@@ -1014,24 +993,21 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Add a note to the knowledge base."""
-        try:
-            note_id = self.db.add_note(agent_id=None, issue_id=issue_id, content=content, category=category, project=self.project_name)
+        note_id = self.db.add_note(agent_id=None, issue_id=issue_id, content=content, category=category, project=self.project_name)
 
-            result = {
-                "note_id": note_id,
-                "content": content,
-                "category": category,
-                "issue_id": issue_id,
-                "message": f"Added note #{note_id}",
-            }
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
+        result = {
+            "note_id": note_id,
+            "content": content,
+            "category": category,
+            "issue_id": issue_id,
+            "message": f"Added note #{note_id}",
+        }
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(f"Added note #{result['note_id']} [{category}]")
+        return result
 
+    @cli_command
     def note_with_targets(
         self,
         content: str,
@@ -1043,44 +1019,40 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Add a note with explicit delivery targets (agents/issues)."""
-        try:
-            note_id = self.db.add_note(
-                agent_id=None,
-                issue_id=issue_id,
-                content=content,
-                project=self.project_name,
-                must_read=must_read,
-            )
-            delivery_count = self.db.create_note_deliveries(note_id, to_agents=to_agents, to_issues=to_issues)
-            result = {
+        note_id = self.db.add_note(
+            agent_id=None,
+            issue_id=issue_id,
+            content=content,
+            project=self.project_name,
+            must_read=must_read,
+        )
+        delivery_count = self.db.create_note_deliveries(note_id, to_agents=to_agents, to_issues=to_issues)
+        result = {
+            "note_id": note_id,
+            "delivery_count": delivery_count,
+            "to_agents": to_agents or [],
+            "to_issues": to_issues or [],
+            "must_read": must_read,
+        }
+        self.db.log_event(
+            issue_id,
+            None,
+            "note_sent",
+            {
                 "note_id": note_id,
-                "delivery_count": delivery_count,
+                "must_read": must_read,
                 "to_agents": to_agents or [],
                 "to_issues": to_issues or [],
-                "must_read": must_read,
-            }
-            self.db.log_event(
-                issue_id,
-                None,
-                "note_sent",
-                {
-                    "note_id": note_id,
-                    "must_read": must_read,
-                    "to_agents": to_agents or [],
-                    "to_issues": to_issues or [],
-                },
-            )
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-            return
+            },
+        )
 
-        if json_mode:
-            print(json.dumps(result, default=str))
-        else:
+        if not json_mode:
             print(f"Sent note #{note_id} with {delivery_count} delivery(ies)")
+        return result
 
     # ── Mail (note delivery inbox) ───────────────────────────────────
 
+    @cli_command
     def mail_inbox(
         self,
         agent_id: str,
@@ -1090,30 +1062,26 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Show note delivery inbox for an agent."""
-        try:
-            deliveries = self.db.get_inbox_deliveries(agent_id, issue_id=issue_id, unread_only=unread_only)
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-            return
+        deliveries = self.db.get_inbox_deliveries(agent_id, issue_id=issue_id, unread_only=unread_only)
+        result = {"count": len(deliveries), "deliveries": deliveries}
 
-        if json_mode:
-            print(json.dumps({"count": len(deliveries), "deliveries": deliveries}, default=str))
-            return
+        if not json_mode:
+            if not deliveries:
+                print("No deliveries found.")
+                return result
 
-        if not deliveries:
-            print("No deliveries found.")
-            return
+            # Table: ID, Note, Status, Must Read, From, Content (truncated)
+            header = f"{'ID':<6} {'Note':<6} {'Status':<10} {'Must Read':<10} {'From':<16} Content"
+            print(header)
+            print("-" * len(header))
+            for d in deliveries:
+                content_preview = (d.get("content") or "")[:40]
+                must_read_label = "yes" if d.get("must_read") else "no"
+                from_agent = d.get("from_agent_id") or "-"
+                print(f"{d['id']:<6} {d['note_id']:<6} {d['status']:<10} {must_read_label:<10} {from_agent:<16} {content_preview}")
+        return result
 
-        # Table: ID, Note, Status, Must Read, From, Content (truncated)
-        header = f"{'ID':<6} {'Note':<6} {'Status':<10} {'Must Read':<10} {'From':<16} Content"
-        print(header)
-        print("-" * len(header))
-        for d in deliveries:
-            content_preview = (d.get("content") or "")[:40]
-            must_read_label = "yes" if d.get("must_read") else "no"
-            from_agent = d.get("from_agent_id") or "-"
-            print(f"{d['id']:<6} {d['note_id']:<6} {d['status']:<10} {must_read_label:<10} {from_agent:<16} {content_preview}")
-
+    @cli_command
     def mail_read(
         self,
         delivery_id: int,
@@ -1122,21 +1090,20 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Mark a delivery as read."""
-        try:
-            updated = self.db.mark_delivery_read(delivery_id, agent_id)
+        updated = self.db.mark_delivery_read(delivery_id, agent_id)
+        if updated:
+            self.db.log_event(None, agent_id, "note_read", {"delivery_id": delivery_id})
+
+        result = {"delivery_id": delivery_id, "updated": updated}
+
+        if not json_mode:
             if updated:
-                self.db.log_event(None, agent_id, "note_read", {"delivery_id": delivery_id})
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-            return
+                print(f"Delivery #{delivery_id} marked read.")
+            else:
+                print(f"Delivery #{delivery_id} unchanged (already read or not found).")
+        return result
 
-        if json_mode:
-            print(json.dumps({"delivery_id": delivery_id, "updated": updated}, default=str))
-        elif updated:
-            print(f"Delivery #{delivery_id} marked read.")
-        else:
-            print(f"Delivery #{delivery_id} unchanged (already read or not found).")
-
+    @cli_command
     def mail_ack(
         self,
         delivery_id: int,
@@ -1145,20 +1112,18 @@ class HiveCLI:
         json_mode: bool = False,
     ):
         """Acknowledge a must_read delivery."""
-        try:
-            updated = self.db.mark_delivery_acked(delivery_id, agent_id)
-            if updated:
-                self.db.log_event(None, agent_id, "note_acked", {"delivery_id": delivery_id})
-        except Exception as e:
-            self._error(str(e), json_mode=json_mode)
-            return
+        updated = self.db.mark_delivery_acked(delivery_id, agent_id)
+        if updated:
+            self.db.log_event(None, agent_id, "note_acked", {"delivery_id": delivery_id})
 
-        if json_mode:
-            print(json.dumps({"delivery_id": delivery_id, "updated": updated}, default=str))
-        elif updated:
-            print(f"Delivery #{delivery_id} acked.")
-        else:
-            print(f"Delivery #{delivery_id} unchanged (not must_read, already acked, or not found).")
+        result = {"delivery_id": delivery_id, "updated": updated}
+
+        if not json_mode:
+            if updated:
+                print(f"Delivery #{delivery_id} acked.")
+            else:
+                print(f"Delivery #{delivery_id} unchanged (not must_read, already acked, or not found).")
+        return result
 
     # ── Event log (tail-style, not tool-backed) ─────────────────────
 

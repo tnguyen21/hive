@@ -13,7 +13,8 @@ def test_cli_create(temp_db, tmp_path):
     """Test creating an issue via CLI."""
     cli = HiveCLI(temp_db, str(tmp_path))
 
-    issue_id = cli.create("Test issue", "Test description", priority=1)
+    result = cli.create("Test issue", "Test description", priority=1)
+    issue_id = result["id"]
 
     assert issue_id.startswith("w-")
 
@@ -30,10 +31,10 @@ def test_cli_create_with_depends_on(temp_db, tmp_path, capsys):
     cli = HiveCLI(temp_db, str(tmp_path))
 
     # Create a blocker issue first
-    blocker_id = cli.create("Blocker", "block desc")
+    blocker_id = cli.create("Blocker", "block desc")["id"]
 
     # Create a dependent issue with --depends-on
-    dependent_id = cli.create("Dependent", "dep desc", depends_on=[blocker_id])
+    dependent_id = cli.create("Dependent", "dep desc", depends_on=[blocker_id])["id"]
 
     # Verify dependency was created
     issue = temp_db.get_issue(dependent_id)
@@ -54,7 +55,7 @@ def test_cli_create_with_depends_on_json(temp_db, tmp_path, capsys):
     """Test --depends-on shows in JSON output."""
     cli = HiveCLI(temp_db, str(tmp_path))
 
-    blocker_id = cli.create("Blocker", "desc")
+    blocker_id = cli.create("Blocker", "desc")["id"]
     capsys.readouterr()  # Clear output from first create
 
     cli.create("Dependent", "desc", depends_on=[blocker_id], json_mode=True)
@@ -1309,3 +1310,112 @@ def test_mail_ack_event_not_logged_on_non_must_read(temp_db, tmp_path):
     # No note_acked event should be logged since ack was rejected
     events = temp_db.get_events(agent_id="agent-nr", event_type="note_acked")
     assert len(events) == 0
+
+
+# ── cli_command decorator invariant tests ────────────────────────────────────
+
+
+def test_cli_command_inv1_json_mode_produces_valid_json(temp_db, tmp_path, capsys):
+    """INV-1: Every decorated command in json_mode produces valid JSON to stdout on success."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    # Spot-check: create, list_issues, cancel
+    cli.create("INV1 issue", json_mode=True)
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert "id" in data
+
+    cli.list_issues(json_mode=True)
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert "issues" in data
+
+    issue_id = temp_db.create_issue("To cancel", project=tmp_path.name)
+    cli.cancel(issue_id, reason="test", json_mode=True)
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert data["issue_id"] == issue_id
+
+
+def test_cli_command_inv2_exception_produces_error_json(temp_db, tmp_path, capsys):
+    """INV-2: Every decorated command in json_mode produces {"error": "..."} on exception."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with pytest.raises(SystemExit):
+        cli.show("nonexistent-id-xyz", json_mode=True)
+
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert "error" in data
+    assert isinstance(data["error"], str)
+    assert len(data["error"]) > 0
+
+
+def test_cli_command_inv2_exception_exits_nonzero(temp_db, tmp_path):
+    """INV-2b: Decorated command exits with code 1 on exception."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.show("nonexistent-id-xyz", json_mode=True)
+    assert exc_info.value.code == 1
+
+
+def test_cli_command_inv3_human_output_create(temp_db, tmp_path, capsys):
+    """INV-3: Human-readable output for create is unchanged."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.create("My Title", priority=3, tags="refactor,small")
+    out = capsys.readouterr().out
+    assert "Created issue:" in out
+    assert "My Title" in out
+    assert "Priority: 3" in out
+    assert "Tags: refactor, small" in out
+
+
+def test_cli_command_inv3_human_output_cancel(temp_db, tmp_path, capsys):
+    """INV-3: Human-readable output for cancel is unchanged."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+    issue_id = temp_db.create_issue("Cancel me", project=tmp_path.name)
+
+    cli.cancel(issue_id, reason="done")
+    out = capsys.readouterr().out
+    assert f"Canceled issue {issue_id}" in out
+
+
+def test_cli_command_inv3_human_output_list_empty(temp_db, tmp_path, capsys):
+    """INV-3: Human-readable output for list_issues when empty is unchanged."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.list_issues()
+    out = capsys.readouterr().out
+    assert "No issues found." in out
+    assert "hive create" in out
+
+
+def test_cli_command_decorator_exception_human_mode(temp_db, tmp_path, capsys):
+    """In human mode, exception prints 'Error: ...' to stderr and exits 1."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.show("nonexistent-id-xyz", json_mode=False)
+
+    assert exc_info.value.code == 1
+    # stdout should be empty; error goes to stderr
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Error:" in captured.err
+
+
+def test_cli_command_decorator_does_not_print_json_in_human_mode(temp_db, tmp_path, capsys):
+    """Decorator must NOT print JSON output when json_mode=False."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    cli.create("Silent", json_mode=False)
+    out = capsys.readouterr().out
+    # Should be human text, not JSON
+    assert out.startswith("Created issue:")
+    try:
+        json.loads(out)
+        assert False, "Output was parseable JSON — decorator double-printed"
+    except (json.JSONDecodeError, ValueError):
+        pass  # expected: not JSON
