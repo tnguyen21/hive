@@ -1,0 +1,3 @@
+## 2025-02-12 - Optimizing SQLite Queries with Composite Indexes
+**Learning:** SQLite's query planner uses `USE TEMP B-TREE FOR ORDER BY` when sorting on columns not covered by the index used for filtering. Adding a composite index `(filter_col1, filter_col2, sort_col1, sort_col2)` allows SQLite to scan the index in order, completely avoiding the sort operation.
+**Action:** Always check `EXPLAIN QUERY PLAN` for frequently executed queries (like `get_ready_queue`) and look for `USE TEMP B-TREE FOR ORDER BY`. Eliminate it with a covering index that includes equality constraints followed by sort columns.
