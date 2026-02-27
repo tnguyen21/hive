@@ -1,0 +1,3 @@
+## 2026-02-23 - SQLite Queue Sorting Bottleneck
+**Learning:** The `get_ready_queue` query performs a full sort (`USE TEMP B-TREE FOR ORDER BY`) on the `issues` table because it lacks an index covering the `ORDER BY` columns (`priority`, `created_at`). This causes O(N log N) performance degradation as the number of open issues grows, making it a critical bottleneck for the orchestrator loop.
+**Action:** Always verify that frequently executed `ORDER BY` queries are backed by an index that covers both the filtering conditions and the sorting columns to enable O(1) or O(N) index scans. For `get_ready_queue`, a composite index `(status, assignee, priority, created_at)` eliminates the sort operation entirely.

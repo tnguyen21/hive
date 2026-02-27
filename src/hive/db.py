@@ -81,6 +81,8 @@ CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 CREATE INDEX IF NOT EXISTS idx_issues_assignee ON issues(assignee);
 CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project);
+-- Optimization for get_ready_queue: covers WHERE status='open' AND assignee IS NULL and ORDER BY priority, created_at
+CREATE INDEX IF NOT EXISTS idx_issues_ready_sort ON issues(status, assignee, priority, created_at);
 ----------------------------------------------------------------------
 -- DEPENDENCIES: edges in the work DAG
 ----------------------------------------------------------------------
