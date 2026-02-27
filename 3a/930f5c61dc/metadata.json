@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "3a930f5c61dc",
+  "strategy": "manual-commit",
+  "branch": "remove-opencode-backend",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/hive/merge.py",
+    "src/hive/orchestrator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3a/930f5c61dc/0/metadata.json",
+      "transcript": "/3a/930f5c61dc/0/full.jsonl",
+      "context": "/3a/930f5c61dc/0/context.md",
+      "content_hash": "/3a/930f5c61dc/0/content_hash.txt",
+      "prompt": "/3a/930f5c61dc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 283,
+    "cache_creation_tokens": 341425,
+    "cache_read_tokens": 24083716,
+    "output_tokens": 33790,
+    "api_call_count": 241
+  }
+}
