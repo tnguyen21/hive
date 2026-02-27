@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7ce29d3b9f3b",
+  "session_id": "5c1ae902-7f6d-4746-a049-8a992b626dce",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T09:27:34.579952Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/test_orchestrator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2f1934ea3cbd",
+  "checkpoint_transcript_start": 23,
+  "transcript_lines_at_start": 23,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 13961,
+    "cache_read_tokens": 202036,
+    "output_tokens": 73,
+    "api_call_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T09:27:34.53298Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-tau-projects-hive/5c1ae902-7f6d-4746-a049-8a992b626dce.jsonl"
+}
