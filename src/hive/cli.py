@@ -1274,13 +1274,13 @@ class HiveCLI:
 
             group_label = "Tag" if group_by == "tag" else "Type"
             group_key = "tag" if group_by == "tag" else "type"
-            print(f"{'Model':<35} {group_label:<15} {'Issues':>6} {'OK':>4} {'Fail':>4} {'Retries':>7} {'Avg Min':>8}")
+            print(f"{'Model':<35} {group_label:<15} {'Issues':>6} {'OK':>4} {'Esc':>4} {'Retries':>7} {'Avg Min':>8}")
             print("-" * 85)
             for r in results:
                 model_name = (r.get("model") or "unknown")[:34]
                 group_val = str(r.get(group_key, ""))[:14]
                 print(
-                    f"{model_name:<35} {group_val:<15} {r.get('issue_count', 0):>6} {r.get('successes', 0):>4} {r.get('failures', 0):>4} {r.get('total_retries', 0):>7} {r.get('avg_duration_minutes', 0):>8}"
+                    f"{model_name:<35} {group_val:<15} {r.get('issue_count', 0):>6} {r.get('successes', 0):>4} {r.get('escalations', 0):>4} {r.get('total_retries', 0):>7} {r.get('avg_duration_minutes', 0):>8}"
                 )
             return
 

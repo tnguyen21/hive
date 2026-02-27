@@ -995,10 +995,10 @@ def db_with_model_events(temp_db):
     db.log_event(id1, None, "tokens_used", {"input_tokens": 1000, "output_tokens": 500, "model": "claude-sonnet-4-5-20250929"})
     db.conn.execute("UPDATE issues SET status = 'done' WHERE id = ?", (id1,))
 
-    # Issue 2: failed with opus, tagged javascript+feature
+    # Issue 2: escalated with opus, tagged javascript+feature
     id2 = db.create_issue(title="Add dashboard", project="test", issue_type="feature", model="claude-opus-4-6", tags=["javascript", "feature"])
     db.log_event(id2, None, "tokens_used", {"input_tokens": 2000, "output_tokens": 800, "model": "claude-opus-4-6"})
-    db.conn.execute("UPDATE issues SET status = 'failed' WHERE id = ?", (id2,))
+    db.conn.execute("UPDATE issues SET status = 'escalated' WHERE id = ?", (id2,))
 
     # Issue 3: completed with sonnet, tagged javascript
     id3 = db.create_issue(title="Fix button", project="test", issue_type="bug", model="claude-sonnet-4-5-20250929", tags=["javascript"])
