@@ -1357,8 +1357,8 @@ async def test_handle_agent_complete_budget_transition_routes_failure(temp_db, t
 
 
 @pytest.mark.asyncio
-async def test_handle_agent_complete_cycle_transition_skips_teardown(temp_db, tmp_path):
-    """Cycle transition should continue the same agent and skip teardown."""
+async def test_handle_agent_complete_epic_step_does_not_cycle(temp_db, tmp_path):
+    """Epic steps should complete normally without session cycling."""
     mock_opencode = AsyncMock(spec=OpenCodeClient)
     mock_opencode.get_messages = AsyncMock(return_value=[])
     orch = _make_orchestrator(temp_db, tmp_path, mock_opencode)
@@ -1378,9 +1378,6 @@ async def test_handle_agent_complete_cycle_transition_skips_teardown(temp_db, tm
     )
     orch.active_agents[agent_id] = agent
 
-    orch._teardown_agent = AsyncMock()
-    orch.cycle_agent_to_next_step = AsyncMock()
-
     file_result = {
         "status": "success",
         "summary": "Step complete",
@@ -1394,11 +1391,15 @@ async def test_handle_agent_complete_cycle_transition_skips_teardown(temp_db, tm
     with patch("hive.orchestrator.has_diff_from_main_async", return_value=True):
         await orch.handle_agent_complete(agent, file_result=file_result)
 
-    orch.cycle_agent_to_next_step.assert_called_once()
-    cycled_step = orch.cycle_agent_to_next_step.call_args[0][1]
-    assert cycled_step["id"] == next_step_id
-    orch._teardown_agent.assert_not_called()
-    assert agent_id in orch.active_agents
+    # Step 1 completes and is enqueued for merge; no attempt is made to claim Step 2.
+    assert temp_db.get_issue(issue_id)["status"] == "done"
+    assert temp_db.get_issue(next_step_id)["status"] == "open"
+    assert temp_db.get_issue(next_step_id)["assignee"] is None
+
+    merge_rows = temp_db.conn.execute("SELECT * FROM merge_queue WHERE issue_id = ?", (issue_id,)).fetchall()
+    assert len(merge_rows) == 1
+
+    assert agent_id not in orch.active_agents
 
 
 @pytest.mark.asyncio

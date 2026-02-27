@@ -3,61 +3,59 @@
 import pytest
 
 
-def test_get_next_ready_step(temp_db):
-    """Test getting next ready step in a epic."""
+def test_ready_queue_epic_steps_respects_dependencies(temp_db):
+    """Ready queue should surface epic steps as their deps resolve."""
     # Create parent epic
     parent = temp_db.create_issue("Multi-step workflow", issue_type="epic", project="test")
 
     # Create steps
-    step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test")
-    step2 = temp_db.create_issue("Step 2", issue_type="step", parent_id=parent, project="test")
-    step3 = temp_db.create_issue("Step 3", issue_type="step", parent_id=parent, project="test")
+    step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test", priority=1)
+    step2 = temp_db.create_issue("Step 2", issue_type="step", parent_id=parent, project="test", priority=1)
+    step3 = temp_db.create_issue("Step 3", issue_type="step", parent_id=parent, project="test", priority=1)
 
     # Wire dependencies: step2 depends on step1, step3 depends on step2
     temp_db.add_dependency(step2, step1)
     temp_db.add_dependency(step3, step2)
 
     # Initially, only step1 should be ready
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step is not None
-    assert next_step["id"] == step1
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    ready_ids = [i["id"] for i in ready]
+    assert ready_ids == [step1]
 
     # Mark step1 as done
     temp_db.update_issue_status(step1, "done")
 
     # Now step2 should be ready
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step is not None
-    assert next_step["id"] == step2
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    ready_ids = [i["id"] for i in ready]
+    assert ready_ids == [step2]
 
     # Mark step2 as done
     temp_db.update_issue_status(step2, "done")
 
     # Now step3 should be ready
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step is not None
-    assert next_step["id"] == step3
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    ready_ids = [i["id"] for i in ready]
+    assert ready_ids == [step3]
 
     # Mark step3 as done
     temp_db.update_issue_status(step3, "done")
 
     # No more steps
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step is None
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    assert ready == []
 
 
-def test_get_next_ready_step_no_dependencies(temp_db):
-    """Test getting next ready step with no dependencies."""
+def test_ready_queue_epic_steps_no_dependencies(temp_db):
+    """Independent epic steps should all be ready (sorted by priority)."""
     parent = temp_db.create_issue("Epic", issue_type="epic", project="test")
 
     # Create independent steps
-    step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test")
-    temp_db.create_issue("Step 2", issue_type="step", parent_id=parent, project="test")
+    step1 = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent, project="test", priority=1)
+    step2 = temp_db.create_issue("Step 2", issue_type="step", parent_id=parent, project="test", priority=2)
 
-    # First step should be step1 (oldest by created_at)
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step is not None
-    assert next_step["id"] == step1
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    assert [i["id"] for i in ready] == [step1, step2]
 
 
 def test_get_active_agents(temp_db):
@@ -87,11 +85,11 @@ def test_epic_execution_order(temp_db):
     parent = temp_db.create_issue("Complex workflow", issue_type="epic", project="test")
 
     # Create steps
-    setup = temp_db.create_issue("Setup", issue_type="step", parent_id=parent, project="test")
-    design = temp_db.create_issue("Design", issue_type="step", parent_id=parent, project="test")
-    impl_a = temp_db.create_issue("Implement A", issue_type="step", parent_id=parent, project="test")
-    impl_b = temp_db.create_issue("Implement B", issue_type="step", parent_id=parent, project="test")
-    test = temp_db.create_issue("Test", issue_type="step", parent_id=parent, project="test")
+    setup = temp_db.create_issue("Setup", issue_type="step", parent_id=parent, project="test", priority=1)
+    design = temp_db.create_issue("Design", issue_type="step", parent_id=parent, project="test", priority=1)
+    impl_a = temp_db.create_issue("Implement A", issue_type="step", parent_id=parent, project="test", priority=1)
+    impl_b = temp_db.create_issue("Implement B", issue_type="step", parent_id=parent, project="test", priority=1)
+    test = temp_db.create_issue("Test", issue_type="step", parent_id=parent, project="test", priority=1)
 
     # Dependencies:
     # - design depends on setup
@@ -105,85 +103,30 @@ def test_epic_execution_order(temp_db):
     temp_db.add_dependency(test, impl_b)
 
     # Step 1: Setup should be ready
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step["id"] == setup
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    assert [i["id"] for i in ready] == [setup]
 
     # Complete setup
     temp_db.update_issue_status(setup, "done")
 
     # Step 2: Design should be ready
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step["id"] == design
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    assert [i["id"] for i in ready] == [design]
 
     # Complete design
     temp_db.update_issue_status(design, "done")
 
     # Step 3: Either impl_a or impl_b should be ready (they're independent)
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step["id"] in [impl_a, impl_b]
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    assert {i["id"] for i in ready} == {impl_a, impl_b}
 
     # Complete both implementations
     temp_db.update_issue_status(impl_a, "done")
     temp_db.update_issue_status(impl_b, "done")
 
     # Step 4: Test should be ready now
-    next_step = temp_db.get_next_ready_step(parent)
-    assert next_step["id"] == test
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_session_cycling(temp_db, git_repo):
-    """Test session cycling between epic steps (requires OpenCode server)."""
-    from hive.backends import OpenCodeClient
-    from hive.orchestrator import Orchestrator
-
-    # Create a epic with two steps
-    parent = temp_db.create_issue("Two-step workflow", issue_type="epic", project="test")
-    step1 = temp_db.create_issue(
-        "Create README",
-        issue_type="step",
-        parent_id=parent,
-        project="test",
-        description="Create a README.md file",
-    )
-    step2 = temp_db.create_issue(
-        "Add license",
-        issue_type="step",
-        parent_id=parent,
-        project="test",
-        description="Add a LICENSE file",
-    )
-
-    # Wire dependency
-    temp_db.add_dependency(step2, step1)
-
-    async with OpenCodeClient() as opencode:
-        orch = Orchestrator(
-            db=temp_db,
-            opencode_client=opencode,
-            project_path=str(git_repo),
-            project_name="test",
-        )
-
-        # Spawn worker on step1
-        issue = temp_db.get_issue(step1)
-        await orch.spawn_worker(issue)
-
-        # Wait a bit for the agent to work
-        import asyncio
-
-        await asyncio.sleep(5)
-
-        # Check if step1 is done and step2 is claimed
-        temp_db.get_issue(step1)
-        temp_db.get_issue(step2)
-
-        # Clean up - get agent and delete sessions
-        agents = temp_db.get_active_agents()
-        for agent_dict in agents:
-            if agent_dict["session_id"]:
-                await opencode.delete_session(agent_dict["session_id"], directory=agent_dict["worktree"])
+    ready = temp_db.get_ready_queue(project="test", limit=10)
+    assert [i["id"] for i in ready] == [test]
 
 
 @pytest.mark.asyncio

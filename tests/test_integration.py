@@ -110,7 +110,7 @@ async def test_happy_path_direct_completion(integration_orchestrator, fake_serve
     """
     orch = integration_orchestrator
 
-    issue_id = orch.db.create_issue(title="Test feature", description="Implement X", priority=1, issue_type="task")
+    issue_id = orch.db.create_issue(title="Test feature", description="Implement X", priority=1, issue_type="task", project="test-project")
 
     ready_issues = orch.db.get_ready_queue()
     assert len(ready_issues) == 1
@@ -163,7 +163,7 @@ async def test_happy_path_via_sse(integration_orchestrator, fake_server, temp_gi
     """
     orch = integration_orchestrator
 
-    issue_id = orch.db.create_issue(title="Add widget", description="Build widget X", priority=1, issue_type="task")
+    issue_id = orch.db.create_issue(title="Add widget", description="Build widget X", priority=1, issue_type="task", project="test-project")
 
     async def inject_completion_when_ready():
         # Wait for spawn_worker to create a session
@@ -211,7 +211,7 @@ async def test_worker_failure_and_retry(integration_orchestrator, fake_server, t
     """First attempt fails → retry → second attempt succeeds."""
     orch = integration_orchestrator
 
-    issue_id = orch.db.create_issue(title="Fix bug", description="Fix the thing", priority=1, issue_type="task")
+    issue_id = orch.db.create_issue(title="Fix bug", description="Fix the thing", priority=1, issue_type="task", project="test-project")
 
     async def inject_outcomes():
         # First attempt: failure
@@ -262,21 +262,21 @@ async def test_worker_failure_and_retry(integration_orchestrator, fake_server, t
 
 
 # =============================================================================
-# Epic flow (3 sequential steps with session cycling)
+# Epic flow (3 sequential steps, no session cycling)
 # =============================================================================
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_epic_three_step_flow(integration_orchestrator, fake_server, temp_git_repo):
-    """Parent epic with 3 sequential steps → session cycling → all complete."""
+    """Parent epic with 3 sequential steps → each step runs as its own worker."""
     orch = integration_orchestrator
 
     # Create epic with 3 sequential steps
-    parent_id = orch.db.create_issue(title="Big feature", issue_type="epic")
-    step1_id = orch.db.create_issue(title="Step 1: API", parent_id=parent_id, issue_type="step")
-    step2_id = orch.db.create_issue(title="Step 2: Frontend", parent_id=parent_id, issue_type="step")
-    step3_id = orch.db.create_issue(title="Step 3: Tests", parent_id=parent_id, issue_type="step")
+    parent_id = orch.db.create_issue(title="Big feature", issue_type="epic", project="test-project")
+    step1_id = orch.db.create_issue(title="Step 1: API", parent_id=parent_id, issue_type="step", project="test-project")
+    step2_id = orch.db.create_issue(title="Step 2: Frontend", parent_id=parent_id, issue_type="step", project="test-project")
+    step3_id = orch.db.create_issue(title="Step 3: Tests", parent_id=parent_id, issue_type="step", project="test-project")
 
     # Sequential: step2 depends on step1, step3 depends on step2
     orch.db.add_dependency(step2_id, step1_id)
@@ -296,24 +296,29 @@ async def test_epic_three_step_flow(integration_orchestrator, fake_server, temp_
                 continue
             break
 
-        # Step 2: cycle_agent_to_next_step creates a new session
-        current_count = len(fake_server.created_session_ids)
-        sid2 = await await_session_created(fake_server, count=current_count + 1, timeout=5)
-        await asyncio.sleep(0.2)
-        # The agent reuses its worktree, find it
-        for agent in orch.active_agents.values():
-            if agent.session_id == sid2:
-                complete_worker(fake_server, sid2, agent.worktree, summary="Step 2 done")
-                break
+        # Step 2: new worker/session (no cycling)
+        sid2 = await await_session_created(fake_server, count=2, timeout=5)
+        for _ in range(50):
+            for agent in orch.active_agents.values():
+                if agent.session_id == sid2:
+                    await asyncio.sleep(0.2)
+                    complete_worker(fake_server, sid2, agent.worktree, summary="Step 2 done")
+                    break
+            else:
+                await asyncio.sleep(0.05)
+                continue
+            break
 
-        # Step 3
-        current_count = len(fake_server.created_session_ids)
-        sid3 = await await_session_created(fake_server, count=current_count + 1, timeout=5)
-        await asyncio.sleep(0.2)
-        for agent in orch.active_agents.values():
-            if agent.session_id == sid3:
-                complete_worker(fake_server, sid3, agent.worktree, summary="Step 3 done")
-                break
+        # Step 3: new worker/session
+        sid3 = await await_session_created(fake_server, count=3, timeout=5)
+        for _ in range(50):
+            for agent in orch.active_agents.values():
+                if agent.session_id == sid3:
+                    await asyncio.sleep(0.2)
+                    complete_worker(fake_server, sid3, agent.worktree, summary="Step 3 done")
+                    return
+            await asyncio.sleep(0.05)
+        raise RuntimeError("Agent not found for step 3 session")
 
     inject_task = asyncio.create_task(inject_step_completions())
 
@@ -326,16 +331,10 @@ async def test_epic_three_step_flow(integration_orchestrator, fake_server, temp_
     await run_orchestrator_until(orch, all_steps_done, timeout=15)
     await inject_task
 
-    # Verify session_cycled events (steps 2 and 3)
-    events_s2 = orch.db.get_events(issue_id=step2_id, event_type="session_cycled")
-    assert len(events_s2) >= 1
-    events_s3 = orch.db.get_events(issue_id=step3_id, event_type="session_cycled")
-    assert len(events_s3) >= 1
-
-    # Only the last step should enqueue a merge (previous steps cycle to next)
+    # Each step should enqueue a merge (merge processing is disabled in the fixture).
     merges = orch.db.get_queued_merges()
     merge_issue_ids = {m["issue_id"] for m in merges}
-    assert step3_id in merge_issue_ids
+    assert {step1_id, step2_id, step3_id}.issubset(merge_issue_ids)
 
 
 # =============================================================================
@@ -353,7 +352,7 @@ async def test_stall_detection(integration_orchestrator, fake_server, temp_git_r
     """
     orch = integration_orchestrator
 
-    issue_id = orch.db.create_issue(title="Stalling task", description="Will stall", priority=1, issue_type="task")
+    issue_id = orch.db.create_issue(title="Stalling task", description="Will stall", priority=1, issue_type="task", project="test-project")
 
     async def handle_stall_then_succeed():
         # First attempt: don't inject anything — let it stall
@@ -402,7 +401,7 @@ async def test_budget_exhaustion(integration_orchestrator, fake_server, temp_git
     orch = integration_orchestrator
 
     with patch.object(Config, "MAX_TOKENS_PER_ISSUE", 100):
-        issue_id = orch.db.create_issue(title="Expensive task", priority=1, issue_type="task")
+        issue_id = orch.db.create_issue(title="Expensive task", priority=1, issue_type="task", project="test-project")
 
         async def inject_with_high_tokens():
             sid = await await_session_created(fake_server, count=1, timeout=5)
@@ -450,7 +449,7 @@ async def test_startup_reconciliation(integration_orchestrator, fake_server, tem
     orch = integration_orchestrator
 
     # Create a stale agent directly in DB (simulating previous daemon crash)
-    issue_id = orch.db.create_issue(title="Stale task", priority=1, issue_type="task")
+    issue_id = orch.db.create_issue(title="Stale task", priority=1, issue_type="task", project="test-project")
     agent_id = orch.db.create_agent("stale-worker")
     orch.db.claim_issue(issue_id, agent_id)
 
@@ -504,7 +503,7 @@ async def test_session_cleanup_on_spawn_failure(integration_orchestrator, fake_s
     """
     orch = integration_orchestrator
 
-    issue_id = orch.db.create_issue(title="Doomed task", priority=1, issue_type="task")
+    issue_id = orch.db.create_issue(title="Doomed task", priority=1, issue_type="task", project="test-project")
     issue = orch.db.get_issue(issue_id)
 
     # Patch send_message_async to fail after session creation

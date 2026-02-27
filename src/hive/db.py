@@ -715,38 +715,6 @@ class Database:
         )
         return cursor.fetchone()[0]
 
-    def get_next_ready_step(self, parent_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get the next ready step within a epic.
-
-        Args:
-            parent_id: Parent epic issue ID
-
-        Returns:
-            Next ready step issue dict, or None if no steps are ready
-        """
-        cursor = self.conn.execute(
-            """
-            SELECT i.*
-            FROM issues i
-            WHERE i.parent_id = ?
-              AND i.status = 'open'
-              AND NOT EXISTS (
-                SELECT 1 FROM dependencies d
-                JOIN issues blocker ON d.depends_on = blocker.id
-                WHERE d.issue_id = i.id
-                  AND d.type = 'blocks'
-                  AND blocker.status NOT IN ('done', 'finalized', 'canceled')
-              )
-            ORDER BY i.created_at ASC
-            LIMIT 1
-            """,
-            (parent_id,),
-        )
-
-        row = cursor.fetchone()
-        return dict(row) if row else None
-
     def get_active_agents(self, project: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all currently active agents.
@@ -1094,28 +1062,6 @@ class Database:
             WHERE i.parent_id = ?
             ORDER BY n.created_at ASC
         """,
-            (parent_id,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_completed_epic_steps(self, parent_id: str) -> List[Dict]:
-        """
-        Get completed/finalized sibling issues for a epic, ordered by creation time.
-
-        Args:
-            parent_id: Parent epic issue ID
-
-        Returns:
-            List of issue dicts with id, title, description, status
-        """
-        if not self.conn:
-            raise RuntimeError("Database not connected")
-        rows = self.conn.execute(
-            """
-            SELECT id, title, description, status FROM issues
-            WHERE parent_id = ? AND status IN ('done', 'finalized')
-            ORDER BY created_at ASC
-            """,
             (parent_id,),
         ).fetchall()
         return [dict(row) for row in rows]

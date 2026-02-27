@@ -190,8 +190,7 @@ On switch:
 Apply routing selection at:
 
 1. `spawn_worker` model resolution
-2. `cycle_agent_to_next_step` model resolution
-3. `agent_switch` path before issue is requeued or immediately before next claim
+2. `agent_switch` path before issue is requeued or immediately before next claim
 
 Manual `issue.model` always bypasses smart routing.
 
@@ -283,4 +282,3 @@ Regression tests:
 
 - MVP (phases 0-2): 1-2 engineering days.
 - Retry switch optimization + optional explainability CLI: +1-2 days.
-

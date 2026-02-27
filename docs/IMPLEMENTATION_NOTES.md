@@ -11,7 +11,7 @@ _Living document tracking implementation status, delivered features, post-mortem
 ### Completed (Phases 1-8)
 
 - **Phase 1**: Database foundation, OpenCode client, SSE consumer, single worker loop
-- **Phase 2**: Multi-worker pool, Queen Bee TUI, session cycling, permission unblocker, daemon mode
+- **Phase 2**: Multi-worker pool, Queen Bee TUI, permission unblocker, daemon mode
 - **Phase 3**: Queen Bee as user-facing interface with 20+ CLI commands
 - **Phase 4**: Merge queue processor with two-tier approach (mechanical + Refinery LLM)
 - **Phase 5**: Session cleanup, triple completion detection, stale agent reconciliation, prompt templates, per-issue model config, CLI enhancements, retry escalation chain (3-tier: retry → agent switch → escalate), degraded mode with exponential backoff recovery, context cycling for Refinery sessions
@@ -57,7 +57,7 @@ See `src/hive/` directory for implementation. See `IMPL_PLAN.md` for the phase-b
 - **Queen Bee**: Strategic decomposition (user-facing TUI, default: Opus)
 - **Workers**: Autonomous execution in git worktrees (default: Sonnet)
 - **Refinery**: LLM merge processor for conflicts and test failures (default: Sonnet)
-- Session cycling for epic steps
+- Epic steps execute as normal issues via dependencies (no session cycling)
 
 ### Merge Pipeline
 

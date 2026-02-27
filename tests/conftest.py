@@ -195,7 +195,7 @@ async def run_orchestrator_until(orchestrator, predicate, timeout=10.0):
         orchestrator.sse_client.stop()
 
         # Cancel managed tasks + any fire-and-forget tasks spawned during the run
-        # (monitor_agent tasks created by spawn_worker / cycle_agent_to_next_step).
+        # (monitor_agent tasks created by spawn_worker).
         spawned_tasks = asyncio.all_tasks() - pre_existing_tasks
         all_to_cancel = managed_tasks | spawned_tasks
         for task in all_to_cancel:

@@ -54,15 +54,7 @@ class CompletionTransition(str, Enum):
     FAIL_ASSESSMENT = "fail_assessment"
     FAIL_VALIDATION_NO_DIFF = "fail_validation_no_diff"
     SUCCESS_DONE = "success_done"
-    SUCCESS_CYCLE_NEXT_STEP = "success_cycle_next_step"
     ERROR_COMPLETION_HANDLER = "error_completion_handler"
-
-
-class PostAction(str, Enum):
-    """Post-transition action for completion handler."""
-
-    TEARDOWN = "teardown"
-    CONTINUE_AGENT = "continue_agent"
 
 
 class EscalationDecision(str, Enum):
@@ -90,7 +82,6 @@ class CompletionDecision:
     terminal_status: Optional[str] = None
     budget_tokens: Optional[int] = None
     validation_original_summary: Optional[str] = None
-    next_step: Optional[Dict[str, Any]] = None
 
 
 class Orchestrator:
@@ -457,15 +448,6 @@ class Orchestrator:
         self.active_agents[agent.agent_id] = agent
         self._session_to_agent[agent.session_id] = agent.agent_id
         self._issue_to_agent[agent.issue_id] = agent.agent_id
-
-    def _reassign_agent_context(self, agent: AgentIdentity, *, session_id: str, issue_id: str):
-        """Update an already-active agent to a new session/issue context."""
-        self._session_to_agent.pop(agent.session_id, None)
-        self._issue_to_agent.pop(agent.issue_id, None)
-        agent.session_id = session_id
-        agent.issue_id = issue_id
-        self._session_to_agent[session_id] = agent.agent_id
-        self._issue_to_agent[issue_id] = agent.agent_id
 
     def _unregister_agent(self, agent_id: str):
         """Remove an agent from active_agents and clean up reverse lookup maps.
@@ -956,9 +938,8 @@ class Orchestrator:
         Args:
             agent: Agent identity
         """
-        # Snapshot the session_id we're monitoring. The agent object may be
-        # mutated by cycle_agent_to_next_step during epic processing,
-        # and we must clean up OUR session's event, not the new one.
+        # Snapshot the session_id we're monitoring and always clean up that key.
+        # This keeps monitor cleanup stable even if the agent object is mutated.
         my_session_id = agent.session_id
         try:
             event = self.session_status_events.get(my_session_id)
@@ -1057,8 +1038,7 @@ class Orchestrator:
             # Tear down the agent so it doesn't leak in active_agents
             await self._teardown_agent(agent)
         finally:
-            # Clean up using the snapshotted session_id, not agent.session_id
-            # which may have been mutated by cycle_agent_to_next_step.
+            # Clean up using the snapshotted session_id, not agent.session_id.
             logger.debug(
                 f"Monitor cleanup for session {my_session_id} "
                 f"(agent={agent.agent_id}, issue={agent.issue_id}, "
@@ -1286,16 +1266,6 @@ class Orchestrator:
                 ),
             )
 
-        issue = self.db.get_issue(agent.issue_id)
-        if issue and issue.get("parent_id"):
-            next_step = self.db.get_next_ready_step(issue["parent_id"])
-            if next_step:
-                return CompletionDecision(
-                    transition=CompletionTransition.SUCCESS_CYCLE_NEXT_STEP,
-                    result=result,
-                    next_step=next_step,
-                )
-
         return CompletionDecision(
             transition=CompletionTransition.SUCCESS_DONE,
             result=result,
@@ -1307,7 +1277,6 @@ class Orchestrator:
     # - FAIL_ASSESSMENT          -> _handle_agent_failure
     # - FAIL_VALIDATION_NO_DIFF  -> log validation_failed + _handle_agent_failure
     # - SUCCESS_DONE             -> update done + enqueue merge + log completed
-    # - SUCCESS_CYCLE_NEXT_STEP  -> SUCCESS_DONE effects + cycle agent + skip teardown
     # - ERROR_COMPLETION_HANDLER -> log completion_error
     async def handle_agent_complete(
         self,
@@ -1327,7 +1296,6 @@ class Orchestrator:
             if not should_handle:
                 return
 
-            post_action = PostAction.TEARDOWN
             decision: Optional[CompletionDecision] = None
             remove_worktree_on_teardown = False
 
@@ -1398,7 +1366,7 @@ class Orchestrator:
                         if decision.result is not None:
                             await self._handle_agent_failure(agent, decision.result)
 
-                    case CompletionTransition.SUCCESS_DONE | CompletionTransition.SUCCESS_CYCLE_NEXT_STEP:
+                    case CompletionTransition.SUCCESS_DONE:
                         if decision.result is None:
                             raise RuntimeError("Missing completion result for success transition")
 
@@ -1444,13 +1412,6 @@ class Orchestrator:
                             },
                         )
 
-                        if decision.transition == CompletionTransition.SUCCESS_CYCLE_NEXT_STEP:
-                            if decision.next_step is None:
-                                raise RuntimeError("Missing next step for cycle transition")
-                            await self.cycle_agent_to_next_step(agent, decision.next_step)
-                            if agent.agent_id in self.active_agents:
-                                post_action = PostAction.CONTINUE_AGENT
-
                     case _:
                         raise RuntimeError(f"Unhandled completion transition: {decision.transition}")
 
@@ -1463,8 +1424,7 @@ class Orchestrator:
                     {"error": str(e), "transition": transition},
                 )
             finally:
-                if post_action == PostAction.TEARDOWN:
-                    await self._teardown_agent(agent, remove_worktree=remove_worktree_on_teardown)
+                await self._teardown_agent(agent, remove_worktree=remove_worktree_on_teardown)
 
     def _choose_escalation(self, issue_id: str) -> EscalationDecision:
         """Decide escalation tier based on anomaly/retry/switch counts."""
@@ -1555,96 +1515,6 @@ class Orchestrator:
             },
         )
         logger.warning(f"Escalating issue {issue_id} to human intervention after {retry_count} retries and {agent_switch_count} agent switches")
-
-    async def cycle_agent_to_next_step(self, agent: AgentIdentity, next_step: Dict[str, Any]):
-        """
-        Cycle an agent to the next step in a epic.
-
-        Args:
-            agent: Current agent identity
-            next_step: Next step issue dict
-        """
-        # Abort and delete current session (not just abort — delete prevents leaked sessions)
-        old_session_id = agent.session_id
-        logger.info(f"Cycling agent {agent.agent_id} to next epic step; cleaning up old session {old_session_id} (next_step={next_step['id']})")
-        await self.opencode.cleanup_session(old_session_id, directory=agent.worktree)
-
-        # Claim the next step
-        claimed = self.db.claim_issue(next_step["id"], agent.agent_id)
-        if not claimed:
-            # Someone else claimed it, release agent
-            if agent.agent_id in self.active_agents:
-                self._unregister_agent(agent.agent_id)
-            return
-
-        # Resolve model for the next step: next_step.model > Config.WORKER_MODEL > Config.DEFAULT_MODEL
-        model = next_step.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
-
-        # Create new session (same worktree)
-        new_session_id = None  # Track for cleanup on failure
-        try:
-            session = await self.opencode.create_session(
-                directory=agent.worktree,
-                title=f"{agent.name}: {next_step['title']}",
-                permissions=WORKER_PERMISSIONS,
-            )
-            new_session_id = session["id"]
-
-            # Update agent
-            self.db.conn.execute(
-                """
-                UPDATE agents
-                SET session_id = ?,
-                    current_issue = ?,
-                    lease_expires_at = datetime('now', '+{} seconds'),
-                    last_progress_at = datetime('now')
-                WHERE id = ?
-                """.format(Config.LEASE_DURATION),
-                (new_session_id, next_step["id"], agent.agent_id),
-            )
-            self.db.conn.commit()
-
-            self._reassign_agent_context(agent, session_id=new_session_id, issue_id=next_step["id"])
-
-            # Gather completed steps for context
-            completed_steps = None
-            if next_step.get("parent_id"):
-                completed_issues = self.db.get_completed_epic_steps(next_step["parent_id"])
-                completed_steps = [f"{s['title']}: {(s.get('description') or '')[:100]}" for s in completed_issues]
-
-            await self._dispatch_worker_to_issue(
-                agent=agent,
-                issue=next_step,
-                model=model,
-                completed_steps=completed_steps,
-                started_event_type="session_cycled",
-                started_event_detail={
-                    "new_session_id": new_session_id,
-                    "step_title": next_step["title"],
-                    "prompt_version": get_prompt_version("worker"),
-                },
-            )
-
-        except Exception as e:
-            self.db.log_event(
-                next_step["id"],
-                agent.agent_id,
-                "session_cycle_error",
-                {"error": str(e)},
-            )
-            # Clean up the new session if it was created (best-effort —
-            # don't let cleanup failure prevent _unregister_agent below)
-            if new_session_id:
-                logger.warning(
-                    f"Cycle failed after creating session {new_session_id}; cleaning up (agent={agent.agent_id}, issue={next_step['id']})"
-                )
-                await self._best_effort_cleanup(
-                    "cycle_session_cleanup",
-                    self.opencode.cleanup_session(new_session_id, directory=agent.worktree),
-                )
-            # Release agent
-            if agent.agent_id in self.active_agents:
-                self._unregister_agent(agent.agent_id)
 
     async def handle_stalled_agent(self, agent: AgentIdentity):
         """

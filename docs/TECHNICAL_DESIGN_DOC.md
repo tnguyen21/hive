@@ -224,13 +224,11 @@ Flow:
    - per-issue token budget fail,
    - completion assessment fail,
    - no-diff validation fail,
-   - success done,
-   - success + epic cycle.
+   - success done.
 4. Success path:
    - issue -> `done`
    - enqueue `merge_queue` (including worker `test_command` if provided)
    - log `completed`
-   - optionally `cycle_agent_to_next_step`
 5. Failure path:
    - route through `_handle_agent_failure` retry chain
 

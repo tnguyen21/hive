@@ -947,52 +947,23 @@ def test_create_note_with_nonexistent_agent_id():
         os.unlink(db_path)
 
 
-# --- get_completed_epic_steps tests ---
+# --- epic completion tests ---
 
 
-def test_get_completed_epic_steps(temp_db):
-    """Test get_completed_epic_steps returns done/finalized child issues."""
+def test_check_epic_complete(temp_db):
+    """check_epic_complete should require all children be terminal-ish."""
     parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
+    child1 = temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
+    child2 = temp_db.create_issue("Step 2", parent_id=parent_id, issue_type="step")
+    child3 = temp_db.create_issue("Step 3", parent_id=parent_id, issue_type="step")
 
-    child1 = temp_db.create_issue("Step 1", description="First step", parent_id=parent_id, issue_type="step")
-    child2 = temp_db.create_issue("Step 2", description="Second step", parent_id=parent_id, issue_type="step")
-    child3 = temp_db.create_issue("Step 3", description="Third step", parent_id=parent_id, issue_type="step")
+    assert temp_db.check_epic_complete(parent_id) is False
 
-    # Mark child1 done, child2 finalized, leave child3 open
     temp_db.update_issue_status(child1, "done")
     temp_db.update_issue_status(child2, "finalized")
+    temp_db.update_issue_status(child3, "canceled")
 
-    steps = temp_db.get_completed_epic_steps(parent_id)
-
-    assert len(steps) == 2
-    step_ids = [s["id"] for s in steps]
-    assert child1 in step_ids
-    assert child2 in step_ids
-    assert child3 not in step_ids
-
-    # Should be ordered by creation time
-    assert steps[0]["id"] == child1
-    assert steps[1]["id"] == child2
-
-    # Check fields present
-    assert steps[0]["title"] == "Step 1"
-    assert steps[0]["description"] == "First step"
-    assert steps[0]["status"] == "done"
-
-
-def test_get_completed_epic_steps_empty(temp_db):
-    """Test get_completed_epic_steps with no completed steps."""
-    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
-    temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
-
-    steps = temp_db.get_completed_epic_steps(parent_id)
-    assert steps == []
-
-
-def test_get_completed_epic_steps_nonexistent(temp_db):
-    """Test get_completed_epic_steps with non-existent parent."""
-    steps = temp_db.get_completed_epic_steps("nonexistent")
-    assert steps == []
+    assert temp_db.check_epic_complete(parent_id) is True
 
 
 def test_notes_database_not_connected_error(temp_db):

@@ -59,7 +59,17 @@ def test_db_stats_row_counts(temp_db, tmp_path):
 def test_doctor_checks_included(report):
     doctor = report["doctor"]
     assert isinstance(doctor, list)
-    assert len(doctor) == 7
+    ids = {c.get("id") for c in doctor if isinstance(c, dict)}
+    assert {
+        "INV-1",
+        "INV-2",
+        "INV-3",
+        "INV-5",
+        "INV-6",
+        "INV-7",
+        "INV-8",
+        "INV-9",
+    }.issubset(ids)
     for check in doctor:
         assert "id" in check
         assert "status" in check
