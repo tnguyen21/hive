@@ -639,30 +639,32 @@ async def test_merge_processor_loop_health_check(temp_db, tmp_path):
 
     # Mock pool methods (the loop now delegates to the pool)
     orch.merge_pool.process_all = AsyncMock()
-    orch.merge_pool.health_check_all = AsyncMock()
+    health_called = asyncio.Event()
+
+    async def _health_check_all():
+        health_called.set()
+
+    orch.merge_pool.health_check_all = AsyncMock(side_effect=_health_check_all)
 
     with patch("hive.orchestrator.Config") as mock_config:
         mock_config.MERGE_QUEUE_ENABLED = True
-        mock_config.MERGE_POLL_INTERVAL = 0.01  # Very fast for testing
+        mock_config.MERGE_POLL_INTERVAL = 0  # Yield-only for testing
 
-        # Run the loop for a short time to trigger multiple iterations
+        # Run the loop until we observe the health check, instead of relying on
+        # wall-clock sleeps (which can be flaky under load).
         orch.running = True
 
         # Create a task and let it run briefly
         loop_task = asyncio.create_task(orch.merge_processor_loop())
 
-        # Let it run for enough iterations to trigger health check
-        # Health check happens every 6 iterations
-        await asyncio.sleep(0.1)  # Should allow more than 6 iterations
+        # Health check happens every 6 iterations.
+        await asyncio.wait_for(health_called.wait(), timeout=1.0)
 
         # Stop the loop
         orch.running = False
 
         # Wait for task to complete
-        try:
-            await asyncio.wait_for(loop_task, timeout=1.0)
-        except asyncio.TimeoutError:
-            loop_task.cancel()
+        await asyncio.wait_for(loop_task, timeout=1.0)
 
     # Verify health check was called at least once
     # (exact count depends on timing, but should be at least 1)
