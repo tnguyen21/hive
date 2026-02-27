@@ -13,7 +13,7 @@ from .db import Database
 from .git import create_worktree_async, get_commit_hash, has_diff_from_main_async, remove_worktree_async
 from .merge import MergeProcessorPool
 from .utils import generate_id, AgentIdentity, CompletionResult
-from .backends import OpenCodeClient, make_model_config
+from .backends import HiveBackend
 from .prompts import (
     assess_completion,
     build_retry_context,
@@ -26,7 +26,6 @@ from .prompts import (
     remove_result_file,
     render_inbox_section,
 )
-from .backends import SSEClient
 
 logger = logging.getLogger(__name__)
 
@@ -96,22 +95,20 @@ class Orchestrator:
     def __init__(
         self,
         db: Database,
-        opencode_client: OpenCodeClient,
-        sse_client: Optional[SSEClient] = None,
+        backend: HiveBackend,
     ):
         """
         Initialize orchestrator.
 
         Args:
             db: Database instance
-            opencode_client: OpenCode HTTP client (or ClaudeWSBackend)
-            sse_client: Optional SSE client override (e.g. ClaudeWSBackend serves both roles)
+            backend: Backend implementing session management and event streaming
         """
         self.db = db
-        self.opencode = opencode_client
+        self.backend = backend
 
         # Merge processor pool (one processor per project, lazy-created)
-        self.merge_pool = MergeProcessorPool(db=db, backend=opencode_client)
+        self.merge_pool = MergeProcessorPool(db=db, backend=backend)
 
         # Track active agents
         self.active_agents: Dict[str, AgentIdentity] = {}
@@ -119,13 +116,6 @@ class Orchestrator:
         # Reverse lookup maps for O(1) session_id and issue_id lookups
         self._session_to_agent: dict[str, str] = {}  # session_id -> agent_id
         self._issue_to_agent: dict[str, str] = {}  # issue_id -> agent_id
-
-        # SSE client for event monitoring
-        self.sse_client = sse_client or SSEClient(
-            base_url=Config.OPENCODE_URL,
-            password=Config.OPENCODE_PASSWORD,
-            global_events=True,
-        )
 
         # Event handlers
         self.session_status_events: Dict[str, asyncio.Event] = {}
@@ -137,7 +127,7 @@ class Orchestrator:
         self.running = False
 
         # Degraded mode state
-        self._opencode_healthy = True
+        self._backend_healthy = True
         self._degraded_since: Optional[datetime] = None
         self._backoff_delay = 5  # Initial backoff delay in seconds
 
@@ -193,7 +183,7 @@ class Orchestrator:
                         f"(mapped_agent={self._session_to_agent.get(session_id)})"
                     )
 
-        self.sse_client.on("session.status", handle_session_status)
+        self.backend.on("session.status", handle_session_status)
 
         async def handle_session_error(properties):
             session_id = properties.get("sessionID")
@@ -207,10 +197,10 @@ class Orchestrator:
             self.db.log_event(agent.issue_id, agent.agent_id, "session_error", {"session_id": session_id, "error": properties})
             await self.handle_stalled_agent(agent)
 
-        self.sse_client.on("session.error", handle_session_error)
+        self.backend.on("session.error", handle_session_error)
 
         # Register permission event handler
-        self.sse_client.on("permission.request", self._handle_permission_event)
+        self.backend.on("permission.request", self._handle_permission_event)
 
     async def _handle_permission_event(self, event_data: dict):
         """Handle permission request from SSE event — resolve immediately."""
@@ -219,17 +209,17 @@ class Orchestrator:
             if not perm_id:
                 # If SSE event doesn't include full permission data,
                 # fetch pending permissions and resolve
-                pending = await self.opencode.get_pending_permissions()
+                pending = await self.backend.get_pending_permissions()
                 for perm in pending:
                     decision = self.evaluate_permission_policy(perm)
                     if decision:
-                        await self.opencode.reply_permission(perm["id"], reply=decision)
+                        await self.backend.reply_permission(perm["id"], reply=decision)
                         self._log_permission_resolved(perm, decision)
                 return
 
             decision = self.evaluate_permission_policy(event_data)
             if decision:
-                await self.opencode.reply_permission(perm_id, reply=decision)
+                await self.backend.reply_permission(perm_id, reply=decision)
                 self._log_permission_resolved(event_data, decision)
 
             logger.debug(f"Handled permission event via SSE: {perm_id}, decision: {decision}")
@@ -288,7 +278,7 @@ class Orchestrator:
         # Phase 0 — Fetch live sessions
         live_session_ids: set | None = None
         try:
-            sessions = await self.opencode.list_sessions()
+            sessions = await self.backend.list_sessions()
             live_session_ids = {s["id"] for s in sessions}
             logger.info(f"Fetched {len(live_session_ids)} live session(s) from backend")
         except Exception as e:
@@ -319,14 +309,14 @@ class Orchestrator:
                     # Authoritative: we know which sessions are alive
                     if session_id in live_session_ids:
                         # Session still running — abort + delete it
-                        await self.opencode.cleanup_session(session_id, directory=worktree)
+                        await self.backend.cleanup_session(session_id, directory=worktree)
                         live_session_ids.discard(session_id)
                     else:
                         # Ghost agent — session already gone, just log
                         logger.info(f"Agent {agent_id} is a ghost (session {session_id} no longer exists)")
                 else:
                     # OpenCode unreachable — best-effort abort/delete
-                    await self.opencode.cleanup_session(session_id, directory=worktree)
+                    await self.backend.cleanup_session(session_id, directory=worktree)
 
             # Mark agent failed
             self.db.conn.execute(
@@ -401,7 +391,7 @@ class Orchestrator:
             orphans = live_session_ids - db_session_ids
             if orphans:
                 for session_id in orphans:
-                    await self.opencode.cleanup_session(session_id)
+                    await self.backend.cleanup_session(session_id)
 
                 self.db.log_system_event("orphan_sessions_cleaned", {"count": len(orphans)})
                 logger.info(f"Cleaned up {len(orphans)} orphan session(s)")
@@ -576,13 +566,13 @@ class Orchestrator:
 
         # Start SSE/WS server in background FIRST — other init steps may need
         # to create sessions (e.g. eager refinery), which requires the server.
-        sse_task = asyncio.create_task(self.sse_client.connect_with_reconnect())
+        sse_task = asyncio.create_task(self.backend.connect_with_reconnect())
 
         # If the backend has a server_ready gate, wait for it before proceeding.
         # IMPORTANT: if the event loop task dies before setting server_ready
         # (e.g. missing binary / auth failure), don't hang forever.
         if hasattr(self.sse_client, "server_ready"):
-            server_ready = self.sse_client.server_ready
+            server_ready = self.backend.server_ready
             while not server_ready.is_set():
                 if sse_task.done():
                     exc = sse_task.exception()
@@ -611,7 +601,7 @@ class Orchestrator:
             self.running = False
             # Abort all active opencode sessions before shutting down
             await self._shutdown_all_sessions()
-            self.sse_client.stop()
+            self.backend.stop()
             # Cancel background tasks so we don't block on their long sleeps
             for task in (sse_task, permission_task, merge_task):
                 task.cancel()
@@ -622,9 +612,9 @@ class Orchestrator:
         while self.running:
             try:
                 # Check if OpenCode is healthy before scheduling work
-                if not self._opencode_healthy:
+                if not self._backend_healthy:
                     # In degraded mode - check health with exponential backoff
-                    healthy = await self._check_opencode_health()
+                    healthy = await self._check_backend_health()
 
                     if healthy:
                         # OpenCode recovered
@@ -632,7 +622,7 @@ class Orchestrator:
                         self.db.log_system_event(
                             "opencode_recovered", {"degraded_duration_seconds": degraded_duration, "backoff_delay": self._backoff_delay}
                         )
-                        self._opencode_healthy = True
+                        self._backend_healthy = True
                         self._degraded_since = None
                         self._backoff_delay = 5  # Reset backoff
                         logger.info(f"Backend recovered after {degraded_duration:.1f}s degraded mode")
@@ -659,7 +649,7 @@ class Orchestrator:
                             await self.spawn_worker(issue)
                         except Exception as e:
                             # Check if the error suggests OpenCode is unhealthy
-                            if self._is_opencode_error(e):
+                            if self._is_backend_error(e):
                                 await self._enter_degraded_mode(str(e))
                     else:
                         # No ready work, wait before polling again
@@ -669,12 +659,12 @@ class Orchestrator:
                     await asyncio.sleep(Config.POLL_INTERVAL)
 
                 # Check for stalled agents (only when healthy)
-                if self._opencode_healthy:
+                if self._backend_healthy:
                     await self.check_stalled_agents()
 
             except Exception as e:
                 # Check if this is an OpenCode connectivity issue
-                if self._is_opencode_error(e):
+                if self._is_backend_error(e):
                     await self._enter_degraded_mode(str(e))
                 else:
                     logger.error(f"Error in main loop: {e}")
@@ -740,7 +730,7 @@ class Orchestrator:
         # Create OpenCode session
         session_id = None  # Track for cleanup on failure
         try:
-            session = await self.opencode.create_session(
+            session = await self.backend.create_session(
                 directory=worktree_path,
                 title=f"{agent_name}: {issue['title']}",
                 permissions=WORKER_PERMISSIONS,
@@ -798,7 +788,7 @@ class Orchestrator:
             if session_id:
                 await self._best_effort_cleanup(
                     "spawn_session_cleanup",
-                    self.opencode.cleanup_session(session_id, directory=worktree_path),
+                    self.backend.cleanup_session(session_id, directory=worktree_path),
                 )
             # Clean up in-memory tracking (if agent was registered)
             if agent_id in self.active_agents:
@@ -893,7 +883,7 @@ class Orchestrator:
         Returns True if the session is idle, False otherwise.
         """
         try:
-            status = await self.opencode.get_session_status(session_id, directory=worktree)
+            status = await self.backend.get_session_status(session_id, directory=worktree)
             status_type = status.get("type") if isinstance(status, dict) else None
 
             if status_type == "idle":
@@ -1052,7 +1042,7 @@ class Orchestrator:
         does not linger and consume tokens.
         """
         logger.info(f"Cleaning up session {agent.session_id} (agent={agent.agent_id}, issue={agent.issue_id}, worktree={agent.worktree})")
-        await self.opencode.cleanup_session(agent.session_id, directory=agent.worktree)
+        await self.backend.cleanup_session(agent.session_id, directory=agent.worktree)
 
     def _mark_agent_failed(self, agent_id: str):
         """Mark an agent failed in DB and clear issue/session references."""
@@ -1180,10 +1170,10 @@ class Orchestrator:
             f"(agent={agent.agent_id}, issue={issue_id}, started_event={started_event_type})"
         )
 
-        await self.opencode.send_message_async(
+        await self.backend.send_message_async(
             agent.session_id,
             parts=[{"type": "text", "text": prompt}],
-            model=make_model_config(model),
+            model=model,
             system=system_prompt,
             directory=agent.worktree,
         )
@@ -1212,7 +1202,7 @@ class Orchestrator:
                 terminal_status=terminal_issue["status"],
             )
 
-        messages = await self.opencode.get_messages(agent.session_id, directory=agent.worktree)
+        messages = await self.backend.get_messages(agent.session_id, directory=agent.worktree)
         self._log_token_usage(agent, messages)
 
         if Config.MAX_TOKENS_PER_ISSUE:
@@ -1595,7 +1585,7 @@ class Orchestrator:
             logger.debug(f"Stall transition for {agent.name}: {stalled_transition.value}")
             await self._teardown_agent(agent, remove_worktree=True)
 
-    async def _check_opencode_health(self) -> bool:
+    async def _check_backend_health(self) -> bool:
         """
         Check if OpenCode is healthy by listing sessions via the client.
 
@@ -1606,12 +1596,12 @@ class Orchestrator:
             True if OpenCode is healthy, False otherwise
         """
         try:
-            await self.opencode.list_sessions()
+            await self.backend.list_sessions()
             return True
         except Exception:
             return False
 
-    def _is_opencode_error(self, exception: Exception) -> bool:
+    def _is_backend_error(self, exception: Exception) -> bool:
         """
         Determine if an exception indicates OpenCode connectivity issues.
 
@@ -1654,12 +1644,12 @@ class Orchestrator:
         Args:
             error_reason: Description of the error that caused degraded mode
         """
-        if self._opencode_healthy:  # Only log the first time we enter degraded mode
-            self._opencode_healthy = False
+        if self._backend_healthy:  # Only log the first time we enter degraded mode
+            self._backend_healthy = False
             self._degraded_since = datetime.now()
             self._backoff_delay = 5  # Reset backoff
 
-            self.db.log_system_event("opencode_degraded", {"reason": error_reason, "timestamp": self._degraded_since.isoformat()})
+            self.db.log_system_event("backend_degraded", {"reason": error_reason, "timestamp": self._degraded_since.isoformat()})
             logger.warning(f"Entering degraded mode: {error_reason}")
 
     async def check_stalled_agents(self):
@@ -1724,7 +1714,7 @@ class Orchestrator:
 
         try:
             # Query OpenCode for actual session status
-            status = await self.opencode.get_session_status(agent.session_id, directory=agent.worktree)
+            status = await self.backend.get_session_status(agent.session_id, directory=agent.worktree)
             status_type = status.get("type") if isinstance(status, dict) else None
 
             if status_type == "idle":
@@ -1818,13 +1808,13 @@ class Orchestrator:
                     continue
 
                 # Get pending permissions
-                pending = await self.opencode.get_pending_permissions()
+                pending = await self.backend.get_pending_permissions()
 
                 for perm in pending:
                     decision = self.evaluate_permission_policy(perm)
                     if decision:
                         # Auto-resolve based on policy
-                        await self.opencode.reply_permission(perm["id"], reply=decision)
+                        await self.backend.reply_permission(perm["id"], reply=decision)
 
                         self._log_permission_resolved(perm, decision)
 

@@ -19,7 +19,7 @@ from .git import (
     merge_to_main_async,
     remove_worktree_async,
 )
-from .backends import OpenCodeClient, make_model_config
+from .backends import HiveBackend
 from .prompts import build_refinery_prompt, read_notes_file, read_result_file, remove_notes_file, remove_result_file
 
 import logging
@@ -39,12 +39,12 @@ class MergeProcessor:
     def __init__(
         self,
         db: Database,
-        opencode: OpenCodeClient,
+        backend: HiveBackend,
         project_path: str,
         project_name: str,
     ):
         self.db = db
-        self.opencode = opencode
+        self.backend = backend
         self.project_path = str(Path(project_path).resolve())
         self.project_name = project_name
         self.refinery_session_id: Optional[str] = None
@@ -56,7 +56,7 @@ class MergeProcessor:
     async def shutdown(self):
         """Clean up the refinery session on shutdown."""
         if self.refinery_session_id:
-            await self.opencode.cleanup_session(self.refinery_session_id, directory=self.project_path)
+            await self.backend.cleanup_session(self.refinery_session_id, directory=self.project_path)
             self.refinery_session_id = None
 
     async def _force_reset_refinery_session(self, reason: str):
@@ -76,7 +76,7 @@ class MergeProcessor:
         self._refinery_token_estimate = 0
 
         # Best-effort abort and delete
-        await self.opencode.cleanup_session(session_id, directory=self.project_path)
+        await self.backend.cleanup_session(session_id, directory=self.project_path)
 
         # Log the reset event
         self.db.log_event(
@@ -123,7 +123,7 @@ class MergeProcessor:
 
         try:
             # Check if existing session is still alive
-            status = await self.opencode.get_session_status(self.refinery_session_id, directory=self.project_path)
+            status = await self.backend.get_session_status(self.refinery_session_id, directory=self.project_path)
             if status is not None:
                 return True  # Session is alive
 
@@ -378,16 +378,16 @@ class MergeProcessor:
         )
 
         # Send to refinery
-        await self.opencode.send_message_async(
+        await self.backend.send_message_async(
             session_id,
             parts=[{"type": "text", "text": prompt}],
-            model=make_model_config(Config.REFINERY_MODEL),
+            model=Config.REFINERY_MODEL,
             directory=self.project_path,
         )
 
         # Brief delay to check if message was picked up
         await asyncio.sleep(0.5)
-        status = await self.opencode.get_session_status(session_id, directory=self.project_path)
+        status = await self.backend.get_session_status(session_id, directory=self.project_path)
         if status and status.get("type") == "idle":
             raise RuntimeError("Refinery session did not pick up the message")
 
@@ -405,7 +405,7 @@ class MergeProcessor:
         Wait for the refinery session to become idle, then read result from file.
 
         Args:
-            session_id: OpenCode session ID
+            session_id: Backend session ID
             worktree_path: Path to the worktree (where .hive-result.jsonl is written)
             timeout: Timeout in seconds (defaults to LEASE_DURATION)
             min_message_count: Minimum expected message count to avoid stale-result race
@@ -425,7 +425,7 @@ class MergeProcessor:
             elapsed += poll_interval
 
             try:
-                status = await self.opencode.get_session_status(session_id, directory=self.project_path)
+                status = await self.backend.get_session_status(session_id, directory=self.project_path)
 
                 # Detect dead session (backend returned error or not_found)
                 if status and status.get("type") in ("error", "not_found"):
@@ -433,7 +433,7 @@ class MergeProcessor:
 
                 if status and status.get("type") == "idle":
                     # Session finished — verify new messages were produced (fence against stale results)
-                    messages = await self.opencode.get_messages(session_id, directory=self.project_path)
+                    messages = await self.backend.get_messages(session_id, directory=self.project_path)
 
                     if len(messages) <= min_message_count:
                         # No new messages, the prompt wasn't processed - continue waiting
@@ -542,14 +542,14 @@ class MergeProcessor:
         Args:
             entry: Merge queue entry dict
         """
-        # Clean up the opencode session if one exists for the agent
+        # Clean up the backend session if one exists for the agent
         agent_id = entry.get("agent_id")
         if agent_id:
             agent = self.db.get_agent(agent_id)
             session_id = agent.get("session_id") if agent else None
             if session_id:
                 try:
-                    await self.opencode.cleanup_session(session_id, directory=entry.get("worktree"))
+                    await self.backend.cleanup_session(session_id, directory=entry.get("worktree"))
                 except Exception:
                     pass  # Best-effort
 
@@ -612,7 +612,7 @@ class MergeProcessor:
             )
 
             # Abort and delete the current session
-            await self.opencode.cleanup_session(self.refinery_session_id, directory=self.project_path)
+            await self.backend.cleanup_session(self.refinery_session_id, directory=self.project_path)
 
             # Reset session ID and counters - next merge will create a fresh session
             self.refinery_session_id = None
@@ -624,12 +624,12 @@ class MergeProcessor:
         Ensure a refinery session exists. Create one if needed.
 
         Returns:
-            OpenCode session ID for the refinery
+            Session ID for the refinery
         """
         # Check if existing session is still alive
         if self.refinery_session_id:
             try:
-                status = await self.opencode.get_session_status(self.refinery_session_id, directory=self.project_path)
+                status = await self.backend.get_session_status(self.refinery_session_id, directory=self.project_path)
                 if status is not None:
                     return self.refinery_session_id
             except Exception:
@@ -637,7 +637,7 @@ class MergeProcessor:
             self.refinery_session_id = None
 
         # Create new refinery session
-        session = await self.opencode.create_session(
+        session = await self.backend.create_session(
             directory=self.project_path,
             title="refinery",
             permissions=WORKER_PERMISSIONS,
@@ -658,7 +658,7 @@ class MergeProcessorPool:
     are independent and do not block each other.
     """
 
-    def __init__(self, db: Database, backend: OpenCodeClient):
+    def __init__(self, db: Database, backend: HiveBackend):
         self._processors: dict[str, MergeProcessor] = {}
         self.db = db
         self.backend = backend
@@ -668,7 +668,7 @@ class MergeProcessorPool:
         if project_name not in self._processors:
             self._processors[project_name] = MergeProcessor(
                 db=self.db,
-                opencode=self.backend,
+                backend=self.backend,
                 project_path=project_path,
                 project_name=project_name,
             )
