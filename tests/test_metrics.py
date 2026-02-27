@@ -68,17 +68,17 @@ def test_agent_runs_with_notes(temp_db):
     assert row["notes_produced"] == 1
 
 
-def test_agent_runs_failed_outcome(temp_db):
-    """Test agent_runs view with failed outcome."""
+def test_agent_runs_incomplete_outcome(temp_db):
+    """Test agent_runs view with incomplete outcome."""
     issue_id = temp_db.create_issue("Test task", project="test")
     agent_id = temp_db.create_agent("worker-001")
 
     temp_db.log_event(issue_id, agent_id, "worker_started")
-    temp_db.log_event(issue_id, agent_id, "status_failed", {"reason": "error"})
+    temp_db.log_event(issue_id, agent_id, "incomplete", {"reason": "error"})
 
     cursor = temp_db.conn.execute("SELECT outcome FROM agent_runs WHERE agent_id = ?", (agent_id,))
     row = cursor.fetchone()
-    assert row["outcome"] == "failed"
+    assert row["outcome"] == "incomplete"
 
 
 def test_agent_runs_escalated_outcome(temp_db):
@@ -124,7 +124,7 @@ def test_get_metrics_basic(temp_db):
     temp_db.log_event(issue1, agent1, "completed")
 
     temp_db.log_event(issue2, agent2, "worker_started")
-    temp_db.log_event(issue2, agent2, "status_failed")
+    temp_db.log_event(issue2, agent2, "incomplete")
 
     # Opus: 1 run, 1 success
     temp_db.log_event(issue3, agent3, "worker_started")
@@ -140,12 +140,12 @@ def test_get_metrics_basic(temp_db):
 
     assert sonnet_result["runs"] == 2
     assert sonnet_result["success_count"] == 1
-    assert sonnet_result["failed_count"] == 1
+    assert sonnet_result["incomplete_count"] == 1
     assert sonnet_result["success_rate"] == 50.0
 
     assert opus_result["runs"] == 1
     assert opus_result["success_count"] == 1
-    assert opus_result["failed_count"] == 0
+    assert opus_result["incomplete_count"] == 0
     assert opus_result["success_rate"] == 100.0
 
 
@@ -339,9 +339,9 @@ def test_agent_runs_multiple_agents_same_issue(temp_db):
     agent1 = temp_db.create_agent("worker-001", model="sonnet")
     agent2 = temp_db.create_agent("worker-002", model="sonnet")
 
-    # First agent fails
+    # First agent fails (incomplete)
     temp_db.log_event(issue_id, agent1, "worker_started")
-    temp_db.log_event(issue_id, agent1, "status_failed")
+    temp_db.log_event(issue_id, agent1, "incomplete")
 
     # Second agent succeeds
     temp_db.log_event(issue_id, agent2, "worker_started")
@@ -352,6 +352,6 @@ def test_agent_runs_multiple_agents_same_issue(temp_db):
 
     assert len(rows) == 2
     assert rows[0]["agent_id"] == agent1
-    assert rows[0]["outcome"] == "failed"
+    assert rows[0]["outcome"] == "incomplete"
     assert rows[1]["agent_id"] == agent2
     assert rows[1]["outcome"] == "done"

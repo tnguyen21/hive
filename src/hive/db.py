@@ -208,20 +208,20 @@ SELECT
     i.tags,
     CASE
         WHEN e_done.id IS NOT NULL THEN 'done'
-        WHEN e_fail.id IS NOT NULL THEN 'failed'
+        WHEN e_inc.id IS NOT NULL THEN 'incomplete'
         WHEN e_esc.id IS NOT NULL THEN 'escalated'
         ELSE 'unknown'
     END as outcome,
-    ROUND((julianday(COALESCE(e_done.created_at, e_fail.created_at, e_esc.created_at)) - julianday(e_start.created_at)) * 86400, 1) as duration_s,
+    ROUND((julianday(COALESCE(e_done.created_at, e_inc.created_at, e_esc.created_at)) - julianday(e_start.created_at)) * 86400, 1) as duration_s,
     (SELECT COUNT(*) FROM events er WHERE er.issue_id = e_start.issue_id AND er.event_type = 'retry') as retry_count,
     (SELECT COUNT(*) FROM events en WHERE en.agent_id = e_start.agent_id AND en.event_type = 'notes_harvested') as notes_produced,
     (SELECT COUNT(*) FROM events eni WHERE eni.agent_id = e_start.agent_id AND eni.event_type = 'notes_injected') as notes_injected,
     e_start.created_at as started_at,
-    COALESCE(e_done.created_at, e_fail.created_at, e_esc.created_at) as ended_at
+    COALESCE(e_done.created_at, e_inc.created_at, e_esc.created_at) as ended_at
 FROM events e_start
 JOIN issues i ON e_start.issue_id = i.id
 LEFT JOIN events e_done ON e_start.agent_id = e_done.agent_id AND e_done.event_type = 'completed'
-LEFT JOIN events e_fail ON e_start.agent_id = e_fail.agent_id AND e_fail.event_type IN ('status_failed')
+LEFT JOIN events e_inc ON e_start.agent_id = e_inc.agent_id AND e_inc.event_type = 'incomplete'
 LEFT JOIN events e_esc ON e_start.issue_id = e_esc.issue_id AND e_esc.event_type = 'escalated'
 WHERE e_start.event_type = 'worker_started';
 
@@ -330,6 +330,18 @@ class Database:
         if backfilled > 0:
             self.conn.commit()
             logger.info(f"Backfilled {backfilled} agents.last_heartbeat_at")
+
+        # Recreate agent_runs view (outcome 'failed' → 'incomplete', join on 'incomplete' event).
+        # The schema's CREATE VIEW IF NOT EXISTS already ran in connect(), so we must
+        # drop-and-recreate to pick up the new definition on existing DBs.
+        self.conn.execute("DROP VIEW IF EXISTS agent_runs")
+        # Re-extract just the CREATE VIEW statement from SCHEMA
+        import re
+
+        m = re.search(r"(CREATE VIEW IF NOT EXISTS agent_runs AS\b.+?);", SCHEMA, re.DOTALL)
+        if m:
+            self.conn.execute(m.group(1))
+        self.conn.commit()
 
         self._ensure_merge_queue_idempotency()
 
@@ -1402,7 +1414,7 @@ class Database:
             - model: Model name
             - runs: Total number of runs
             - success_count: Number of successful runs
-            - failed_count: Number of failed runs
+            - incomplete_count: Number of incomplete runs
             - escalated_count: Number of escalated runs
             - success_rate: Success percentage
             - avg_duration_s: Average duration in seconds
@@ -1422,7 +1434,7 @@ class Database:
                 ar.model,
                 COUNT(*) as runs,
                 SUM(CASE WHEN ar.outcome = 'done' THEN 1 ELSE 0 END) as success_count,
-                SUM(CASE WHEN ar.outcome = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                SUM(CASE WHEN ar.outcome = 'incomplete' THEN 1 ELSE 0 END) as incomplete_count,
                 SUM(CASE WHEN ar.outcome = 'escalated' THEN 1 ELSE 0 END) as escalated_count,
                 ROUND(100.0 * SUM(CASE WHEN ar.outcome = 'done' THEN 1 ELSE 0 END) / COUNT(*), 1) as success_rate,
                 ROUND(AVG(ar.duration_s), 1) as avg_duration_s,
