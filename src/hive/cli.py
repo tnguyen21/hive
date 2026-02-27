@@ -1502,57 +1502,10 @@ class HiveCLI:
                 self._error("Failed to start daemon. Check `hive daemon logs`.")
 
         effective = backend or Config.BACKEND
-        if effective == "claude":
-            self._queen_claude(skip_permissions=skip_permissions, mcp_configs=resolved_mcp_configs)
-        elif effective == "codex":
+        if effective == "codex":
             self._queen_codex()
         else:
-            self._queen_opencode()
-
-    _OPENCODE_QUEEN_FRONTMATTER = """\
----
-description: Strategic coordinator for Hive multi-agent orchestration
-mode: primary
-tools:
-  write: true
-  edit: true
-permission:
-  bash:
-    "hive *": allow
-    "git *": allow
-    "ls *": allow
-    "find *": allow
-    "rg *": allow
-  read: allow
----
-
-"""
-
-    def _queen_write_opencode_agent(self):
-        """Generate .opencode/agents/queen.md from source template."""
-        from .prompts import _load_template
-
-        queen_prompt = _load_template("queen")
-        agents_dir = self.project_path / ".opencode" / "agents"
-        agents_dir.mkdir(parents=True, exist_ok=True)
-        agent_file = agents_dir / "queen.md"
-        agent_file.write_text(self._OPENCODE_QUEEN_FRONTMATTER + queen_prompt)
-
-    def _queen_opencode(self):
-        """Launch Queen Bee via OpenCode TUI."""
-        self._queen_write_opencode_agent()
-
-        opencode_cmd = os.environ.get("OPENCODE_CMD", "opencode")
-        cmd = [
-            opencode_cmd,
-            "attach",
-            Config.OPENCODE_URL,
-            "--dir",
-            str(self.project_path),
-        ]
-
-        print("Launching Queen Bee TUI (OpenCode)...\n")
-        os.execvp(cmd[0], cmd)
+            self._queen_claude(skip_permissions=skip_permissions, mcp_configs=resolved_mcp_configs)
 
     # Sentinel markers for the Queen identity block in CLAUDE.md
     _QUEEN_SENTINEL_START = "<!-- HIVE-QUEEN-SESSION-START -->"
@@ -1923,7 +1876,7 @@ def main():
     queen_parser = subparsers.add_parser("queen", help="Launch Queen Bee TUI")
     queen_parser.add_argument(
         "--backend",
-        choices=["opencode", "claude", "codex"],
+        choices=["claude", "codex"],
         default=None,
         help="Override backend (default: from config/HIVE_BACKEND)",
     )

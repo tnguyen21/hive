@@ -153,23 +153,7 @@ def _gather_backend_reachability() -> dict:
 
     result["configured_backend"] = backend
 
-    # opencode HTTP check
-    if backend == "opencode":
-        import urllib.request
-
-        url = Config.OPENCODE_URL
-        result["opencode_url"] = url
-        try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                result["opencode_reachable"] = True
-                result["opencode_status"] = resp.status
-        except Exception as exc:
-            result["opencode_reachable"] = False
-            result["opencode_error"] = str(exc)
-
-    # claude backend
-    elif backend == "claude":
+    if backend == "claude":
         claude = shutil.which("claude")
         result["claude_cli_found"] = claude is not None
         host = Config.CLAUDE_WS_HOST

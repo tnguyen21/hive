@@ -320,63 +320,31 @@ def run_daemon_foreground(db, project_path: str = "", project_name: str = ""):
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _signal_handler)
 
-        if Config.BACKEND == "claude":
+        if Config.BACKEND == "codex":
+            from .backends import CodexAppServerBackend
+
+            backend = CodexAppServerBackend()
+        else:
             from .backends import ClaudeWSBackend
 
             backend = ClaudeWSBackend(
                 host=Config.CLAUDE_WS_HOST,
                 port=Config.CLAUDE_WS_PORT,
             )
-            async with backend:
-                orchestrator = Orchestrator(
-                    db=db,
-                    opencode_client=backend,
-                    sse_client=backend,
-                )
-                # Run orchestrator until stop signal
-                main_task = asyncio.create_task(orchestrator.start())
-                await stop_event.wait()
-                orchestrator.running = False
-                main_task.cancel()
-                try:
-                    await asyncio.wait_for(main_task, timeout=5)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-        elif Config.BACKEND == "codex":
-            from .backends import CodexAppServerBackend
 
-            backend = CodexAppServerBackend()
-            async with backend:
-                orchestrator = Orchestrator(
-                    db=db,
-                    opencode_client=backend,
-                    sse_client=backend,
-                )
-                # Run orchestrator until stop signal
-                main_task = asyncio.create_task(orchestrator.start())
-                await stop_event.wait()
-                orchestrator.running = False
-                main_task.cancel()
-                try:
-                    await asyncio.wait_for(main_task, timeout=5)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-        else:
-            from .backends import OpenCodeClient
-
-            async with OpenCodeClient(Config.OPENCODE_URL, Config.OPENCODE_PASSWORD) as opencode:
-                orchestrator = Orchestrator(
-                    db=db,
-                    opencode_client=opencode,
-                )
-                main_task = asyncio.create_task(orchestrator.start())
-                await stop_event.wait()
-                orchestrator.running = False
-                main_task.cancel()
-                try:
-                    await asyncio.wait_for(main_task, timeout=5)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
+        async with backend:
+            orchestrator = Orchestrator(
+                db=db,
+                backend=backend,
+            )
+            main_task = asyncio.create_task(orchestrator.start())
+            await stop_event.wait()
+            orchestrator.running = False
+            main_task.cancel()
+            try:
+                await asyncio.wait_for(main_task, timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
     try:
         asyncio.run(main())

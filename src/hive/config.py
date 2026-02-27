@@ -14,7 +14,7 @@ from pathlib import Path
 
 # ── Mapping from TOML [hive] keys → (env var, type, default) ────────────
 
-_SENSITIVE_FIELDS = {"opencode_password"}
+_SENSITIVE_FIELDS: set[str] = set()
 
 _FIELDS: dict[str, tuple[str, type, object]] = {
     "max_agents": ("HIVE_MAX_AGENTS", int, 3),
@@ -23,8 +23,6 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "lease_extension": ("HIVE_LEASE_EXTENSION", int, 600),
     "permission_poll_interval": ("HIVE_PERMISSION_POLL_INTERVAL", float, 0.5),
     "permission_safety_net_interval": ("HIVE_PERMISSION_SAFETY_NET_INTERVAL", float, 2.0),
-    "opencode_url": ("OPENCODE_URL", str, "http://127.0.0.1:4096"),
-    "opencode_password": ("OPENCODE_SERVER_PASSWORD", str, None),
     "db_path": ("HIVE_DB_PATH", str, None),  # default set below
     "refinery_token_threshold": ("HIVE_REFINERY_TOKEN_THRESHOLD", int, 100_000),
     "max_retries": ("HIVE_MAX_RETRIES", int, 2),
@@ -40,7 +38,7 @@ _FIELDS: dict[str, tuple[str, type, object]] = {
     "anomaly_window_minutes": ("HIVE_ANOMALY_WINDOW_MINUTES", int, 10),
     "anomaly_failure_threshold": ("HIVE_ANOMALY_FAILURE_THRESHOLD", int, 3),
     # Backend selection
-    "backend": ("HIVE_BACKEND", str, "claude"),  # "opencode" | "claude" | "codex"
+    "backend": ("HIVE_BACKEND", str, "claude"),  # "claude" | "codex"
     # Claude WS backend settings
     "claude_ws_host": ("HIVE_CLAUDE_WS_HOST", str, "127.0.0.1"),
     "claude_ws_port": ("HIVE_CLAUDE_WS_PORT", int, 8765),
