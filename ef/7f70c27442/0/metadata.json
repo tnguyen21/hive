@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "ef7f70c27442",
+  "session_id": "24786bb3-475c-44fc-aed5-d88f280bb39c",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T13:04:27.951401Z",
+  "branch": "remove-degraded-permission-loop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/hive/config.py",
+    "src/hive/db.py",
+    "src/hive/orchestrator.py",
+    "tests/conftest.py",
+    "tests/test_cli.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1cdae9616cf1",
+  "token_usage": {
+    "input_tokens": 283,
+    "cache_creation_tokens": 341425,
+    "cache_read_tokens": 24083716,
+    "output_tokens": 33790,
+    "api_call_count": 241
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T13:04:27.407548Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 7,
+    "human_removed": 57,
+    "total_committed": 0,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-tau-projects-hive/24786bb3-475c-44fc-aed5-d88f280bb39c.jsonl"
+}
