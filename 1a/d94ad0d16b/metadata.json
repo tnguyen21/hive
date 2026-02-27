@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "1ad94ad0d16b",
+  "strategy": "manual-commit",
+  "branch": "remove-degraded-permission-loop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/hive/orchestrator.py",
+    "tests/test_db.py",
+    "tests/test_orchestrator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/d94ad0d16b/0/metadata.json",
+      "transcript": "/1a/d94ad0d16b/0/full.jsonl",
+      "context": "/1a/d94ad0d16b/0/context.md",
+      "content_hash": "/1a/d94ad0d16b/0/content_hash.txt",
+      "prompt": "/1a/d94ad0d16b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 283,
+    "cache_creation_tokens": 341425,
+    "cache_read_tokens": 24083716,
+    "output_tokens": 33790,
+    "api_call_count": 241
+  }
+}
