@@ -1431,7 +1431,7 @@ class HiveCLI:
         daemon_status = daemon.status()
         if not daemon_status["running"]:
             print("Starting daemon... ", end="", flush=True)
-            daemon.start(db_path=self.db.db_path)
+            daemon.start()
             daemon_status = daemon.status()
             if daemon_status["running"]:
                 print(f"done (PID {daemon_status['pid']})")
