@@ -57,22 +57,21 @@ def _make_agent(temp_db, orch, name="test-agent", issue_title="Test task", sessi
 
 # =============================================================================
 # BUG-1: monitor_agent finally block deletes new session's event after
-#         epic cycling mutates agent.session_id
+#         agent.session_id is mutated during completion handling
 # =============================================================================
 
 
 @pytest.mark.asyncio
 async def test_bug1_monitor_agent_preserves_new_session_event_after_cycling(temp_db, tmp_path):
     """Verify monitor_agent's finally block cleans up its OWN session event,
-    not the new session's event created by cycle_agent_to_next_step.
+    not a new session's event created when agent.session_id is mutated.
 
-    Before the fix, the finally block used agent.session_id which got mutated
-    by cycle_agent_to_next_step, causing it to delete the new session's event.
+    Before the fix, the finally block used agent.session_id which could get
+    mutated during handle_agent_complete, causing it to delete the new session's event.
 
-    We mock handle_agent_complete to simulate what epic cycling does:
-    mutate agent.session_id and create a new Event in session_status_events.
-    This isolates the BUG-1 fix (snapshotting my_session_id) from side effects
-    of the full cycling flow (spawned tasks, DB interactions, etc.).
+    We mock handle_agent_complete to simulate session_id mutation and creation
+    of a new Event in session_status_events. This isolates the BUG-1 fix
+    (snapshotting my_session_id) from side effects of the full flow.
     """
     mock_oc = AsyncMock(spec=HiveBackend)
     orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
@@ -101,9 +100,8 @@ async def test_bug1_monitor_agent_preserves_new_session_event_after_cycling(temp
     # Simulate: set the event (SSE said idle) → monitor_agent wakes up
     old_event.set()
 
-    # Mock handle_agent_complete to simulate epic cycling:
+    # Mock handle_agent_complete to simulate session_id mutation:
     # it mutates agent.session_id and creates a new event for the new session.
-    # This is exactly what cycle_agent_to_next_step does (among other things).
     async def mock_handle_agent_complete(agent, file_result=None):
         agent.session_id = new_session_id
         orch.session_status_events[new_session_id] = asyncio.Event()

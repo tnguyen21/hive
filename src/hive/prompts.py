@@ -184,7 +184,6 @@ def build_worker_prompt(
     worktree_path: str,
     branch_name: str,
     project: str,
-    completed_steps: Optional[List[str]] = None,
     notes: Optional[List[Dict[str, Any]]] = None,
     retry_context: Optional[str] = None,
     inbox_section: Optional[str] = None,
@@ -198,7 +197,6 @@ def build_worker_prompt(
         worktree_path: Path to the git worktree
         branch_name: Git branch name
         project: Project name
-        completed_steps: List of completed step summaries (for epics)
         notes: List of note dicts from other workers
         retry_context: Optional retry context from previous failures
         inbox_section: Optional rendered inbox section from render_inbox_section()
@@ -213,13 +211,6 @@ def build_worker_prompt(
     ]
 
     context = "\n".join(context_parts)
-
-    # Build completed steps section (for epics)
-    completed_section = ""
-    if completed_steps:
-        completed_section = "\n\n### Previous Steps (already completed)\n" + "\n".join(
-            f"{i + 1}. {step}" for i, step in enumerate(completed_steps)
-        )
 
     # Build notes section (knowledge from other workers)
     notes_section = ""
@@ -247,7 +238,7 @@ def build_worker_prompt(
         title=issue["title"],
         description=issue.get("description", ""),
         context=context,
-        completed_section=completed_section,
+        completed_section="",
         notes_section=notes_section,
         inbox_section="",
         retry_section=retry_section,

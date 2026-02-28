@@ -602,67 +602,6 @@ async def test_harvest_notes_no_file(temp_db, tmp_path):
     assert len(events) == 0
 
 
-def test_gather_notes_for_worker_with_epic(temp_db, tmp_path):
-    """Test _gather_notes_for_worker combines epic + project notes with dedup."""
-    from hive.backends import HiveBackend
-
-    mock_backend = MagicMock(spec=HiveBackend)
-    orch = Orchestrator(
-        db=temp_db,
-        backend=mock_backend,
-    )
-
-    # Create a epic with steps
-    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
-    step1_id = temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
-    step2_id = temp_db.create_issue("Step 2", parent_id=parent_id, issue_type="step")
-
-    agent_id = temp_db.create_agent("test-agent")
-
-    # Add epic-scoped notes
-    note1_id = temp_db.add_note(issue_id=step1_id, agent_id=agent_id, content="Step 1 discovery", category="discovery")
-
-    # Add a project-wide note
-    note2_id = temp_db.add_note(content="Project-wide gotcha", category="gotcha")
-
-    # Gather notes for step2 (should see step1's note + project note)
-    notes = orch._gather_notes_for_worker(step2_id, "default")
-
-    assert notes is not None
-    assert len(notes) == 2
-    note_ids = {n["id"] for n in notes}
-    assert note1_id in note_ids
-    assert note2_id in note_ids
-
-
-def test_gather_notes_for_worker_deduplicates(temp_db, tmp_path):
-    """Test _gather_notes_for_worker deduplicates by note ID."""
-    from hive.backends import HiveBackend
-
-    mock_backend = MagicMock(spec=HiveBackend)
-    orch = Orchestrator(
-        db=temp_db,
-        backend=mock_backend,
-    )
-
-    # Create a epic with a step
-    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
-    step_id = temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
-
-    agent_id = temp_db.create_agent("test-agent")
-
-    # Add a note tied to the step — it will appear in both
-    # get_notes_for_epic AND get_recent_project_notes
-    note_id = temp_db.add_note(issue_id=step_id, agent_id=agent_id, content="Shared note")
-
-    notes = orch._gather_notes_for_worker(step_id, "default")
-
-    # Should only appear once despite being in both queries
-    assert notes is not None
-    ids = [n["id"] for n in notes]
-    assert ids.count(note_id) == 1
-
-
 def test_gather_notes_for_worker_no_notes(temp_db, tmp_path):
     """Test _gather_notes_for_worker returns None when no notes exist."""
     from hive.backends import HiveBackend
@@ -1208,52 +1147,6 @@ async def test_handle_agent_complete_budget_transition_routes_failure(temp_db, t
     orch._handle_agent_failure.assert_called_once()
     failure_result = orch._handle_agent_failure.call_args[0][1]
     assert "Exceeded per-issue token budget" in failure_result.reason
-    assert agent_id not in orch.active_agents
-
-
-@pytest.mark.asyncio
-async def test_handle_agent_complete_epic_step_does_not_cycle(temp_db, tmp_path):
-    """Epic steps should complete normally without session cycling."""
-    mock_backend = AsyncMock(spec=HiveBackend)
-    mock_backend.get_messages = AsyncMock(return_value=[])
-    orch = _make_orchestrator(temp_db, tmp_path, mock_backend)
-
-    parent_id = temp_db.create_issue("Epic parent", issue_type="epic")
-    issue_id = temp_db.create_issue("Step 1", issue_type="step", parent_id=parent_id)
-    next_step_id = temp_db.create_issue("Step 2", issue_type="step", parent_id=parent_id)
-    agent_id = temp_db.create_agent("test-agent")
-    temp_db.claim_issue(issue_id, agent_id)
-
-    agent = AgentIdentity(
-        agent_id=agent_id,
-        name="test-agent",
-        issue_id=issue_id,
-        worktree=str(tmp_path),
-        session_id="session-123",
-    )
-    orch.active_agents[agent_id] = agent
-
-    file_result = {
-        "status": "success",
-        "summary": "Step complete",
-        "files_changed": [],
-        "tests_added": [],
-        "tests_run": True,
-        "blockers": [],
-        "artifacts": [{"type": "git_commit", "value": "abc123"}],
-    }
-
-    with patch("hive.orchestrator.has_diff_from_main_async", return_value=True):
-        await orch.handle_agent_complete(agent, file_result=file_result)
-
-    # Step 1 completes and is enqueued for merge; no attempt is made to claim Step 2.
-    assert temp_db.get_issue(issue_id)["status"] == "done"
-    assert temp_db.get_issue(next_step_id)["status"] == "open"
-    assert temp_db.get_issue(next_step_id)["assignee"] is None
-
-    merge_rows = temp_db.conn.execute("SELECT * FROM merge_queue WHERE issue_id = ?", (issue_id,)).fetchall()
-    assert len(merge_rows) == 1
-
     assert agent_id not in orch.active_agents
 
 

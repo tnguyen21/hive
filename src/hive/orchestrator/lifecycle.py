@@ -183,14 +183,6 @@ class LifecycleMixin:
         seen_ids: set = set()
         notes: List[Dict[str, Any]] = []
 
-        # Get epic-scoped notes if this is a step
-        issue = self.db.get_issue(issue_id)
-        if issue and issue.get("parent_id"):
-            for note in self.db.get_notes_for_epic(issue["parent_id"]):
-                if note["id"] not in seen_ids:
-                    seen_ids.add(note["id"])
-                    notes.append(note)
-
         # Get recent project-wide notes
         for note in self.db.get_notes(project=project, limit=10):
             if note["id"] not in seen_ids:
@@ -278,9 +270,8 @@ class LifecycleMixin:
         model: str,
         started_event_type: str,
         started_event_detail: Dict[str, Any],
-        completed_steps: Optional[List[str]] = None,
     ):
-        """Shared prompt + dispatch flow for spawn and epic cycling."""
+        """Shared prompt + dispatch flow for worker spawning."""
         issue_id = issue["id"]
         issue_project = issue["project"]
 
@@ -300,7 +291,6 @@ class LifecycleMixin:
             branch_name=branch_name,
             project=issue_project,
             notes=worker_notes,
-            completed_steps=completed_steps,
             retry_context=retry_context,
             inbox_section=inbox_section,
         )

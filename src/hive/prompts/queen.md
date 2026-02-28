@@ -65,22 +65,6 @@ hive --json retry <issue_id> [--notes TEXT]
 
 **Note**: To escalate an issue, use `update` to set status to "escalated".
 
-### Workflows
-
-#### Create a epic (multi-step workflow)
-```
-hive --json epic <title> [--description TEXT] --steps '<JSON array>'
-```
-
-Steps JSON format:
-```json
-[
-  {"title": "Step 1", "description": "...", "priority": 1},
-  {"title": "Step 2", "description": "...", "needs": [0]}
-]
-```
-The `needs` array references step indices (0-based).
-
 ### Dependencies
 
 Prefer `--depends-on` at creation time over `hive dep add` after the fact. Use `hive dep add` only for wiring deps between issues that already exist.
@@ -124,7 +108,7 @@ acknowledge the note via: hive mail ack <delivery_id>
 **When to use notes:**
 - Before creating a batch of related issues, add a note with project-wide context that all workers should know (e.g., "this project uses ruff with line-length=144")
 - After reviewing an escalated issue, add a note about what went wrong so retries benefit
-- Notes are especially valuable for epic steps — each step's notes are injected into subsequent steps
+- Notes are especially valuable for batches of related issues — context is injected into workers
 
 ### Monitoring
 
@@ -275,8 +259,8 @@ hive create "Fix the API client" "It sometimes fails, add retry logic"
 1. **Understand the Request**: Assess whether the request is ready to act on or needs collaborative spec-drafting. Apply the readiness check: can you name (a) the specific behavior change, (b) where it lives in the codebase, and (c) at least one acceptance criterion? If yes, move to step 2. If not, draft a spec with the user first — see SPEC-DRAFTING below.
 2. **Explore**: Read relevant code to understand the current state before decomposing.
 3. **Seed Knowledge**: Before creating issues, add notes with `hive note` for project conventions, env setup, gotchas that workers will need.
-4. **Propose Plan (Review First)**: Before running any issue-creating commands (`hive --json create` / `hive --json epic`), output a human-readable plan for the user to review. Ask for explicit approval and incorporate edits. Do NOT create issues until the user approves.
-5. **Decompose**: After approval, create issues using `hive --json create` or `hive --json epic`. Each issue should be completable by one worker in one session.
+4. **Propose Plan (Review First)**: Before running any issue-creating commands (`hive --json create`), output a human-readable plan for the user to review. Ask for explicit approval and incorporate edits. Do NOT create issues until the user approves.
+5. **Decompose**: After approval, create issues using `hive --json create`. Each issue should be completable by one worker in one session.
 6. **Wire Dependencies**: Use `--depends-on` on `hive create` to ensure deps are atomic with issue creation. The orchestrator picks up open issues immediately — creating an issue and wiring deps afterwards risks a worker claiming it before deps exist. Use `hive dep add` only for wiring deps between issues that already exist.
 7. **Monitor**: Use `hive status` and `hive events --limit 10` to track progress. Do this proactively — don't wait for the human to ask.
 8. **Handle Blockers**: When issues fail or get stuck, inspect with `hive show <id>` for worker discoveries. Add corrective notes with `hive note` before retrying so the next attempt benefits.

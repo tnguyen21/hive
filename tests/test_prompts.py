@@ -12,23 +12,6 @@ from hive.prompts import (
 )
 
 
-def test_build_worker_prompt_with_completed_steps():
-    """Test building a worker prompt for a epic step with completed steps."""
-    issue = {"title": "Step 1", "description": "First step"}
-
-    prompt = build_worker_prompt(
-        agent_name="test-agent",
-        issue=issue,
-        worktree_path="/tmp/worktree",
-        branch_name="agent/test-agent",
-        project="test-project",
-        completed_steps=["Step 0: Setup complete"],
-    )
-
-    # Assert completed_steps content appears in the prompt
-    assert "Step 0: Setup complete" in prompt
-
-
 def test_assess_completion_file_result_success():
     """Test assessing completion with file-based result (success)."""
     messages = []  # Messages are now ignored
