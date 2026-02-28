@@ -1,10 +1,62 @@
-"""Shared utilities: ID generation, project detection, data models."""
+"""Shared utilities: ID generation, project detection, data models, logging."""
 
+import logging
+import logging.handlers
+import os
 import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+
+# --- Logging ---
+
+
+def configure_logging() -> None:
+    """Configure logging for the Hive application.
+
+    Creates a root 'hive' logger with:
+    - Console handler with formatted output
+    - File handler with rotation (if not in CLI context)
+    - Configurable log level via HIVE_LOG_LEVEL environment variable
+    """
+    log_level = os.environ.get("HIVE_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, log_level, logging.INFO)
+
+    logger = logging.getLogger("hive")
+    logger.setLevel(level)
+
+    if logger.handlers:
+        return
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(level)
+    logger.addHandler(console_handler)
+
+    if not _is_cli_context():
+        log_dir = Path.home() / ".hive" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_dir / "hive.log",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(level)
+        logger.addHandler(file_handler)
+
+
+def _is_cli_context() -> bool:
+    """Check if we're running in a CLI context where file logging should be disabled."""
+    if os.environ.get("HIVE_ENABLE_FILE_LOGGING") == "1":
+        return False
+    return os.environ.get("HIVE_CLI_CONTEXT") == "1"
 
 
 # --- ID generation ---
