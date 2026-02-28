@@ -331,19 +331,6 @@ class OrchestratorCore:
             self.db.conn.commit()
             logger.info(f"Purged {count} idle/failed agent(s) from previous runs")
 
-    def _rebuild_reverse_maps(self):
-        """Rebuild reverse lookup maps from current active_agents.
-
-        This is primarily for robustness and debugging. Under normal operation,
-        the maps should be kept in sync through spawn_worker and _unregister_agent.
-        """
-        self._session_to_agent.clear()
-        self._issue_to_agent.clear()
-
-        for agent_id, agent in self.active_agents.items():
-            self._session_to_agent[agent.session_id] = agent_id
-            self._issue_to_agent[agent.issue_id] = agent_id
-
     def _register_active_agent(self, agent: AgentIdentity):
         """Register an agent in active maps for session/issue lookup."""
         self.active_agents[agent.agent_id] = agent

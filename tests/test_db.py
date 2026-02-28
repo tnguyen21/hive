@@ -430,31 +430,6 @@ def test_get_queued_merges_empty(temp_db):
     assert merges == []
 
 
-def test_update_merge_queue_status(db_with_merge_queue):
-    """Test updating merge queue entry status."""
-    db, _, _ = db_with_merge_queue
-
-    # Get the first queued entry
-    merges = db.get_queued_merges(limit=1)
-    queue_id = merges[0]["id"]
-
-    # Update to running
-    db.update_merge_queue_status(queue_id, "running")
-    cursor = db.conn.execute("SELECT * FROM merge_queue WHERE id = ?", (queue_id,))
-    entry = cursor.fetchone()
-    assert entry is not None
-    assert entry["status"] == "running"
-    assert entry["completed_at"] is None
-
-    # Update to merged with timestamp
-    db.update_merge_queue_status(queue_id, "merged", completed_at="2026-02-12 12:00:00")
-    cursor = db.conn.execute("SELECT * FROM merge_queue WHERE id = ?", (queue_id,))
-    entry = cursor.fetchone()
-    assert entry is not None
-    assert entry["status"] == "merged"
-    assert entry["completed_at"] == "2026-02-12 12:00:00"
-
-
 def test_get_merge_queue_stats(db_with_merge_queue):
     """Test merge queue statistics."""
     db, _, _ = db_with_merge_queue
@@ -518,31 +493,6 @@ def test_log_system_event(temp_db):
 
 
 # --- Capability scoring tests ---
-
-
-def test_get_idle_agents_empty(temp_db):
-    """Test get_idle_agents with no idle agents."""
-    idle = temp_db.get_idle_agents()
-    assert idle == []
-
-
-def test_get_idle_agents_with_agents(temp_db):
-    """Test get_idle_agents returns only idle agents."""
-    agent1 = temp_db.create_agent("agent-1")
-    agent2 = temp_db.create_agent("agent-2")
-    agent3 = temp_db.create_agent("agent-3")
-
-    # Update agent2 to working status
-    temp_db.conn.execute("UPDATE agents SET status = 'working' WHERE id = ?", (agent2,))
-    temp_db.conn.commit()
-
-    idle = temp_db.get_idle_agents()
-    idle_ids = [agent["id"] for agent in idle]
-
-    assert len(idle) == 2
-    assert agent1 in idle_ids
-    assert agent2 not in idle_ids  # Not idle
-    assert agent3 in idle_ids
 
 
 def test_get_token_usage_no_data(temp_db):

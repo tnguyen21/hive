@@ -579,17 +579,6 @@ class DatabaseCore:
             )
             return cursor.rowcount == 1
 
-    def try_extend_agent_lease(
-        self,
-        agent_id: str,
-        *,
-        extension_seconds: int,
-        required_status: str = "working",
-    ) -> bool:
-        """Backward-compatible alias for heartbeat touches."""
-        _ = extension_seconds
-        return self.try_touch_agent_heartbeat(agent_id, required_status=required_status)
-
     def get_active_agents(self, project: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all currently active agents.
@@ -610,22 +599,6 @@ class DatabaseCore:
         query += " ORDER BY created_at ASC"
 
         cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_idle_agents(self) -> List[Dict[str, Any]]:
-        """
-        Get all idle agents.
-
-        Returns:
-            List of idle agent dicts
-        """
-        cursor = self.conn.execute(
-            """
-            SELECT * FROM agents
-            WHERE status = 'idle'
-            ORDER BY created_at ASC
-            """
-        )
         return [dict(row) for row in cursor.fetchall()]
 
     # --- Merge Queue Methods ---
@@ -659,25 +632,6 @@ class DatabaseCore:
 
         cursor = self.conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
-
-    def update_merge_queue_status(self, queue_id: int, status: str, completed_at: Optional[str] = None):
-        """
-        Update merge queue entry status.
-
-        Args:
-            queue_id: Merge queue entry ID
-            status: New status (queued|running|merged|failed)
-            completed_at: Completion timestamp (optional)
-        """
-        with self.transaction() as conn:
-            conn.execute(
-                """
-                UPDATE merge_queue
-                SET status = ?, completed_at = ?
-                WHERE id = ?
-                """,
-                (status, completed_at, queue_id),
-            )
 
     def get_merge_queue_stats(self) -> Dict[str, int]:
         """
@@ -720,12 +674,6 @@ class DatabaseCore:
         )
         if commit:
             self.conn.commit()
-
-    def batch_log_events(self, events: list):
-        """Log multiple events in a single transaction."""
-        for event in events:
-            self.log_event(event["issue_id"], event.get("agent_id"), event["event_type"], event.get("detail"), commit=False)
-        self.conn.commit()
 
     def _query_events(
         self,
