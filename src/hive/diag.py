@@ -1,8 +1,8 @@
 """Hive diagnostic report — one-stop debug bundle.
 
-Collects system info, config, daemon status, doctor checks, DB stats,
-recent events, daemon log tail, and backend reachability into a single
-report that users can paste when filing bug reports.
+Collects system info, config, daemon status, DB stats, recent events,
+daemon log tail, and backend reachability into a single report that
+users can paste when filing bug reports.
 """
 
 import platform
@@ -80,20 +80,6 @@ def _gather_daemon(project_name: str, project_path: str) -> dict:
 
     daemon = HiveDaemon(project_name, project_path)
     return daemon.status()
-
-
-def _gather_doctor(db: Database) -> list[dict]:
-    from .doctor import run_all_checks
-
-    results = run_all_checks(db)
-    return [
-        {
-            "id": r.id,
-            "status": r.status,
-            "description": r.description,
-        }
-        for r in results
-    ]
 
 
 def _gather_db_stats(db: Database) -> dict:
@@ -188,7 +174,6 @@ def gather_report(db: Database, project_path: str, project_name: str) -> dict:
         "system": _section(_gather_system),
         "config": _section(_gather_config, pp),
         "daemon": _section(_gather_daemon, project_name, project_path),
-        "doctor": _section(_gather_doctor, db),
         "db_stats": _section(_gather_db_stats, db),
         "recent_events": _section(_gather_recent_events, db),
         "daemon_log_tail": _section(_gather_daemon_log_tail, project_name),
@@ -251,19 +236,6 @@ def format_report_text(report: dict) -> str:
             lines.append(f"  Log:     {daemon['log_file']}")
     else:
         lines.append(f"  {daemon}")
-
-    # --- Doctor Checks ---
-    lines.append("")
-    lines.append("--- Doctor Checks ---")
-    doctor = report.get("doctor", [])
-    if isinstance(doctor, list):
-        for check in doctor:
-            cid = check.get("id", "?")
-            status = check.get("status", "?").upper()
-            desc = check.get("description", "?")
-            lines.append(f"  {cid:<8} {status:<6} {desc}")
-    else:
-        lines.append(f"  {doctor}")
 
     # --- DB Stats ---
     lines.append("")

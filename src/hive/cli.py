@@ -1197,68 +1197,6 @@ class HiveCLI:
         else:
             print(format_report_text(report))
 
-    def doctor(self, fix: bool = False, *, json_mode: bool = False):
-        """Run system health checks."""
-        from .doctor import run_all_checks
-
-        results = run_all_checks(self.db)
-
-        # Apply fixes if requested
-        fixed_checks = []
-        if fix:
-            for result in results:
-                if result.status in ("fail", "warn") and result.fix is not None:
-                    try:
-                        result.fix(self.db)
-                        fixed_checks.append(result.id)
-                    except Exception as e:
-                        if json_mode:
-                            print(json.dumps({"error": f"Failed to fix {result.id}: {e}"}), file=sys.stderr)
-                        else:
-                            print(f"Error fixing {result.id}: {e}", file=sys.stderr)
-
-        if json_mode:
-            output = [
-                {
-                    "id": r.id,
-                    "status": r.status,
-                    "description": r.description,
-                    "details": r.details,
-                    "fixable": r.fix is not None,
-                    "fixed": r.id in fixed_checks,
-                }
-                for r in results
-            ]
-            print(json.dumps(output, indent=2))
-            return
-
-        # Table output
-        print(f"\n{'ID':<8} {'Status':<8} {'Description':<60}")
-        print("-" * 76)
-        for result in results:
-            status_display = result.status.upper()
-            description = result.description[:60]
-            if result.id in fixed_checks:
-                description += " [FIXED]"
-            print(f"{result.id:<8} {status_display:<8} {description}")
-
-        # Summary
-        failures = sum(1 for r in results if r.status == "fail")
-        warnings = sum(1 for r in results if r.status == "warn")
-
-        print()
-        if fix and fixed_checks:
-            print(f"Fixed {len(fixed_checks)} check(s): {', '.join(fixed_checks)}")
-        if failures > 0 or warnings > 0:
-            parts = []
-            if failures > 0:
-                parts.append(f"{failures} failure(s)")
-            if warnings > 0:
-                parts.append(f"{warnings} warning(s)")
-            print(f"Summary: {', '.join(parts)}")
-        else:
-            print("Summary: All checks passed")
-
     def metrics(self, model=None, tag=None, issue_type=None, group_by=None, show_costs=False, issue_id=None, agent_id=None, json_mode=False):
         """Show aggregated agent run metrics."""
         # If --group-by is specified, use the stats-style output
@@ -1928,10 +1866,6 @@ def main():
     mail_ack_parser.add_argument("delivery_id", type=int, help="Delivery ID")
     mail_ack_parser.add_argument("--agent", dest="agent_id", required=True, help="Agent ID")
 
-    # doctor command
-    doctor_parser = subparsers.add_parser("doctor", help="Run system health checks")
-    doctor_parser.add_argument("--fix", action="store_true", help="Auto-fix issues where possible")
-
     # debug command
     subparsers.add_parser("debug", help="Print diagnostic report for debugging")
 
@@ -2125,9 +2059,6 @@ def main():
                 cli.mail_ack(args.delivery_id, args.agent_id, json_mode=json_mode)
             else:
                 mail_parser.print_help()
-
-        elif args.command == "doctor":
-            cli.doctor(fix=getattr(args, "fix", False), json_mode=json_mode)
 
         elif args.command == "debug":
             cli.debug(json_mode=json_mode)

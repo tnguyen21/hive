@@ -21,7 +21,6 @@ def test_gather_report_returns_all_sections(report):
         "system",
         "config",
         "daemon",
-        "doctor",
         "db_stats",
         "recent_events",
         "daemon_log_tail",
@@ -46,26 +45,6 @@ def test_db_stats_row_counts(temp_db, tmp_path):
     assert db_stats["row_counts"]["issues"] >= 1
 
 
-def test_doctor_checks_included(report):
-    doctor = report["doctor"]
-    assert isinstance(doctor, list)
-    ids = {c.get("id") for c in doctor if isinstance(c, dict)}
-    assert {
-        "INV-1",
-        "INV-2",
-        "INV-3",
-        "INV-5",
-        "INV-6",
-        "INV-7",
-        "INV-8",
-        "INV-9",
-    }.issubset(ids)
-    for check in doctor:
-        assert "id" in check
-        assert "status" in check
-        assert "description" in check
-
-
 def test_recent_events_captured(temp_db, tmp_path):
     temp_db.create_issue("Event test", "desc", project="test-project")
     report = gather_report(temp_db, str(tmp_path), "test-project")
@@ -79,7 +58,6 @@ def test_format_report_text_readable(report):
     assert "HIVE DIAGNOSTIC REPORT" in text
     assert "--- System ---" in text
     assert "--- Config ---" in text
-    assert "--- Doctor Checks ---" in text
     assert "--- DB Stats ---" in text
     assert "END OF REPORT" in text
 
