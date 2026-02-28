@@ -734,51 +734,6 @@ def test_get_notes_limit_parameter(temp_db):
     assert len(all_notes) == 5
 
 
-def test_get_notes_for_epic(temp_db):
-    """Test get_notes_for_epic returns notes from child issues."""
-    # Create a parent epic issue
-    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
-
-    # Create child issues
-    child1_id = temp_db.create_issue("Child 1", parent_id=parent_id, issue_type="step")
-    child2_id = temp_db.create_issue("Child 2", parent_id=parent_id, issue_type="step")
-    child3_id = temp_db.create_issue("Child 3", parent_id=parent_id, issue_type="step")
-
-    # Create an unrelated issue
-    unrelated_id = temp_db.create_issue("Unrelated issue")
-
-    agent_id = temp_db.create_agent("test-agent")
-
-    # Create notes for child issues (older first to test ordering)
-    note1_id = temp_db.add_note(issue_id=child1_id, agent_id=agent_id, content="Note from child 1")
-    note2_id = temp_db.add_note(issue_id=child2_id, agent_id=agent_id, content="Note from child 2")
-    note3_id = temp_db.add_note(issue_id=child3_id, agent_id=agent_id, content="Note from child 3")
-
-    # Create note for unrelated issue (should not be included)
-    unrelated_note_id = temp_db.add_note(issue_id=unrelated_id, agent_id=agent_id, content="Unrelated note")
-
-    # Get notes for the epic
-    notes = temp_db.get_notes_for_epic(parent_id)
-
-    assert len(notes) == 3
-    note_ids = [note["id"] for note in notes]
-    assert note1_id in note_ids
-    assert note2_id in note_ids
-    assert note3_id in note_ids
-    assert unrelated_note_id not in note_ids
-
-    # Should be ordered by creation time (oldest first)
-    assert notes[0]["id"] == note1_id  # First created
-    assert notes[1]["id"] == note2_id
-    assert notes[2]["id"] == note3_id  # Last created
-
-    # Verify content
-    contents = [note["content"] for note in notes]
-    assert "Note from child 1" in contents
-    assert "Note from child 2" in contents
-    assert "Note from child 3" in contents
-
-
 def test_get_recent_project_notes(temp_db):
     """Test get_notes returns mixed notes newest first (was get_recent_project_notes)."""
     issue1_id = temp_db.create_issue("Issue 1")
@@ -897,25 +852,6 @@ def test_create_note_with_nonexistent_agent_id():
         os.unlink(db_path)
 
 
-# --- epic completion tests ---
-
-
-def test_check_epic_complete(temp_db):
-    """check_epic_complete should require all children be terminal-ish."""
-    parent_id = temp_db.create_issue("Parent epic", issue_type="epic")
-    child1 = temp_db.create_issue("Step 1", parent_id=parent_id, issue_type="step")
-    child2 = temp_db.create_issue("Step 2", parent_id=parent_id, issue_type="step")
-    child3 = temp_db.create_issue("Step 3", parent_id=parent_id, issue_type="step")
-
-    assert temp_db.check_epic_complete(parent_id) is False
-
-    temp_db.update_issue_status(child1, "done")
-    temp_db.update_issue_status(child2, "finalized")
-    temp_db.update_issue_status(child3, "canceled")
-
-    assert temp_db.check_epic_complete(parent_id) is True
-
-
 def test_notes_database_not_connected_error(temp_db):
     """Test that notes methods raise error when database not connected."""
     # Close the connection
@@ -927,9 +863,6 @@ def test_notes_database_not_connected_error(temp_db):
 
     with pytest.raises(RuntimeError, match="Database not connected"):
         temp_db.get_notes()
-
-    with pytest.raises(RuntimeError, match="Database not connected"):
-        temp_db.get_notes_for_epic("test-parent")
 
 
 # --- Model performance tests ---

@@ -162,7 +162,6 @@ class IssuesMixin:
             FROM issues i
             WHERE i.status = 'open'
               AND i.assignee IS NULL
-              AND i.type != 'epic'
               AND NOT EXISTS (
                 SELECT 1 FROM dependencies d
                 JOIN issues blocker ON d.depends_on = blocker.id
@@ -272,19 +271,3 @@ class IssuesMixin:
                 """,
                 (issue_id, depends_on, dep_type),
             )
-
-    def check_epic_complete(self, parent_id: str) -> bool:
-        """
-        Check if all child issues of a epic are complete.
-
-        Args:
-            parent_id: Parent epic issue ID
-
-        Returns:
-            True if all children are done/finalized/canceled, False otherwise
-        """
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) FROM issues WHERE parent_id = ? AND status NOT IN ('done', 'finalized', 'canceled')",
-            (parent_id,),
-        )
-        return cursor.fetchone()[0] == 0

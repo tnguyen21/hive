@@ -175,9 +175,7 @@ class LifecycleMixin:
     def _gather_notes_for_worker(self, issue_id: str, project: str) -> Optional[List[Dict[str, Any]]]:
         """Gather relevant notes to inject into a worker's prompt.
 
-        Combines epic-specific notes (if the issue is a step) with
-        recent project-wide notes, deduplicating by note ID.
-
+        Returns recent project-wide notes, deduplicated by note ID.
         Returns None if no notes are found (so build_worker_prompt skips the section).
         """
         seen_ids: set = set()

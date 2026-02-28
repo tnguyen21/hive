@@ -75,30 +75,6 @@ class NotesMixin:
         rows = self.conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    def get_notes_for_epic(self, parent_id: str) -> List[Dict]:
-        """
-        Get all notes from issues that share a parent epic. For predecessor context.
-
-        Args:
-            parent_id: Parent epic issue ID
-
-        Returns:
-            List of note dicts from child issues, ordered by creation time (oldest first)
-        """
-        if not self.conn:
-            raise RuntimeError("Database not connected")
-
-        rows = self.conn.execute(
-            """
-            SELECT n.* FROM notes n
-            JOIN issues i ON n.issue_id = i.id
-            WHERE i.parent_id = ?
-            ORDER BY n.created_at ASC
-        """,
-            (parent_id,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
     def create_note_deliveries(
         self,
         note_id: int,

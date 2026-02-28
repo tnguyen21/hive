@@ -180,7 +180,7 @@ class MetricsMixin:
                     (julianday(COALESCE(i.closed_at, datetime('now'))) - julianday(i.created_at)) * 24 * 60
                 ), 1) as avg_duration_minutes
             {from_clause}
-            WHERE i.type != 'epic'
+            WHERE 1=1
         """
         params: list = []
         if model:
