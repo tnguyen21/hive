@@ -80,8 +80,9 @@ class ClaudeWSBackend(HiveBackend):
         # SSE-compatible event handlers
         self._handlers: Dict[str, Callable] = {}
 
-        # Concurrency limiter — use dedicated override if set, otherwise MAX_AGENTS
-        concurrency = Config.CLAUDE_WS_MAX_CONCURRENT or Config.MAX_AGENTS
+        # Concurrency limiter — use dedicated override if set, otherwise MAX_AGENTS + 1.
+        # The +1 reserves a slot for the refinery session so worker slots aren't reduced.
+        concurrency = Config.CLAUDE_WS_MAX_CONCURRENT or (Config.MAX_AGENTS + 1)
         self._spawn_semaphore = asyncio.Semaphore(concurrency)
 
         # Server lifecycle
