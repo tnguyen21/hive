@@ -112,13 +112,6 @@ def _fmt_review(result):
     return "\n".join(lines)
 
 
-def _fmt_epic(result):
-    lines = [result.get("message", f"Created epic {result.get('epic_id', '')}")]
-    for step in result.get("steps", []):
-        lines.append(f"  Step {step['index']}: {step['id']} - {step['title']}")
-    return "\n".join(lines)
-
-
 def _fmt_add_note(result):
     return f"Added note #{result['note_id']} [{result.get('category', 'discovery')}]"
 

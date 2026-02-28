@@ -60,7 +60,7 @@ def main():
         "--type",
         default="task",
         dest="issue_type",
-        help="Issue type (task, bug, feature, step, epic)",
+        help="Issue type (task, bug, feature)",
     )
     create_parser.add_argument(
         "--model",
@@ -97,7 +97,7 @@ def main():
     list_parser.add_argument(
         "--type",
         dest="issue_type",
-        help="Filter by issue type (task, bug, feature, step, epic)",
+        help="Filter by issue type (task, bug, feature)",
     )
     list_parser.add_argument("--todo", action="store_true", help="Show only actionable issues (excludes done/finalized/canceled)")
     list_parser.add_argument("--assignee", help="Filter by agent assignee")
@@ -144,17 +144,6 @@ def main():
     retry_parser = subparsers.add_parser("retry", help="Retry an escalated issue")
     retry_parser.add_argument("issue_id", help="Issue ID")
     retry_parser.add_argument("--notes", default="", help="Notes about what to try differently")
-
-    # epic command (hidden — advanced)
-    epic_parser = subparsers.add_parser("epic", help="Create a multi-step epic")
-    epic_parser.add_argument("title", help="Epic title")
-    epic_parser.add_argument("--description", default="", help="Epic description")
-    epic_parser.add_argument("--steps", required=True, help="Steps as JSON array")
-    epic_parser.add_argument(
-        "--model",
-        help="Model to use for this epic (overrides global WORKER_MODEL)",
-    )
-    epic_parser.add_argument("--tags", type=str, help="Comma-separated tags (e.g. refactor,python,small)")
 
     # dep command (hidden — advanced)
     dep_parser = subparsers.add_parser("dep", help="Manage issue dependencies")
@@ -361,16 +350,6 @@ def main():
 
         elif args.command == "retry":
             cli.retry(args.issue_id, notes=args.notes, json_mode=json_mode)
-
-        elif args.command == "epic":
-            cli.epic(
-                args.title,
-                description=args.description,
-                steps_json=args.steps,
-                model=getattr(args, "model", None),
-                tags=getattr(args, "tags", None),
-                json_mode=json_mode,
-            )
 
         elif args.command == "dep":
             if args.dep_command == "add":

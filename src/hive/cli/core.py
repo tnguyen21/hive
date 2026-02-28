@@ -15,7 +15,6 @@ from .formatters import (
     _fmt_add_note,
     _fmt_create,
     _fmt_debug,
-    _fmt_epic,
     _fmt_list_agents,
     _fmt_list_issues,
     _fmt_logs,
@@ -468,65 +467,6 @@ class HiveCLI(QueenMixin):
             "status": "open",
             "notes": notes,
             "message": f"Reset issue {issue_id} to 'open' for retry",
-        }
-
-    @cli_command(formatter=_fmt_epic)
-    def epic(
-        self,
-        title: str,
-        description: str = "",
-        steps_json: str = "[]",
-        model: Optional[str] = None,
-        tags: Optional[str] = None,
-    ):
-        """Create a epic (multi-step workflow)."""
-        try:
-            steps = json.loads(steps_json)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid steps JSON: {e}") from e
-
-        tag_list = [t.strip() for t in tags.split(",")] if tags else None
-
-        # Create parent epic issue
-        parent_id = self.db.create_issue(
-            title=title,
-            description=description,
-            issue_type="epic",
-            project=self.project_name,
-            tags=tag_list,
-        )
-
-        # Map of step indices to issue IDs
-        step_map: Dict[int, str] = {}
-        created_steps = []
-
-        # Create all step issues
-        for i, step in enumerate(steps):
-            step_id = self.db.create_issue(
-                title=step["title"],
-                description=step.get("description", ""),
-                priority=step.get("priority", 2),
-                issue_type="step",
-                project=self.project_name,
-                parent_id=parent_id,
-                model=model,
-            )
-            step_map[i] = step_id
-            created_steps.append({"index": i, "id": step_id, "title": step["title"]})
-
-        # Wire up dependencies
-        for i, step in enumerate(steps):
-            needs = step.get("needs", [])
-            for dep_idx in needs:
-                if isinstance(dep_idx, int) and dep_idx in step_map:
-                    self.db.add_dependency(step_map[i], step_map[dep_idx], "blocks")
-
-        return {
-            "epic_id": parent_id,
-            "title": title,
-            "steps_count": len(steps),
-            "steps": created_steps,
-            "message": f"Created epic {parent_id} with {len(steps)} steps",
         }
 
     @cli_command(formatter=_fmt_message)
