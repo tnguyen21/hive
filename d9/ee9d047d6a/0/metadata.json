@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "d9ee9d047d6a",
+  "session_id": "5c1ae902-7f6d-4746-a049-8a992b626dce",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T02:04:44.82756Z",
+  "branch": "feat/retry-reset-watermark",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/hive/cli/parser.py",
+    "src/hive/db/metrics.py",
+    "src/hive/orchestrator/completion.py",
+    "src/hive/orchestrator/core.py",
+    "tests/test_cli.py",
+    "tests/test_db.py",
+    "tests/test_orchestrator.py",
+    "src/hive/cli/core.py",
+    "src/hive/prompts.py",
+    "tests/test_prompts.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2f1934ea3cbd",
+  "checkpoint_transcript_start": 23,
+  "transcript_lines_at_start": 23,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T02:04:44.785745Z",
+    "agent_lines": 260,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 260,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "d9ee9d047d6a",
+  "strategy": "manual-commit",
+  "branch": "feat/retry-reset-watermark",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/hive/cli/core.py",
+    "src/hive/cli/parser.py",
+    "src/hive/db/metrics.py",
+    "src/hive/orchestrator/completion.py",
+    "src/hive/orchestrator/core.py",
+    "src/hive/prompts.py",
+    "tests/test_cli.py",
+    "tests/test_db.py",
+    "tests/test_orchestrator.py",
+    "tests/test_prompts.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/ee9d047d6a/0/metadata.json",
+      "transcript": "/d9/ee9d047d6a/0/full.jsonl",
+      "context": "/d9/ee9d047d6a/0/context.md",
+      "content_hash": "/d9/ee9d047d6a/0/content_hash.txt",
+      "prompt": "/d9/ee9d047d6a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
