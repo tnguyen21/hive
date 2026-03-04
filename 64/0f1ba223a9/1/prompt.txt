@@ -1,0 +1,116 @@
+Implement the following plan:
+
+# Plan: Retry Counter Reset via Watermark Event
+
+## Context
+
+When an issue repeatedly fails/escalates, the retry counter (computed by counting `retry`, `agent_switch`, and `incomplete` events) prevents it from being retried further. After fixing the underlying cause, there's no CLI way to reset these counters — users must manually delete rows in SQLite. We'll add a "watermark" event (`retry_reset`) that resets the counters without destroying the audit trail.
+
+## Changes
+
+### 1. Add `--reset` flag to `hive retry` CLI command
+
+**`src/hive/cli/parser.py`** (~line 147):
+- Add `--reset` flag to the existing `retry` parser
+
+**`src/hive/cli/parser.py`** (~line 360, dispatch):
+- Pass `args.reset` through to `cli.retry()`
+
+**`src/hive/cli/core.py`** (~line 449, `retry()` method):
+- Accept `reset: bool = False` parameter
+- When `reset=True`, log a `retry_reset` event (instead of / in addition to the `manual_retry` event)
+- Include notes in the event detail
+
+### 2. Add `count_events_by_type_since_reset()` to DB layer
+
+**`src/hive/db/metrics.py`** (after `count_events_by_type`):
+- New method `count_events_by_type_since_reset(issue_id, event_type)` that counts events only after the most recent `retry_reset` event:
+```sql
+SELECT COUNT(*) FROM events
+WHERE issue_id = ? AND event_type = ?
+  AND created_at > COALESCE(
+    (SELECT MAX(created_at) FROM events
+     WHERE issue_id = ? AND event_type = 'retry_reset'),
+    '1970-01-01'
+  )
+```
+
+### 3. Replace `count_events_by_type` calls with reset-aware version
+
+All call sites that feed into escalation decisions need the new method:
+
+**`src/hive/orchestrator/completion.py`** (lines 326, 330, 375, 390, 404-405):
+- `_choose_escalation()` — 2 calls (retry + agent_switch)
+- `_handle_agent_failure()` — 4 calls (retry count for detail, agent_switch count for detail, and 2 for the final escalation detail)
+
+**`src/hive/orchestrator/core.py`** (lines 256-257):
+- `_reconcile_stale_agents()` — 2 calls (retry + agent_switch budget check)
+
+### 4. Filter `build_retry_context()` to respect the watermark
+
+**`src/hive/prompts.py`** (~line 64):
+- Query for the most recent `retry_reset` event's `created_at`
+- Filter `incomplete`, `merge_rejected`, and `stalled` events to only include those after the reset timestamp
+- This way agents don't see stale failure context from before the reset
+
+### 5. `agent_runs` view — leave as-is
+
+The `agent_runs` view (line 216 of `core.py`) uses a raw subquery for `retry_count`. This is a **historical metrics view** — it should reflect total lifetime retries, not just post-reset ones. No change needed.
+
+### 6. Tests
+
+**`tests/test_cli.py`**:
+- Test `hive retry --reset <id>` logs `retry_reset` event
+- Test that after reset, the issue status is `open`
+
+**`tests/test_db.py`** (or `tests/test_metrics.py` if it exists):
+- Test `count_events_by_type_since_reset()` returns 0 after a reset event
+- Test it counts correctly when there are events both before and after reset
+- Test it works the same as `count_events_by_type()` when no reset event exists
+
+**`tests/test_orchestrator.py`**:
+- Test that `_choose_escalation()` returns `RETRY` after a `retry_reset` even when old events exceed the threshold
+
+**`tests/test_prompts.py`**:
+- Test that `build_retry_context()` returns `None` when all failures are before a `retry_reset`
+
+## Files to modify
+- `src/hive/cli/parser.py` — add `--reset` flag + dispatch
+- `src/hive/cli/core.py` — accept `reset` param, log `retry_reset` event
+- `src/hive/db/metrics.py` — add `count_events_by_type_since_reset()`
+- `src/hive/orchestrator/completion.py` — swap to reset-aware counting
+- `src/hive/orchestrator/core.py` — swap to reset-aware counting
+- `src/hive/prompts.py` — filter retry context by watermark
+- `tests/test_cli.py` — CLI reset tests
+- `tests/test_orchestrator.py` — escalation decision test
+- `tests/test_prompts.py` — retry context filtering test
+
+## Verification
+1. `uvx ruff check && uvx ruff format --check`
+2. `python -m pytest tests/ -v --timeout=30`
+3. Manual test: create issue, simulate escalation events, verify `hive retry` without `--reset` still hits the threshold, then `hive retry --reset` clears counters
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/9aeb087e-14f3-46ee-9bbf-bd8ac89ad93b.jsonl
+
+If this plan can be broken down into multiple independent tasks, consider using the TeamCreate tool to create a team and parallelize the work.
+
+---
+
+can we do a hard re-install of hive on the system; seems like i can't pull in this update. issues still being esclated and reseting
+
+---
+
+[Request interrupted by user]
+
+---
+
+not reseting
+
+---
+
+Needs attention (2):
+  w-9640ff3de673   [escalated] Wire briefing generation into game flow
+  w-09ccf79f8172   [escalated] Instrument game.ts with structured loggi
+
+poke at these two issues; they're still not being opened and in-progress properly

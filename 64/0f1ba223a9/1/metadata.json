@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "640f1ba223a9",
+  "session_id": "8ab3626c-4b69-43b6-8747-beb602dff535",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T02:12:57.810523Z",
+  "branch": "feat/retry-reset-watermark",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/hive/db/metrics.py",
+    "src/hive/orchestrator/completion.py",
+    "tests/test_orchestrator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b25e9a400a9d",
+  "token_usage": {
+    "input_tokens": 12935,
+    "cache_creation_tokens": 95313,
+    "cache_read_tokens": 5595175,
+    "output_tokens": 15663,
+    "api_call_count": 56
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T02:12:57.405636Z",
+    "agent_lines": 60,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 60,
+    "agent_percentage": 100
+  }
+}
