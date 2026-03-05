@@ -188,7 +188,7 @@ Key settings:
 
 | Setting                     | Default                      | What it controls                         |
 | --------------------------- | ---------------------------- | ---------------------------------------- |
-| `HIVE_BACKEND`              | `claude`                     | Backend: `claude` or `opencode`          |
+| `HIVE_BACKEND`              | `claude`                     | Backend: `claude` or `codex`             |
 | `HIVE_MAX_AGENTS`           | `10`                         | Max concurrent workers                   |
 | `HIVE_TEST_COMMAND`         | —                            | Test command run during merge validation |
 | `HIVE_MERGE_QUEUE_ENABLED`  | `true`                       | Auto-merge vs manual review mode         |
@@ -196,6 +196,21 @@ Key settings:
 | `HIVE_REFINERY_MODEL`       | `claude-opus-4-6`            | Model for merge refinery                 |
 | `HIVE_MAX_TOKENS_PER_ISSUE` | `200000`                     | Per-issue token budget                   |
 | `HIVE_MAX_TOKENS_PER_RUN`   | `2000000`                    | Per-run token budget                     |
+
+### Codex backend sandbox/approval flags
+
+Hive can run workers via the Codex CLI app-server backend.
+
+- Enable: `HIVE_BACKEND=codex`
+- Sandbox mode: `HIVE_CODEX_SANDBOX` (`read-only`, `workspace-write`, `danger-full-access`)
+- Approval policy: `HIVE_CODEX_APPROVAL_POLICY` (`untrusted`, `on-request`, `never`)
+- App-server command override: `HIVE_CODEX_CMD` (default: `codex app-server --listen stdio://`)
+
+Notes:
+
+- `workspace-write` is the default and is usually sufficient; Hive adds write access to the parent repo `.git/` so `git commit` works inside git worktrees.
+- `danger-full-access` removes path restrictions (use with care).
+- If you truly want **no** approvals + **no** sandboxing, you can start app-server as: `codex --dangerously-bypass-approvals-and-sandbox app-server --listen stdio://` (extremely risky; only do this in an externally sandboxed environment).
 
 ## Architecture and Internals
 
