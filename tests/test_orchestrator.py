@@ -936,6 +936,194 @@ async def test_reconcile_purges_idle_and_failed_agents(temp_db, tmp_path):
     assert working_agent is None
 
 
+# --- Reconcile phase unit tests ---
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fetch_live_sessions_success(temp_db, tmp_path):
+    """Phase 0 returns the set of live session IDs on success."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    mock_oc.list_sessions = AsyncMock(return_value=[{"id": "s1"}, {"id": "s2"}])
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    result = await orch._reconcile_fetch_live_sessions()
+
+    assert result == {"s1", "s2"}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fetch_live_sessions_backend_unreachable(temp_db, tmp_path):
+    """Phase 0 returns None when backend raises."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    mock_oc.list_sessions = AsyncMock(side_effect=Exception("timeout"))
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    result = await orch._reconcile_fetch_live_sessions()
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_session_live(temp_db, tmp_path):
+    """Live session is cleaned up and removed from live_session_ids."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    mock_oc.cleanup_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    live = {"live-sess", "other-sess"}
+    agent = {"id": "agent-1", "session_id": "live-sess", "worktree": "/tmp/wt"}
+
+    await orch._reconcile_handle_session(agent, live)
+
+    mock_oc.cleanup_session.assert_called_once_with("live-sess", directory="/tmp/wt")
+    # Discarded so Phase 2 won't count it as orphan
+    assert "live-sess" not in live
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_session_ghost(temp_db, tmp_path):
+    """Ghost session (not on server) skips cleanup."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    mock_oc.cleanup_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    live = set()  # server has nothing
+    agent = {"id": "agent-1", "session_id": "ghost-sess", "worktree": "/tmp/wt"}
+
+    await orch._reconcile_handle_session(agent, live)
+
+    mock_oc.cleanup_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_session_no_session_id(temp_db, tmp_path):
+    """Agent with no session_id is a no-op."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    mock_oc.cleanup_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent = {"id": "agent-1", "session_id": None, "worktree": "/tmp/wt"}
+    await orch._reconcile_handle_session(agent, {"any-sess"})
+
+    mock_oc.cleanup_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_session_backend_unreachable(temp_db, tmp_path):
+    """When live_session_ids is None, always attempt best-effort cleanup."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    mock_oc.cleanup_session = AsyncMock()
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent = {"id": "agent-1", "session_id": "fallback-sess", "worktree": "/tmp/wt"}
+    await orch._reconcile_handle_session(agent, None)
+
+    mock_oc.cleanup_session.assert_called_once_with("fallback-sess", directory="/tmp/wt")
+
+
+def test_reconcile_handle_issue_releases_within_budget(temp_db, tmp_path):
+    """Issue with retry budget remaining is released back to open."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    issue_id = temp_db.create_issue("Test task")
+    agent_id = temp_db.create_agent("test-agent")
+    temp_db.claim_issue(issue_id, agent_id)
+
+    agent = {"id": agent_id, "current_issue": issue_id}
+    orch._reconcile_handle_issue(agent)
+
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "open"
+
+    events = temp_db.get_events(issue_id=issue_id, event_type="reconciled")
+    assert len(events) == 1
+
+
+def test_reconcile_handle_issue_escalates_when_budget_exhausted(temp_db, tmp_path):
+    """Issue with exhausted retry budget is escalated."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    issue_id = temp_db.create_issue("Test task")
+    agent_id = temp_db.create_agent("test-agent")
+    temp_db.claim_issue(issue_id, agent_id)
+
+    for i in range(Config.MAX_RETRIES):
+        temp_db.log_event(issue_id, agent_id, "retry", {"attempt": i + 1})
+    for i in range(Config.MAX_AGENT_SWITCHES):
+        temp_db.log_event(issue_id, agent_id, "agent_switch", {"switch": i + 1})
+
+    agent = {"id": agent_id, "current_issue": issue_id}
+    orch._reconcile_handle_issue(agent)
+
+    issue = temp_db.get_issue(issue_id)
+    assert issue["status"] == "escalated"
+
+
+def test_reconcile_handle_issue_noop_when_no_issue(temp_db, tmp_path):
+    """Agent with no issue is a no-op — no DB changes."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent = {"id": "agent-x", "current_issue": None}
+    orch._reconcile_handle_issue(agent)  # Must not raise
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_worktree_deletes_when_no_pending_merge(temp_db, tmp_path):
+    """Worktree is deleted when no merge queue entry is pending."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    issue_id = temp_db.create_issue("Test task")
+    agent = {"id": "agent-1", "worktree": str(tmp_path), "current_issue": issue_id}
+
+    removed = []
+    with patch("hive.orchestrator.remove_worktree_async", new=AsyncMock(side_effect=lambda wt: removed.append(wt))):
+        await orch._reconcile_handle_worktree(agent)
+
+    assert str(tmp_path) in removed
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_worktree_preserved_for_pending_merge(temp_db, tmp_path):
+    """Worktree is NOT deleted when a merge queue entry is queued."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    issue_id = temp_db.create_issue("Test task")
+    # Insert a queued merge entry
+    temp_db.conn.execute(
+        "INSERT INTO merge_queue (issue_id, status, branch_name, worktree, project) VALUES (?, 'queued', 'br', ?, 'proj')",
+        (issue_id, str(tmp_path)),
+    )
+    temp_db.conn.commit()
+
+    agent = {"id": "agent-1", "worktree": str(tmp_path), "current_issue": issue_id}
+
+    removed = []
+    with patch("hive.orchestrator.remove_worktree_async", new=AsyncMock(side_effect=lambda wt: removed.append(wt))):
+        await orch._reconcile_handle_worktree(agent)
+
+    assert removed == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_handle_worktree_noop_when_no_worktree(temp_db, tmp_path):
+    """Agent with no worktree is a no-op."""
+    mock_oc = AsyncMock(spec=HiveBackend)
+    orch = _make_orchestrator(temp_db, tmp_path, mock_oc)
+
+    agent = {"id": "agent-1", "worktree": None, "current_issue": "issue-x"}
+
+    removed = []
+    with patch("hive.orchestrator.remove_worktree_async", new=AsyncMock(side_effect=lambda wt: removed.append(wt))):
+        await orch._reconcile_handle_worktree(agent)
+
+    assert removed == []
+
+
 # --- SSE permission handling tests ---
 
 

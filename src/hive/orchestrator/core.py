@@ -186,30 +186,104 @@ class OrchestratorCore:
             except Exception:
                 pass  # Non-critical, best-effort
 
-    async def _reconcile_stale_agents(self):
-        """Bidirectional reconciliation on startup.
+    async def _reconcile_fetch_live_sessions(self) -> Optional[set]:
+        """Phase 0: fetch live session IDs from the backend.
 
-        Four phases:
-        - Phase 0: Fetch live sessions from the backend
-        - Phase 1: Reconcile DB agents with status='working' (ghost + live)
-        - Phase 2: Clean up orphan sessions (alive on server, no DB agent)
-        - Phase 3: Purge idle/failed agents (leftovers from previous runs)
+        Returns a set of live session IDs, or None if the backend is unreachable.
         """
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-        remove_worktree_async = _mod.remove_worktree_async
-
-        # Phase 0 — Fetch live sessions
-        live_session_ids: set | None = None
         try:
             sessions = await self.backend.list_sessions()
             live_session_ids = {s["id"] for s in sessions}
             logger.info(f"Fetched {len(live_session_ids)} live session(s) from backend")
+            return live_session_ids
         except Exception as e:
             logger.warning(f"Could not fetch live sessions from backend ({e}), falling back to DB-only reconciliation")
+            return None
 
-        # Phase 1 — Reconcile stale DB agents
+    async def _reconcile_handle_session(self, agent: dict, live_session_ids: Optional[set]) -> None:
+        """Decide session fate: cleanup live session, log ghost, or best-effort cleanup."""
+        session_id = agent["session_id"]
+        if not session_id:
+            return
+
+        agent_id = agent["id"]
+        worktree = agent["worktree"]
+
+        if live_session_ids is not None:
+            if session_id in live_session_ids:
+                # Session still running — abort + delete it
+                await self.backend.cleanup_session(session_id, directory=worktree)
+                live_session_ids.discard(session_id)
+            else:
+                # Ghost agent — session already gone, just log
+                logger.info(f"Agent {agent_id} is a ghost (session {session_id} no longer exists)")
+        else:
+            # Backend unreachable — best-effort abort/delete
+            await self.backend.cleanup_session(session_id, directory=worktree)
+
+    def _reconcile_handle_issue(self, agent: dict) -> None:
+        """Decide issue fate: release to open if retry budget remains, escalate if exhausted."""
+        import hive.orchestrator as _mod
+
+        Config = _mod.Config
+
+        issue_id = agent["current_issue"]
+        agent_id = agent["id"]
+
+        if not issue_id:
+            return
+
+        retry_count = self.db.count_events_by_type_since_reset(issue_id, "retry")
+        agent_switch_count = self.db.count_events_by_type_since_reset(issue_id, "agent_switch")
+
+        if retry_count < Config.MAX_RETRIES or agent_switch_count < Config.MAX_AGENT_SWITCHES:
+            self.db.try_transition_issue_status(
+                issue_id,
+                from_status="in_progress",
+                to_status="open",
+                expected_assignee=agent_id,
+            )
+            self.db.log_event(issue_id, agent_id, "reconciled", {"reason": "stale agent from previous daemon run"})
+        else:
+            self.db.try_transition_issue_status(
+                issue_id,
+                from_status="in_progress",
+                to_status="escalated",
+                expected_assignee=agent_id,
+            )
+            self.db.log_event(issue_id, agent_id, "escalated", {"reason": "Stale agent with exhausted retry budget"})
+            self.db.log_event(issue_id, agent_id, "reconciled", {"reason": "stale agent, retry budget exhausted — escalating"})
+
+    async def _reconcile_handle_worktree(self, agent: dict) -> None:
+        """Decide worktree fate: preserve if merge pending, delete otherwise."""
+        import hive.orchestrator as _mod
+
+        remove_worktree_async = _mod.remove_worktree_async
+
+        worktree = agent["worktree"]
+        issue_id = agent["current_issue"]
+
+        if not worktree:
+            return
+
+        worktree_needed = False
+        if issue_id:
+            mq_row = self.db.conn.execute(
+                "SELECT id FROM merge_queue WHERE issue_id = ? AND status IN ('queued', 'running')",
+                (issue_id,),
+            ).fetchone()
+            if mq_row:
+                worktree_needed = True
+                logger.info(f"Preserving worktree {worktree} for pending merge of {issue_id}")
+
+        if not worktree_needed:
+            try:
+                await remove_worktree_async(worktree)
+            except Exception:
+                pass
+
+    async def _reconcile_process_stale_agents(self, live_session_ids: Optional[set]) -> None:
+        """Phase 1: process agents with status='working' from previous daemon runs."""
         cursor = self.db.conn.execute(
             """
             SELECT id, current_issue, worktree, name, session_id
@@ -219,109 +293,46 @@ class OrchestratorCore:
         )
         stale = cursor.fetchall()
 
-        if stale:
-            logger.info(f"Reconciling {len(stale)} stale agent(s) from previous run")
+        if not stale:
+            return
+
+        logger.info(f"Reconciling {len(stale)} stale agent(s) from previous run")
 
         for row in stale:
-            agent_dict = dict(row)
-            agent_id = agent_dict["id"]
-            issue_id = agent_dict["current_issue"]
-            worktree = agent_dict["worktree"]
-            session_id = agent_dict["session_id"]
+            agent = dict(row)
 
-            if session_id:
-                if live_session_ids is not None:
-                    # Authoritative: we know which sessions are alive
-                    if session_id in live_session_ids:
-                        # Session still running — abort + delete it
-                        await self.backend.cleanup_session(session_id, directory=worktree)
-                        live_session_ids.discard(session_id)
-                    else:
-                        # Ghost agent — session already gone, just log
-                        logger.info(f"Agent {agent_id} is a ghost (session {session_id} no longer exists)")
-                else:
-                    # Backend unreachable — best-effort abort/delete
-                    await self.backend.cleanup_session(session_id, directory=worktree)
+            await self._reconcile_handle_session(agent, live_session_ids)
 
             # Mark agent failed
             self.db.conn.execute(
                 "UPDATE agents SET status = 'failed', current_issue = NULL, session_id = NULL WHERE id = ?",
-                (agent_id,),
+                (agent["id"],),
             )
 
-            # Release the issue if still in_progress — but only if it
-            # hasn't exhausted its retry budget. Otherwise escalate to
-            # prevent an infinite spawn loop across daemon restarts.
-            if issue_id:
-                retry_count = self.db.count_events_by_type_since_reset(issue_id, "retry")
-                agent_switch_count = self.db.count_events_by_type_since_reset(issue_id, "agent_switch")
+            self._reconcile_handle_issue(agent)
+            await self._reconcile_handle_worktree(agent)
 
-                if retry_count < Config.MAX_RETRIES or agent_switch_count < Config.MAX_AGENT_SWITCHES:
-                    self.db.try_transition_issue_status(
-                        issue_id,
-                        from_status="in_progress",
-                        to_status="open",
-                        expected_assignee=agent_id,
-                    )
-                    self.db.log_event(
-                        issue_id,
-                        agent_id,
-                        "reconciled",
-                        {"reason": "stale agent from previous daemon run"},
-                    )
-                else:
-                    self.db.try_transition_issue_status(
-                        issue_id,
-                        from_status="in_progress",
-                        to_status="escalated",
-                        expected_assignee=agent_id,
-                    )
-                    self.db.log_event(issue_id, agent_id, "escalated", {"reason": "Stale agent with exhausted retry budget"})
-                    self.db.log_event(
-                        issue_id,
-                        agent_id,
-                        "reconciled",
-                        {"reason": "stale agent, retry budget exhausted — escalating"},
-                    )
+        self.db.conn.commit()
+        logger.info(f"Reconciled {len(stale)} stale agent(s)")
 
-            # Clean up worktree — but NOT if the issue is done with a
-            # pending merge queue entry. The merge processor still needs the
-            # worktree to run refinery review.
-            worktree_needed = False
-            if worktree and issue_id:
-                mq_row = self.db.conn.execute(
-                    "SELECT id FROM merge_queue WHERE issue_id = ? AND status IN ('queued', 'running')",
-                    (issue_id,),
-                ).fetchone()
-                if mq_row:
-                    worktree_needed = True
-                    logger.info(f"Preserving worktree {worktree} for pending merge of {issue_id}")
+    async def _reconcile_cleanup_orphans(self, live_session_ids: Optional[set]) -> None:
+        """Phase 2: cleanup orphan sessions alive on backend but not in DB."""
+        if live_session_ids is None or not live_session_ids:
+            return
 
-            if worktree and not worktree_needed:
-                try:
-                    await remove_worktree_async(worktree)
-                except Exception:
-                    pass
+        cursor = self.db.conn.execute("SELECT session_id FROM agents WHERE session_id IS NOT NULL")
+        db_session_ids = {row["session_id"] for row in cursor.fetchall()}
 
-        if stale:
-            self.db.conn.commit()
-            logger.info(f"Reconciled {len(stale)} stale agent(s)")
+        orphans = live_session_ids - db_session_ids
+        if orphans:
+            for session_id in orphans:
+                await self.backend.cleanup_session(session_id)
 
-        # Phase 2 — Clean up orphan sessions (alive on server, no DB agent)
-        if live_session_ids is not None and live_session_ids:
-            # Collect all session_ids known to the DB (any status)
-            cursor = self.db.conn.execute("SELECT session_id FROM agents WHERE session_id IS NOT NULL")
-            db_session_ids = {row["session_id"] for row in cursor.fetchall()}
+            self.db.log_system_event("orphan_sessions_cleaned", {"count": len(orphans)})
+            logger.info(f"Cleaned up {len(orphans)} orphan session(s)")
 
-            orphans = live_session_ids - db_session_ids
-            if orphans:
-                for session_id in orphans:
-                    await self.backend.cleanup_session(session_id)
-
-                self.db.log_system_event("orphan_sessions_cleaned", {"count": len(orphans)})
-                logger.info(f"Cleaned up {len(orphans)} orphan session(s)")
-
-        # Phase 3: Purge idle/failed agents (leftovers from previous runs)
+    async def _reconcile_purge_old_agents(self) -> None:
+        """Phase 3: purge idle/failed agents from previous runs."""
         cursor = self.db.conn.execute("SELECT COUNT(*) FROM agents WHERE status IN ('idle', 'failed')")
         count = cursor.fetchone()[0]
         if count > 0:
@@ -330,6 +341,20 @@ class OrchestratorCore:
             self.db.conn.execute("PRAGMA foreign_keys = ON")
             self.db.conn.commit()
             logger.info(f"Purged {count} idle/failed agent(s) from previous runs")
+
+    async def _reconcile_stale_agents(self):
+        """Bidirectional reconciliation on startup.
+
+        Four phases:
+        - Phase 0: Fetch live sessions from the backend
+        - Phase 1: Reconcile DB agents with status='working' (ghost + live)
+        - Phase 2: Clean up orphan sessions (alive on server, no DB agent)
+        - Phase 3: Purge idle/failed agents (leftovers from previous runs)
+        """
+        live_session_ids = await self._reconcile_fetch_live_sessions()
+        await self._reconcile_process_stale_agents(live_session_ids)
+        await self._reconcile_cleanup_orphans(live_session_ids)
+        await self._reconcile_purge_old_agents()
 
     def _register_active_agent(self, agent: AgentIdentity):
         """Register an agent in active maps for session/issue lookup."""
