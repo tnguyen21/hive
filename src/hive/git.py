@@ -40,28 +40,31 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
 
     Returns path to the created worktree directory.
     """
-    project_path = Path(project_path).resolve()
+    root = Path(project_path).resolve()
 
-    if not (project_path / ".git").exists():
-        raise GitWorktreeError(f"Not a git repository: {project_path}")
+    if not (root / ".git").exists():
+        raise GitWorktreeError(f"Not a git repository: {root}")
 
-    worktree_dir = project_path / ".worktrees" / agent_name
+    worktree_dir = root / ".worktrees" / agent_name
     worktree_dir.parent.mkdir(parents=True, exist_ok=True)
     branch_name = f"agent/{agent_name}"
 
     # Retry with backoff — concurrent worktree creation can transiently fail
     # with "invalid reference: main" when git ref resolution hits contention.
     max_retries = 4
+    last_error: Optional[GitWorktreeError] = None
     for attempt in range(max_retries):
         try:
-            _run_git("worktree", "add", "-b", branch_name, str(worktree_dir), base_branch, cwd=str(project_path))
+            _run_git("worktree", "add", "-b", branch_name, str(worktree_dir), base_branch, cwd=str(root))
             return str(worktree_dir)
         except GitWorktreeError as e:
+            last_error = e
             is_transient = "invalid reference" in str(e) or "index.lock" in str(e)
             if is_transient and attempt < max_retries - 1:
                 time.sleep(1.0 * (attempt + 1))
                 continue
             raise GitWorktreeError(f"Failed to create worktree: {e}") from e
+    raise GitWorktreeError(f"Failed to create worktree after {max_retries} retries: {last_error}") from last_error
 
 
 def remove_worktree(worktree_path: str) -> bool:
@@ -121,7 +124,7 @@ def abort_rebase(worktree_path: str):
 
 def merge_to_main(project_path: str, branch_name: str, main_branch: str = "main"):
     """Fast-forward merge a branch into main from the main project repo."""
-    project_path = Path(project_path).resolve()
+    project_path = str(Path(project_path).resolve())
     try:
         _run_git("checkout", main_branch, cwd=str(project_path))
         _run_git("merge", "--ff-only", branch_name, cwd=str(project_path))
@@ -131,7 +134,7 @@ def merge_to_main(project_path: str, branch_name: str, main_branch: str = "main"
 
 def get_worktree_dirty_status(project_path: str) -> tuple[bool, str]:
     """Check whether a repository worktree has local changes."""
-    project_path = Path(project_path).resolve()
+    project_path = str(Path(project_path).resolve())
     output = _run_git("status", "--porcelain", "--untracked-files=no", cwd=str(project_path))
     return (bool(output), output)
 

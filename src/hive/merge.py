@@ -400,7 +400,9 @@ class MergeProcessor:
 
         return result
 
-    async def _wait_for_refinery(self, session_id: str, worktree_path: str, timeout: int = None, min_message_count: int = 0) -> Dict[str, Any]:
+    async def _wait_for_refinery(
+        self, session_id: str, worktree_path: str, timeout: Optional[int] = None, min_message_count: int = 0
+    ) -> Dict[str, Any]:
         """
         Wait for the refinery session to become idle, then read result from file.
 
@@ -623,13 +625,14 @@ class MergeProcessor:
             title="refinery",
             permissions=WORKER_PERMISSIONS,
         )
-        self.refinery_session_id = session["id"]
+        session_id: str = session["id"]
+        self.refinery_session_id = session_id
 
         # Reset counters for new session
         self._refinery_message_count = 0
         self._refinery_token_estimate = 0
 
-        return self.refinery_session_id
+        return session_id
 
 
 class MergeProcessorPool:
