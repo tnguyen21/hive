@@ -186,117 +186,108 @@ def gather_report(db: Database, project_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def format_report_text(report: dict) -> str:
-    """Format a diagnostic report dict as human-readable text."""
+def _fmt_system(data) -> list[str]:
+    if isinstance(data, dict) and "error" not in data:
+        return [
+            f"  Hive version:  {data.get('hive_version', '?')}",
+            f"  Python:        {data.get('python_version', '?')}",
+            f"  Platform:      {data.get('platform', '?')}",
+            f"  uv:            {data.get('uv_version', '?')}",
+            f"  Claude CLI:    {data.get('claude_cli_version', '?')}",
+            f"  ~/.hive exists: {data.get('hive_dir_exists', '?')}",
+        ]
+    return [f"  {data}"]
+
+
+def _fmt_config_section(data) -> list[str]:
+    if isinstance(data, list):
+        return [f"  {e.get('field', '?')} = {e.get('value', '?')} ({e.get('source', '?')})" for e in data]
+    return [f"  {data}"]
+
+
+def _fmt_daemon(data) -> list[str]:
+    if isinstance(data, dict) and "error" not in data:
+        lines = [f"  Running: {data.get('running', False)}"]
+        if data.get("pid"):
+            lines.append(f"  PID:     {data['pid']}")
+        if data.get("log_file"):
+            lines.append(f"  Log:     {data['log_file']}")
+        return lines
+    return [f"  {data}"]
+
+
+def _fmt_db_stats(data) -> list[str]:
+    if not (isinstance(data, dict) and "error" not in data):
+        return [f"  {data}"]
     lines: list[str] = []
-    w = 70
+    size = data.get("file_size_bytes")
+    if size is not None:
+        if size > 1_048_576:
+            lines.append(f"  File size:      {size / 1_048_576:.1f} MB")
+        else:
+            lines.append(f"  File size:      {size / 1024:.1f} KB")
+    lines.append(f"  SQLite version: {data.get('sqlite_version', '?')}")
+    lines.append(f"  Journal mode:   {data.get('journal_mode', '?')}")
+    rc = data.get("row_counts", {})
+    if rc:
+        lines.append("  Row counts:")
+        for table, count in rc.items():
+            lines.append(f"    {table}: {count}")
+    breakdown = data.get("issue_status_breakdown", {})
+    if breakdown:
+        lines.append("  Issue status breakdown:")
+        for status, count in breakdown.items():
+            lines.append(f"    {status}: {count}")
+    return lines
 
-    lines.append("=" * w)
-    lines.append("HIVE DIAGNOSTIC REPORT")
-    lines.append(f"Generated: {report.get('generated_at', 'unknown')}")
-    lines.append("=" * w)
 
-    # --- System ---
-    lines.append("")
-    lines.append("--- System ---")
-    sys_info = report.get("system", {})
-    if isinstance(sys_info, dict) and "error" not in sys_info:
-        lines.append(f"  Hive version:  {sys_info.get('hive_version', '?')}")
-        lines.append(f"  Python:        {sys_info.get('python_version', '?')}")
-        lines.append(f"  Platform:      {sys_info.get('platform', '?')}")
-        lines.append(f"  uv:            {sys_info.get('uv_version', '?')}")
-        lines.append(f"  Claude CLI:    {sys_info.get('claude_cli_version', '?')}")
-        lines.append(f"  ~/.hive exists: {sys_info.get('hive_dir_exists', '?')}")
-    else:
-        lines.append(f"  {sys_info}")
+def _fmt_recent_events(data) -> list[str]:
+    if isinstance(data, list):
+        return [f"  {e.get('created_at', '?')}  {e.get('event_type', '?'):<24s}  issue={e.get('issue_id', '-')}" for e in data[-20:]]
+    return [f"  {data}"]
 
-    # --- Config ---
-    lines.append("")
-    lines.append("--- Config ---")
-    cfg = report.get("config", [])
-    if isinstance(cfg, list):
-        for entry in cfg:
-            field = entry.get("field", "?")
-            value = entry.get("value", "?")
-            source = entry.get("source", "?")
-            lines.append(f"  {field} = {value} ({source})")
-    else:
-        lines.append(f"  {cfg}")
 
-    # --- Daemon ---
-    lines.append("")
-    lines.append("--- Daemon ---")
-    daemon = report.get("daemon", {})
-    if isinstance(daemon, dict) and "error" not in daemon:
-        running = daemon.get("running", False)
-        lines.append(f"  Running: {running}")
-        if daemon.get("pid"):
-            lines.append(f"  PID:     {daemon['pid']}")
-        if daemon.get("log_file"):
-            lines.append(f"  Log:     {daemon['log_file']}")
-    else:
-        lines.append(f"  {daemon}")
+def _fmt_log_tail(data) -> list[str]:
+    if isinstance(data, list):
+        return [f"  {line}" for line in data]
+    return [f"  {data}"]
 
-    # --- DB Stats ---
-    lines.append("")
-    lines.append("--- DB Stats ---")
-    db_stats = report.get("db_stats", {})
-    if isinstance(db_stats, dict) and "error" not in db_stats:
-        size = db_stats.get("file_size_bytes")
-        if size is not None:
-            if size > 1_048_576:
-                lines.append(f"  File size:      {size / 1_048_576:.1f} MB")
-            else:
-                lines.append(f"  File size:      {size / 1024:.1f} KB")
-        lines.append(f"  SQLite version: {db_stats.get('sqlite_version', '?')}")
-        lines.append(f"  Journal mode:   {db_stats.get('journal_mode', '?')}")
-        rc = db_stats.get("row_counts", {})
-        if rc:
-            lines.append("  Row counts:")
-            for table, count in rc.items():
-                lines.append(f"    {table}: {count}")
-        breakdown = db_stats.get("issue_status_breakdown", {})
-        if breakdown:
-            lines.append("  Issue status breakdown:")
-            for status, count in breakdown.items():
-                lines.append(f"    {status}: {count}")
-    else:
-        lines.append(f"  {db_stats}")
 
-    # --- Recent Events (last 20 in text mode) ---
-    lines.append("")
-    lines.append("--- Recent Events (last 20) ---")
-    events = report.get("recent_events", [])
-    if isinstance(events, list):
-        for event in events[-20:]:
-            ts = event.get("created_at", "?")
-            etype = event.get("event_type", "?")
-            issue = event.get("issue_id", "-")
-            lines.append(f"  {ts}  {etype:<24s}  issue={issue}")
-    else:
-        lines.append(f"  {events}")
-
-    # --- Daemon Log Tail ---
-    lines.append("")
-    lines.append("--- Daemon Log (last 50 lines) ---")
-    log_lines = report.get("daemon_log_tail", [])
-    if isinstance(log_lines, list):
-        for line in log_lines:
-            lines.append(f"  {line}")
-    else:
-        lines.append(f"  {log_lines}")
-
-    # --- Backend Reachability ---
-    lines.append("")
-    lines.append("--- Backend Reachability ---")
-    br = report.get("backend_reachability", {})
-    if isinstance(br, dict) and "error" not in br:
-        lines.append(f"  Backend: {br.get('configured_backend', '?')}")
-        for k, v in br.items():
+def _fmt_backend(data) -> list[str]:
+    if isinstance(data, dict) and "error" not in data:
+        lines = [f"  Backend: {data.get('configured_backend', '?')}"]
+        for k, v in data.items():
             if k != "configured_backend":
                 lines.append(f"  {k}: {v}")
-    else:
-        lines.append(f"  {br}")
+        return lines
+    return [f"  {data}"]
+
+
+_REPORT_SECTIONS = [
+    ("System", "system", _fmt_system),
+    ("Config", "config", _fmt_config_section),
+    ("Daemon", "daemon", _fmt_daemon),
+    ("DB Stats", "db_stats", _fmt_db_stats),
+    ("Recent Events (last 20)", "recent_events", _fmt_recent_events),
+    ("Daemon Log (last 50 lines)", "daemon_log_tail", _fmt_log_tail),
+    ("Backend Reachability", "backend_reachability", _fmt_backend),
+]
+
+
+def format_report_text(report: dict) -> str:
+    """Format a diagnostic report dict as human-readable text."""
+    w = 70
+    lines: list[str] = [
+        "=" * w,
+        "HIVE DIAGNOSTIC REPORT",
+        f"Generated: {report.get('generated_at', 'unknown')}",
+        "=" * w,
+    ]
+
+    for title, key, formatter in _REPORT_SECTIONS:
+        lines.append("")
+        lines.append(f"--- {title} ---")
+        lines.extend(formatter(report.get(key, {})))
 
     lines.append("")
     lines.append("=" * w)
