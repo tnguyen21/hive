@@ -1,0 +1,209 @@
+Base directory for this skill: /Users/tau/.claude/skills/python-static-analysis
+
+# Python Static Analysis Skill
+
+Run a multi-tool static analysis suite on a Python codebase and produce structured text artifacts that reveal architecture, complexity, test quality, and potential improvements.
+
+## Philosophy
+
+These tools answer different questions about a codebase:
+
+| Tool | Question it answers |
+|------|-------------------|
+| pyan3 | "What calls what?" (call graph) |
+| radon | "Where is the complexity?" (cyclomatic complexity, maintainability) |
+| coverage + mutmut | "Are the tests actually good?" (coverage gaps, surviving mutants) |
+| pydeps | "What depends on what?" (module-level architecture) |
+| pyright | "Where is the data flow ambiguous?" (type errors, untyped code) |
+| vulture | "What code is dead?" (unused functions, variables, imports) |
+
+Not every tool needs to run every time. Pick what's relevant based on the user's question and the project's characteristics.
+
+## Step 0: Assess the project
+
+Before running anything, understand what you're working with:
+
+```bash
+# Find the project root and structure
+find . -name "*.py" | head -50
+find . -name "pyproject.toml" -o -name "setup.py" -o -name "setup.cfg" | head -5
+
+# Count lines and files
+find . -name "*.py" -not -path "*/node_modules/*" -not -path "*/.venv/*" | wc -l
+find . -name "*.py" -not -path "*/node_modules/*" -not -path "*/.venv/*" | xargs wc -l | tail -1
+
+# Check if tests exist
+find . -name "test_*.py" -o -name "*_test.py" | head -10
+```
+
+Use this to decide which analyses are worth running. A 200-line single-file script doesn't need a dependency graph. A 50k-line project with no tests doesn't need mutation testing.
+
+## Step 1: Install tools
+
+Run the install script to get all tools in one shot:
+
+```bash
+python /path/to/skill/scripts/install_tools.sh
+```
+
+Or if the script isn't available, install manually:
+
+```bash
+for tool in pyan3 radon vulture pyright coverage mutmut pydeps; do
+  uv tool install "$tool"
+done
+```
+
+Note: pydeps requires graphviz system package (`apt-get install -y graphviz`). pyan3's dot output also needs graphviz for rendering to SVG/PNG.
+
+## Step 2: Run the analysis script
+
+The skill includes a comprehensive analysis script that runs all tools and collects output:
+
+```bash
+python /path/to/skill/scripts/analyze.py /path/to/project/src \
+  --output-dir /home/claude/analysis-output \
+  --project-name "my-project"
+```
+
+The script will:
+1. Run radon (complexity + maintainability)
+2. Run vulture (dead code detection)
+3. Run pyright (type checking)
+4. Run pyan3 (call graph as .dot)
+5. Produce a structured summary report
+
+Each tool's raw output goes into a separate file in the output directory. The summary ties them together.
+
+If the script fails or isn't suitable for the project, run tools individually (see Step 2b).
+
+## Step 2b: Running tools individually
+
+If you need finer control or the analysis script doesn't work for the project layout:
+
+### Radon — Complexity analysis
+```bash
+# Cyclomatic complexity, show all, sorted by complexity
+radon cc /path/to/src -s -a -n B > /home/claude/analysis-output/radon_complexity.txt
+
+# Maintainability index
+radon mi /path/to/src -s > /home/claude/analysis-output/radon_maintainability.txt
+```
+
+Ratings: A (low complexity, good) → F (very high complexity, bad). Focus attention on C and above.
+
+### Vulture — Dead code detection
+```bash
+vulture /path/to/src --min-confidence 80 > /home/claude/analysis-output/vulture_dead_code.txt
+```
+
+Vulture has false positives (especially with dynamic Python patterns like `__getattr__`, plugins, CLI entry points). Use `--min-confidence 80` to reduce noise. Flag findings as "potential" dead code, not definitive.
+
+### Pyright — Type analysis
+```bash
+pyright /path/to/src --outputjson > /home/claude/analysis-output/pyright_output.json 2>&1
+# Also get human-readable version
+pyright /path/to/src > /home/claude/analysis-output/pyright_output.txt 2>&1
+```
+
+Type errors often indicate places where data flow is unclear or assumptions are implicit. Group errors by severity and location.
+
+### Pyan3 — Call graph
+```bash
+# Generate dot file
+pyan3 /path/to/src/**/*.py --dot --colored --grouped > /home/claude/analysis-output/callgraph.dot 2>/dev/null
+
+# If graphviz is available, render to SVG
+dot -Tsvg /home/claude/analysis-output/callgraph.dot -o /home/claude/analysis-output/callgraph.svg
+```
+
+For large projects, pyan3 can produce enormous graphs. Limit scope to specific modules:
+```bash
+pyan3 /path/to/src/core/*.py --dot --colored --grouped > callgraph_core.dot
+```
+
+### Coverage — Test coverage (if tests exist)
+```bash
+cd /path/to/project
+coverage run -m pytest 2>&1 | tail -20
+coverage report --show-missing > /home/claude/analysis-output/coverage_report.txt
+coverage json -o /home/claude/analysis-output/coverage.json
+```
+
+### Mutmut — Mutation testing (if tests exist, use selectively)
+Mutation testing is slow. Only run it on specific high-value modules, not the whole project:
+```bash
+cd /path/to/project
+mutmut run --paths-to-mutate=src/core/critical_module.py 2>&1 | tee /home/claude/analysis-output/mutmut_output.txt
+mutmut results >> /home/claude/analysis-output/mutmut_output.txt
+```
+
+Surviving mutants = places where code can change without any test failing. These are the real blind spots.
+
+## Step 3: Synthesize findings
+
+After running the tools, read all the output files and produce a synthesis report. The report should answer:
+
+1. **Architecture overview** — What are the main modules? What depends on what? Where are the entry points?
+2. **Complexity hotspots** — Which functions/classes have the highest cyclomatic complexity? Which files have the lowest maintainability index?
+3. **Dead code candidates** — What does vulture think is unused? (Flag false positive likelihood)
+4. **Type safety gaps** — Where does pyright find errors? Are they real bugs or just missing annotations?
+5. **Test quality** (if tests exist) — What's covered? What's not? If mutation testing ran, which mutants survived?
+6. **Suggested priorities** — What should the developer look at first? What's the highest-risk, lowest-quality code?
+
+Structure the synthesis as a conversation with the user, not a wall of data. Lead with the most actionable findings.
+
+## Important caveats to communicate to the user
+
+- **Python static analysis is inherently incomplete.** Dynamic dispatch, duck typing, metaclasses, decorators, and runtime imports mean static tools will miss things. These results are a starting point, not ground truth.
+- **Vulture has false positives.** Code used via `__getattr__`, plugins, CLI entry points, or test fixtures may be flagged as dead. Always verify before deleting.
+- **Mutation testing is slow and noisy.** Only use it on targeted modules. Many surviving mutants are harmless (e.g., changing a log message).
+- **Call graphs from pyan3 miss dynamic calls.** If the codebase uses heavy metaprogramming, the call graph will be incomplete.
+- **Complexity metrics are heuristics, not judgments.** A function with complexity rating C might be perfectly fine if it's a well-structured match/case statement. Context matters.
+
+## Output structure
+
+All artifacts go into the output directory:
+
+```
+analysis-output/
+├── summary_report.txt          # High-level synthesis (generated by Claude)
+├── radon_complexity.txt         # Raw radon CC output
+├── radon_maintainability.txt    # Raw radon MI output
+├── vulture_dead_code.txt        # Dead code candidates
+├── pyright_output.txt           # Type checking results
+├── pyright_output.json          # Type checking (machine-readable)
+├── callgraph.dot                # Call graph in dot format
+├── callgraph.svg                # Call graph rendered (if graphviz available)
+├── coverage_report.txt          # Test coverage (if tests exist)
+├── coverage.json                # Coverage data (machine-readable)
+└── mutmut_output.txt            # Mutation testing results (if run)
+```
+
+Present the summary report to the user first. Offer the raw artifacts for deeper inspection. If an SVG call graph was generated, present that too — visual architecture maps are immediately useful.
+
+ARGUMENTS: can you do this complexity analysis for this project
+
+---
+
+5. Fix the real type bugs — The git.py Path/str confusion and merge.py None-passing are genuine issues worth fixing (5 minutes of work).
+
+yeah can we fix these type errors
+
+---
+
+commit this work please
+
+---
+
+3. diag.py:format_report_text (CC=25) — Formatting function with many conditionals. Consider a data-driven approach (dict of section → formatter).
+
+can we poke at this, what would this diff look like?
+
+---
+
+yeah let's do that
+
+---
+
+commit this work
