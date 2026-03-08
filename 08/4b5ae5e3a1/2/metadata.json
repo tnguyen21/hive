@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "084b5ae5e3a1",
+  "session_id": "cdf86d21-7098-4135-9b5c-796c89d6a08e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-08T09:24:56.972875Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/hive/git.py",
+    "src/hive/merge.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e33dc09236a7",
+  "token_usage": {
+    "input_tokens": 85,
+    "cache_creation_tokens": 50390,
+    "cache_read_tokens": 877648,
+    "output_tokens": 7926,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-08T09:24:56.883251Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 3,
+    "human_removed": 80,
+    "total_committed": 14,
+    "agent_percentage": 0
+  }
+}
