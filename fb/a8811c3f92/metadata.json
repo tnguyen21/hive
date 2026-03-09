@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "fba8811c3f92",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".pre-commit-config.yaml",
+    "pyproject.toml",
+    "pyrightconfig.json",
+    "src/hive/backends/backend_claude.py",
+    "src/hive/backends/backend_codex.py",
+    "src/hive/backends/base.py",
+    "src/hive/cli/core.py",
+    "src/hive/cli/rich_views.py",
+    "src/hive/cli/typer_app.py",
+    "src/hive/db/core.py",
+    "src/hive/merge.py",
+    "uv.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fb/a8811c3f92/0/metadata.json",
+      "transcript": "/fb/a8811c3f92/0/full.jsonl",
+      "context": "/fb/a8811c3f92/0/context.md",
+      "content_hash": "/fb/a8811c3f92/0/content_hash.txt",
+      "prompt": "/fb/a8811c3f92/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
