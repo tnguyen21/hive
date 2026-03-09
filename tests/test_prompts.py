@@ -1,6 +1,7 @@
 """Tests for prompt templates and completion assessment."""
 
 from hive.prompts import (
+    _load_template,
     assess_completion,
     build_refinery_prompt,
     build_retry_context,
@@ -219,6 +220,29 @@ def test_build_worker_prompt_with_notes():
     assert "Project Notes (from other workers)" in prompt
     assert "[discovery] Test suite needs Python 3.12+ (from w-123)" in prompt
     assert "[gotcha] Connection can be None (from w-456)" in prompt
+
+
+def test_prompt_templates_match_current_cli_and_note_model():
+    """Prompt templates should not reference removed mail/events flows."""
+    worker = _load_template("worker")
+    system = _load_template("system")
+    queen = _load_template("queen")
+    refinery = _load_template("refinery")
+
+    assert "hive mail" not in worker
+    assert "Notes Inbox" not in worker
+    assert "acknowledgment CLI" in worker
+
+    assert "hive mail" not in system
+    assert "inbox or\nacknowledgment CLI" in system
+
+    assert "hive mail" not in queen
+    assert "hive --json events" not in queen
+    assert "--to-agent" not in queen
+    assert "mailbox or acknowledgment flow" in queen
+
+    assert "note_delivered" not in refinery
+    assert "notes_injected" in refinery
 
 
 # --- Prompt versioning tests ---

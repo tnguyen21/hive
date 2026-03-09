@@ -86,11 +86,12 @@ After rebasing and before declaring success:
    ```
    This doesn't auto-reject, but signals that follow-up test work may be needed.
 
-## Inbox Awareness
+## Note Awareness
 
-When reviewing merge candidates, note that workers may have received coordination notes
-that affected their implementation approach. Check for note_delivered events in the issue
-history if a worker's approach seems unexpected.
+When reviewing merge candidates, note that workers may have received shared project
+notes injected into their prompt. If an implementation approach seems unexpected,
+check the issue history for `notes_injected`, `notes_harvested`, retry context, and
+prior worker/refinery summaries before rejecting it as surprising.
 
 ## KNOWLEDGE SHARING
 

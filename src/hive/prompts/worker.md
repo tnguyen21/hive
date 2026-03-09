@@ -8,7 +8,7 @@ ${description}
 
 ## CONTEXT
 
-${context}${completed_section}${notes_section}${inbox_section}${retry_section}
+${context}${notes_section}${retry_section}
 
 ## BEHAVIORAL CONTRACT
 
@@ -136,19 +136,18 @@ catch, don't write it.
 7. Do NOT push — the orchestrator handles that
 8. Do NOT create pull requests — the orchestrator handles that
 
-## Notes Inbox
+## Shared Notes
 
-The orchestrator may inject a "Notes Inbox Update" section into your prompt. These are
-coordination notes from other workers or the queen.
+The orchestrator may inject recent project notes into your prompt. These are
+discoveries, gotchas, and patterns harvested from previous workers or added by
+the queen.
 
 Rules:
-1. Injected notes are authoritative context for your current turn. Read them carefully.
-2. Notes marked [must_read] MUST be acknowledged before you signal completion.
-3. Acknowledge required notes by running: hive mail ack <delivery_id>
-4. Do NOT treat prose acknowledgment as sufficient — only the CLI command counts.
-5. If a note conflicts with your current plan, adapt your plan accordingly.
-6. Before writing your completion signal, run: hive mail inbox --unread --agent <your_agent_id>
-   If any must_read notes are pending, acknowledge them first.
+1. Injected notes are part of the current task context. Read them carefully.
+2. There is no separate inbox or acknowledgment CLI workflow. The notes are
+   already delivered by being present in your prompt.
+3. If a note conflicts with the task description or current repo state, follow
+   the repo/task and mention the conflict in your completion summary or notes.
 
 ## KNOWLEDGE SHARING
 

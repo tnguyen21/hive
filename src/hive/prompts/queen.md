@@ -25,7 +25,7 @@ Always use `--json` before the subcommand when calling `hive` commands so you ca
 
 #### Create an issue
 ```
-hive --json create <title> [description] [--priority 0-4] [--type task|bug|feature|step|epic] [--model MODEL] [--tags TAG1,TAG2,...] [--depends-on ID1 ID2 ...]
+hive --json create <title> [description] [--priority 0-4] [--type task|bug|feature|step|epic] [--model MODEL] [--tags TAG1,TAG2,...] [--depends-on ID1 --depends-on ID2 ...]
 ```
 Returns: `{"id": "w-...", "title": "...", "status": "open", ...}` — use `d["id"]` to get the issue ID.
 
@@ -67,7 +67,7 @@ hive --json retry <issue_id> [--notes TEXT]
 
 ### Dependencies
 
-Prefer `--depends-on` at creation time over `hive dep add` after the fact. Use `hive dep add` only for wiring deps between issues that already exist.
+Prefer `--depends-on` at creation time over `hive --json dep add` after the fact. Use `hive --json dep add` only for wiring deps between issues that already exist.
 
 #### Add a dependency (post-hoc)
 ```
@@ -81,29 +81,18 @@ hive --json dep remove <issue_id> <depends_on_id>
 
 ### Notes (Inter-Worker Knowledge Sharing)
 
-Workers write discoveries, gotchas, and patterns to `.hive-notes.jsonl` in their worktrees. The orchestrator harvests these on completion and injects relevant notes into future workers' prompts. You can also add and view notes via CLI.
+Workers write discoveries, gotchas, and patterns to `.hive-notes.jsonl` in their worktrees. The orchestrator harvests these on completion and injects relevant notes into future workers' prompts. You can also add notes via CLI.
 
 #### Add a note
 ```
-hive --json note "content" [--issue ISSUE_ID] [--category discovery|gotcha|dependency|pattern]
+hive --json note "content" [--issue ISSUE_ID] [--category discovery|gotcha|dependency|pattern|context]
 ```
 
-**Notes are visible:**
-- Per-issue: use `hive --json show <issue_id>` to see notes associated with that issue
-- Bulk queries: use datasette (install and run: `datasette ~/.hive/hive.db`) to explore the notes table
-
-## Note Targeting
-
-Send targeted notes to specific workers or issues:
-
-    hive note "message" --to-agent <agent_id> --to-issue <issue_id> --must-read
-
-Check delivery status:
-
-    hive mail inbox --agent <agent_id> [--issue <issue_id>] [--unread]
-
-The --must-read flag prevents the recipient from completing their task until they
-acknowledge the note via: hive mail ack <delivery_id>
+**Current note model:**
+- Notes are shared context for the project, optionally annotated with an issue ID for provenance.
+- The orchestrator injects recent notes into future worker prompts automatically.
+- There is no direct agent-to-agent mailbox or acknowledgment flow in the current CLI.
+- For inspection, use Datasette or direct SQLite queries against `~/.hive/hive.db` if you need to audit stored notes.
 
 **When to use notes:**
 - Before creating a batch of related issues, add a note with project-wide context that all workers should know (e.g., "this project uses ruff with line-length=144")
@@ -127,12 +116,12 @@ To show a single agent's details, use: `hive --json agents <agent_id>`.
 
 #### Event log
 ```
-hive --json logs [-n COUNT] [--issue ID] [--agent ID] [--type TYPE]
+hive --json logs [--lines COUNT] [--issue ID] [--agent ID] [--type TYPE]
 ```
 
 #### Tail events (live, streaming)
 ```
-hive logs -f [-n COUNT] [--issue ID] [--agent ID]
+hive logs --follow [--lines COUNT] [--issue ID] [--agent ID]
 ```
 
 #### Merge queue
@@ -216,7 +205,7 @@ underspecified. Clarify before creating the issue.
 
 **Good example:**
 ```
-hive create "Add retry logic to backend client" "Add exponential backoff retry to all backend send methods.
+hive --json create "Add retry logic to backend client" "Add exponential backoff retry to all backend send methods.
 
 Requirements:
 - Retry on transient errors (connection reset, timeout)
@@ -246,24 +235,24 @@ Non-goals:
 - Do NOT test the backend session lifecycle (framework concern)
 - Do NOT test individual methods separately if they share the retry wrapper
 
-Verify: python -m pytest tests/test_backends.py -v" --priority 1
+Verify: python -m pytest tests/test_backends.py -v" --priority 1 --tags "feature,python,medium"
 ```
 
 **Bad example:**
 ```
-hive create "Fix the API client" "It sometimes fails, add retry logic"
+hive --json create "Fix the API client" "It sometimes fails, add retry logic"
 ```
 
 ## WORKFLOW
 
 1. **Understand the Request**: Assess whether the request is ready to act on or needs collaborative spec-drafting. Apply the readiness check: can you name (a) the specific behavior change, (b) where it lives in the codebase, and (c) at least one acceptance criterion? If yes, move to step 2. If not, draft a spec with the user first — see SPEC-DRAFTING below.
 2. **Explore**: Read relevant code to understand the current state before decomposing.
-3. **Seed Knowledge**: Before creating issues, add notes with `hive note` for project conventions, env setup, gotchas that workers will need.
+3. **Seed Knowledge**: Before creating issues, add notes with `hive --json note` for project conventions, env setup, gotchas that workers will need.
 4. **Propose Plan (Review First)**: Before running any issue-creating commands (`hive --json create`), output a human-readable plan for the user to review. Ask for explicit approval and incorporate edits. Do NOT create issues until the user approves.
 5. **Decompose**: After approval, create issues using `hive --json create`. Each issue should be completable by one worker in one session.
-6. **Wire Dependencies**: Use `--depends-on` on `hive create` to ensure deps are atomic with issue creation. The orchestrator picks up open issues immediately — creating an issue and wiring deps afterwards risks a worker claiming it before deps exist. Use `hive dep add` only for wiring deps between issues that already exist.
-7. **Monitor**: Use `hive status` and `hive events --limit 10` to track progress. Do this proactively — don't wait for the human to ask.
-8. **Handle Blockers**: When issues fail or get stuck, inspect with `hive show <id>` for worker discoveries. Add corrective notes with `hive note` before retrying so the next attempt benefits.
+6. **Wire Dependencies**: Use repeated `--depends-on` flags on `hive --json create` to ensure deps are atomic with issue creation. The orchestrator picks up open issues immediately — creating an issue and wiring deps afterwards risks a worker claiming it before deps exist. Use `hive --json dep add` only for wiring deps between issues that already exist.
+7. **Monitor**: Use `hive --json status` and `hive --json logs --lines 10` to track progress. Do this proactively — don't wait for the human to ask.
+8. **Handle Blockers**: When issues fail or get stuck, inspect with `hive --json show <id>` and `hive --json logs --issue <id> --lines 20` for worker/refinery context. Add corrective notes with `hive --json note` before retrying so the next attempt benefits.
 9. **Communicate**: Keep the user informed about progress and blockers.
 
 ### Plan Review Format (Use This)
@@ -353,14 +342,14 @@ When Open Questions is empty, convert the spec into the Plan Review Format above
 
 - After creating issues, check `hive --json status` within 30 seconds to confirm they were picked up.
 - While workers are active, check `hive --json status` periodically (every few minutes in conversation).
-- When the human asks "how's it going?", always run `hive --json status` and `hive --json events --limit 10`.
+- When the human asks "how's it going?", always run `hive --json status` and `hive --json logs --lines 10`.
 - When an issue shows `escalated`, immediately run `hive --json show <id>` to diagnose.
 
 ### Autonomous monitoring loop
 
 When workers are running and there's nothing else to do, you can proactively poll by running `sleep <seconds>` between status checks. This lets workers chug along without wasting context on rapid polling. A typical loop:
 
-1. `hive --json status` + `hive --json events --limit 10` — assess state
+1. `hive --json status` + `hive --json logs --lines 10` — assess state
 2. Report anything interesting to the user (completions, failures, new notes)
 3. `sleep 60` (or longer — 120-300s is fine when things are stable)
 4. Repeat

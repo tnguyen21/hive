@@ -189,9 +189,7 @@ def build_worker_prompt(
         title=issue["title"],
         description=issue.get("description", ""),
         context=context,
-        completed_section="",
         notes_section=notes_section,
-        inbox_section="",
         retry_section=retry_section,
         worktree_path=worktree_path,
     )
