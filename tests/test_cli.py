@@ -1,6 +1,7 @@
 """Tests for CLI interface."""
 
 import json
+import re
 import subprocess
 import unittest.mock
 from unittest.mock import AsyncMock
@@ -112,7 +113,7 @@ def test_cli_show_issue(temp_db, tmp_path, capsys):
     assert issue_id in captured.out
     assert "Test issue" in captured.out
     assert "Detailed description" in captured.out
-    assert "Priority: 1" in captured.out
+    assert re.search(r"Priority\s+1", captured.out)
 
 
 def test_cli_show_issue_json(temp_db, tmp_path, capsys):
@@ -145,9 +146,9 @@ def test_cli_status(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Hive Status" in captured.out
-    assert "open: 2" in captured.out
-    assert "done: 1" in captured.out
-    assert "Ready queue:" in captured.out
+    assert re.search(r"open\s+2", captured.out)
+    assert re.search(r"done\s+1", captured.out)
+    assert "Ready queue" in captured.out
 
 
 def test_cli_status_json(temp_db, tmp_path, capsys):
@@ -220,7 +221,7 @@ def test_cli_show_format_json(temp_db, tmp_path, capsys):
     cli.show(issue_id, json_mode=False)
     captured_text = capsys.readouterr()
     assert "Format test" in captured_text.out
-    assert "Priority: 3" in captured_text.out
+    assert re.search(r"Priority\s+3", captured_text.out)
     # Text output should NOT be parseable as JSON top-level object
     assert not captured_text.out.strip().startswith("{")
 
@@ -260,7 +261,7 @@ def test_cli_show_issue_with_dependencies(temp_db, tmp_path, capsys):
     cli.show(issue2)
 
     captured = capsys.readouterr()
-    assert "Depends on:" in captured.out
+    assert "Depends on" in captured.out
     assert issue1 in captured.out
     assert "Dependency" in captured.out
 
@@ -568,8 +569,8 @@ def test_cli_costs_no_data(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Token Usage & Costs" in captured.out
-    assert "Total tokens: 0" in captured.out
-    assert "Estimated cost: $0.0000" in captured.out
+    assert re.search(r"Total tokens\s+0", captured.out)
+    assert re.search(r"Estimated cost\s+\$0\.0000", captured.out)
 
 
 def test_cli_costs_with_data(temp_db, tmp_path, capsys):
@@ -587,9 +588,9 @@ def test_cli_costs_with_data(temp_db, tmp_path, capsys):
     cli.metrics(show_costs=True)
 
     captured = capsys.readouterr()
-    assert "Total tokens: 4,500" in captured.out
-    assert "Input tokens: 3,000" in captured.out
-    assert "Output tokens: 1,500" in captured.out
+    assert re.search(r"Total tokens\s+4,500", captured.out)
+    assert re.search(r"Input tokens\s+3,000", captured.out)
+    assert re.search(r"Output tokens\s+1,500", captured.out)
     assert "$" in captured.out  # Should have some cost estimate
 
 
@@ -633,8 +634,8 @@ def test_cli_costs_by_issue(temp_db, tmp_path, capsys):
     cli.metrics(show_costs=True, issue_id=issue1_id)
 
     captured = capsys.readouterr()
-    assert f"Issue: {issue1_id}" in captured.out
-    assert "Total tokens: 1,500" in captured.out
+    assert issue1_id in captured.out
+    assert re.search(r"Total tokens\s+1,500", captured.out)
 
 
 def test_cli_costs_by_agent(temp_db, tmp_path, capsys):
@@ -654,8 +655,8 @@ def test_cli_costs_by_agent(temp_db, tmp_path, capsys):
     cli.metrics(show_costs=True, agent_id=agent1_id)
 
     captured = capsys.readouterr()
-    assert f"Agent: {agent1_id}" in captured.out
-    assert "Total tokens: 1,500" in captured.out
+    assert agent1_id in captured.out
+    assert re.search(r"Total tokens\s+1,500", captured.out)
 
 
 # ── Notes CLI tests ─────────────────────────────────────────────
@@ -799,7 +800,7 @@ def test_status_shows_daemon_info(temp_db, tmp_path, capsys):
     cli.status()
 
     captured = capsys.readouterr()
-    assert "Daemon:" in captured.out
+    assert "Daemon" in captured.out
 
 
 # ── Status worker/refinery detail tests ────────────────────────────────
@@ -847,7 +848,8 @@ def test_status_shows_refinery_reviewing(temp_db, tmp_path, capsys):
 
     cli.status()
     captured = capsys.readouterr()
-    assert "Refinery: reviewing" in captured.out
+    assert "Refinery" in captured.out
+    assert "reviewing" in captured.out
     assert issue_id in captured.out
     assert "Fix login bug" in captured.out
 
@@ -858,7 +860,8 @@ def test_status_shows_refinery_idle(temp_db, tmp_path, capsys):
     cli.status()
 
     captured = capsys.readouterr()
-    assert "Refinery: idle" in captured.out
+    assert "Refinery" in captured.out
+    assert "idle" in captured.out
 
 
 def test_status_json_includes_workers_and_refinery(temp_db, tmp_path, capsys):
@@ -1093,10 +1096,10 @@ def test_cli_command_inv3_human_output_create(temp_db, tmp_path, capsys):
 
     cli.create("My Title", priority=3, tags="refactor,small")
     out = capsys.readouterr().out
-    assert "Created issue:" in out
+    assert "Created" in out
     assert "My Title" in out
-    assert "Priority: 3" in out
-    assert "Tags: refactor, small" in out
+    assert re.search(r"Priority\s+3", out)
+    assert "refactor, small" in out
 
 
 def test_cli_invoke_raw_returns_result_without_printing(temp_db, tmp_path, capsys):
@@ -1118,7 +1121,7 @@ def test_cli_run_command_uses_registered_formatter(temp_db, tmp_path, capsys):
     result = cli.run_command("create", "Formatted title", json_mode=False)
 
     captured = capsys.readouterr()
-    assert "Created issue:" in captured.out
+    assert "Created" in captured.out
     assert result["title"] == "Formatted title"
 
 
@@ -1163,7 +1166,8 @@ def test_cli_command_decorator_does_not_print_json_in_human_mode(temp_db, tmp_pa
     cli.create("Silent", json_mode=False)
     out = capsys.readouterr().out
     # Should be human text, not JSON
-    assert out.startswith("Created issue:")
+    assert "Created" in out
+    assert "Silent" in out
     try:
         json.loads(out)
         assert False, "Output was parseable JSON — decorator double-printed"

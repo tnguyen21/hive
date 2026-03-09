@@ -8,6 +8,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rich.console import Console
+
 from ..daemon import HiveDaemon
 from ..db import Database, validate_tags
 from ..git import GitWorktreeError, get_worktree_dirty_status
@@ -28,6 +30,8 @@ from .formatters import (
     _fmt_stop,
 )
 from .queen import QueenMixin
+
+_CONSOLE = Console()
 
 
 def cli_command(*, formatter):
@@ -103,7 +107,10 @@ class HiveCLI(QueenMixin):
             raise ValueError(f"Command does not define a formatter: {command_name}")
         output = render(result)
         if output:
-            print(output)
+            if isinstance(output, str):
+                print(output)
+            else:
+                _CONSOLE.print(output)
         return result
 
     def run_command(self, command_name: str, *args, json_mode: bool = False, formatter=None, **kwargs):

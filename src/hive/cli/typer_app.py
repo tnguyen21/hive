@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated, Literal
@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 
 from .runtime import do_setup, initialize_cli, resolve_project
-from .rich_views import print_create, print_error, print_issue_list, print_issue_show
+from .rich_views import print_error
 
 app = typer.Typer(
     add_completion=False,
@@ -30,16 +30,6 @@ class AppState:
     json_mode: bool = False
     project: str | None = None
     db_override: str | None = None
-
-
-def _rich_formatter(console: Console, renderer: Callable[[Console, dict], None]) -> Callable[[dict], None]:
-    """Adapt a Rich renderer to the ``HiveCLI.run_command`` formatter shape."""
-
-    def format_result(result: dict) -> None:
-        renderer(console, result)
-        return None
-
-    return format_result
 
 
 def _fail(state: AppState, exc: Exception) -> None:
@@ -65,14 +55,13 @@ def _run_cli_command(
     state: AppState,
     command_name: str,
     *args,
-    formatter: Callable[[dict], None] | None = None,
     json_mode: bool | None = None,
     **kwargs,
 ) -> None:
     """Run a ``HiveCLI`` command through the shared execution pipeline."""
     use_json = state.json_mode if json_mode is None else json_mode
     with _cli_session(state) as cli:
-        cli.run_command(command_name, *args, json_mode=use_json, formatter=formatter, **kwargs)
+        cli.run_command(command_name, *args, json_mode=use_json, **kwargs)
 
 
 @app.callback()
@@ -118,7 +107,6 @@ def create(
 ) -> None:
     """Create a new issue."""
     state: AppState = ctx.obj
-    formatter = _rich_formatter(state.console, print_create)
     _run_cli_command(
         state,
         "create",
@@ -126,7 +114,6 @@ def create(
         description,
         priority,
         issue_type,
-        formatter=formatter,
         model=model,
         tags=tags,
         depends_on=depends_on,
@@ -146,12 +133,10 @@ def list_issues(
 ) -> None:
     """List all issues."""
     state: AppState = ctx.obj
-    formatter = _rich_formatter(state.console, print_issue_list)
     _run_cli_command(
         state,
         "list_issues",
         status,
-        formatter=formatter,
         sort_by=sort_by,
         reverse=reverse,
         issue_type=issue_type,
@@ -169,12 +154,10 @@ def show(
 ) -> None:
     """Show issue details."""
     state: AppState = ctx.obj
-    formatter = _rich_formatter(state.console, print_issue_show)
     _run_cli_command(
         state,
         "show",
         issue_id,
-        formatter=formatter,
         json_mode=state.json_mode or show_format == "json",
     )
 
