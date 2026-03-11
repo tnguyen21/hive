@@ -764,6 +764,115 @@ def test_queen_auto_starts_daemon(temp_db, tmp_path):
     queen_claude.assert_called_once()
 
 
+def _make_running_daemon():
+    """Helper: create a mock daemon that reports as already running."""
+    daemon = unittest.mock.Mock()
+    daemon.status.return_value = {"running": True, "pid": 1234}
+    return daemon
+
+
+def test_queen_headless_claude_command_flags(temp_db, tmp_path):
+    """Headless queen should pass --print, -p, --dangerously-skip-permissions, and headless system prompt."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=_make_running_daemon()),
+        unittest.mock.patch("hive.cli.queen.subprocess.run", return_value=unittest.mock.Mock(returncode=0)) as mock_run,
+        unittest.mock.patch.object(cli, "_queen_write_identity_files", return_value=(tmp_path / "CLAUDE.md", tmp_path / "q.md")),
+        unittest.mock.patch.object(cli, "_queen_cleanup_identity_files"),
+    ):
+        cli.queen(backend="claude", headless=True, prompt="Bump deps")
+
+    cmd = mock_run.call_args[0][0]
+    assert "--print" in cmd
+    assert "-p" in cmd
+    assert cmd[cmd.index("-p") + 1] == "Bump deps"
+    assert "--dangerously-skip-permissions" in cmd
+    # Should have two --append-system-prompt entries (short + headless)
+    asp_indices = [i for i, x in enumerate(cmd) if x == "--append-system-prompt"]
+    assert len(asp_indices) == 2
+    headless_prompt = cmd[asp_indices[1] + 1]
+    assert "HEADLESS MODE" in headless_prompt
+
+
+def test_queen_headless_codex_approval_never(temp_db, tmp_path):
+    """Headless codex queen should force approval policy to 'never'."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=_make_running_daemon()),
+        unittest.mock.patch("hive.cli.queen.subprocess.run", return_value=unittest.mock.Mock(returncode=0)) as mock_run,
+        unittest.mock.patch.object(cli, "_queen_write_identity_files", return_value=(tmp_path / "CLAUDE.md", tmp_path / "q.md")),
+        unittest.mock.patch.object(cli, "_queen_cleanup_identity_files"),
+    ):
+        cli.queen(backend="codex", headless=True, prompt="Add tests")
+
+    cmd = mock_run.call_args[0][0]
+    # approval should be "never"
+    approval_idx = cmd.index("--ask-for-approval")
+    assert cmd[approval_idx + 1] == "never"
+    # prompt should contain the task
+    assert any("Add tests" in arg for arg in cmd)
+
+
+def test_queen_headless_does_not_sys_exit(temp_db, tmp_path):
+    """Headless queen should return normally instead of calling sys.exit."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=_make_running_daemon()),
+        unittest.mock.patch("hive.cli.queen.subprocess.run", return_value=unittest.mock.Mock(returncode=0)),
+        unittest.mock.patch.object(cli, "_queen_write_identity_files", return_value=(tmp_path / "CLAUDE.md", tmp_path / "q.md")),
+        unittest.mock.patch.object(cli, "_queen_cleanup_identity_files"),
+    ):
+        # Should NOT raise SystemExit
+        cli.queen(backend="claude", headless=True, prompt="Do something")
+
+
+def test_queen_headless_nonzero_exit_raises(temp_db, tmp_path):
+    """Headless queen with nonzero exit code should raise an error."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=_make_running_daemon()),
+        unittest.mock.patch("hive.cli.queen.subprocess.run", return_value=unittest.mock.Mock(returncode=1)),
+        unittest.mock.patch.object(cli, "_queen_write_identity_files", return_value=(tmp_path / "CLAUDE.md", tmp_path / "q.md")),
+        unittest.mock.patch.object(cli, "_queen_cleanup_identity_files"),
+        pytest.raises(SystemExit),
+    ):
+        cli.queen(backend="claude", headless=True, prompt="Fail task")
+
+
+def test_queen_headless_sets_skip_permissions_env(temp_db, tmp_path):
+    """Headless mode should set HIVE_CLAUDE_SKIP_PERMISSIONS=1 for worker propagation."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=_make_running_daemon()),
+        unittest.mock.patch("hive.cli.queen.subprocess.run", return_value=unittest.mock.Mock(returncode=0)),
+        unittest.mock.patch.object(cli, "_queen_write_identity_files", return_value=(tmp_path / "CLAUDE.md", tmp_path / "q.md")),
+        unittest.mock.patch.object(cli, "_queen_cleanup_identity_files"),
+        unittest.mock.patch.dict("os.environ", {}, clear=False),
+    ):
+        cli.queen(backend="claude", headless=True, prompt="Task")
+        import os
+
+        assert os.environ.get("HIVE_CLAUDE_SKIP_PERMISSIONS") == "1"
+
+
+def test_queen_interactive_unchanged(temp_db, tmp_path):
+    """Non-headless queen should still call _queen_claude without headless flags."""
+    cli = HiveCLI(temp_db, str(tmp_path))
+
+    with (
+        unittest.mock.patch.object(cli, "_make_daemon", return_value=_make_running_daemon()),
+        unittest.mock.patch.object(cli, "_queen_claude") as mock_claude,
+    ):
+        cli.queen(backend="claude")
+
+    mock_claude.assert_called_once_with(skip_permissions=False, mcp_configs=[], headless=False, prompt=None)
+
+
 def test_list_empty_suggests_create(temp_db, tmp_path, capsys):
     """Test that empty list suggests hive create."""
     cli = HiveCLI(temp_db, str(tmp_path))
