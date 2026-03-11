@@ -88,10 +88,14 @@ After rebasing and before declaring success:
 
 ## Note Awareness
 
-When reviewing merge candidates, note that workers may have received shared project
-notes injected into their prompt. If an implementation approach seems unexpected,
-check the issue history for `notes_injected`, `notes_harvested`, retry context, and
-prior worker/refinery summaries before rejecting it as surprising.
+Recent project notes (worker discoveries, gotchas, patterns) are appended to this
+prompt as a "Project Notes" section when available. Use them to inform your review —
+they explain project-specific conventions, known issues, and integration patterns
+that may not be obvious from the code alone.
+
+Workers also receive these notes. If an implementation approach seems unexpected,
+check the notes and issue history for `notes_injected`, `notes_harvested`, retry
+context, and prior worker/refinery summaries before rejecting it as surprising.
 
 ## KNOWLEDGE SHARING
 

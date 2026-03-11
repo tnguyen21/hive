@@ -258,6 +258,21 @@ def remove_notes_file(worktree_path: str) -> bool:
     return _remove_file(Path(worktree_path) / NOTES_FILE_NAME)
 
 
+def build_refinery_system_prompt(project_path: str) -> str:
+    """Build the system prompt for a refinery session.
+
+    Injects the project's CLAUDE.md (if present) so the refinery knows
+    project conventions when reviewing merges.
+    """
+    parts = ["You are the Refinery for this project. You integrate completed worker branches into main."]
+
+    claude_md = Path(project_path) / "CLAUDE.md"
+    if claude_md.exists():
+        parts.append(f"\n## Project Instructions\n\n{claude_md.read_text()}")
+
+    return "\n".join(parts)
+
+
 def build_refinery_prompt(
     issue_title: str,
     issue_id: str,
@@ -265,6 +280,7 @@ def build_refinery_prompt(
     worktree_path: str,
     agent_name: Optional[str] = None,
     test_command: Optional[str] = None,
+    notes: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Build the refinery prompt for merge processing."""
     if test_command:
@@ -281,8 +297,18 @@ def build_refinery_prompt(
         f"Run tests: `{test_command}` (plus any additional coverage needed)" if test_command else "Determine and run an appropriate test suite"
     )
 
+    notes_section = ""
+    if notes:
+        note_lines = []
+        for note in notes:
+            category = note.get("category", "discovery")
+            content = note.get("content", "")
+            source = note.get("issue_id", "project")
+            note_lines.append(f"- [{category}] {content} (from {source})")
+        notes_section = "\n\n## Project Notes\n" + "\n".join(note_lines)
+
     template_str = _load_template("refinery")
-    return Template(template_str).safe_substitute(
+    prompt = Template(template_str).safe_substitute(
         issue_id=issue_id,
         issue_title=issue_title,
         branch_name=branch_name,
@@ -291,3 +317,8 @@ def build_refinery_prompt(
         problem=problem,
         test_step=test_step,
     )
+
+    if notes_section:
+        prompt += notes_section
+
+    return prompt

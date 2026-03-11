@@ -73,11 +73,21 @@ class QueenMixin:
         claude_dir.mkdir(exist_ok=True)
         claude_md = claude_dir / "CLAUDE.md"
 
+        # Seed persistent queen context if it doesn't exist yet
+        context_path = hive_dir / "queen-context.md"
+        if not context_path.exists():
+            context_path.write_text(
+                "# Queen Context\n\n"
+                "Persistent project knowledge accumulated across queen sessions.\n"
+                "Update this file with architectural decisions, gotchas, and patterns.\n"
+            )
+
         queen_block = (
             f"\n{self._QUEEN_SENTINEL_START}\n"
             "# HIVE QUEEN BEE — ACTIVE SESSION\n"
             "You are the Queen Bee coordinator. You do NOT write code — you plan, decompose, and monitor.\n"
             "Full instructions: `.hive/queen-instructions.md` — re-read if your context feels incomplete.\n"
+            "Persistent context: `.hive/queen-context.md` — accumulated project knowledge across sessions.\n"
             "Operational state: `.hive/queen-state.md` — re-read to recall what you were working on.\n"
             "Always use `hive --json` for CLI commands. The daemon runs in background.\n"
             f"{self._QUEEN_SENTINEL_END}\n"
@@ -160,6 +170,7 @@ class QueenMixin:
         developer_instructions = (
             "You are the Hive Queen Bee coordinator. You do NOT write code; you plan, decompose, and monitor.\\n"
             "Full instructions: .hive/queen-instructions.md (read now; re-read after compaction).\\n"
+            "Persistent context: .hive/queen-context.md (accumulated project knowledge across sessions).\\n"
             "Operational state: .hive/queen-state.md (re-read after compaction; update after significant actions).\\n"
             "Before creating issues/epics, output a human-readable plan for user review and wait for explicit approval.\\n"
             "Always use hive --json for Hive CLI commands."
@@ -168,7 +179,7 @@ class QueenMixin:
         compact_prompt = (
             "Summarize the conversation for continuity.\\n"
             "Preserve: user goals, key decisions, current plan/issues, and next steps.\\n"
-            "Always include a reminder to read .hive/queen-instructions.md and .hive/queen-state.md after compaction."
+            "Always include a reminder to read .hive/queen-instructions.md, .hive/queen-context.md, and .hive/queen-state.md after compaction."
         )
 
         codex_cmd = os.environ.get("CODEX_CMD", "codex")

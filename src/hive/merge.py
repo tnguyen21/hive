@@ -20,7 +20,14 @@ from .git import (
     remove_worktree_async,
 )
 from .backends import HiveBackend
-from .prompts import build_refinery_prompt, read_notes_file, read_result_file, remove_notes_file, remove_result_file
+from .prompts import (
+    build_refinery_prompt,
+    build_refinery_system_prompt,
+    read_notes_file,
+    read_result_file,
+    remove_notes_file,
+    remove_result_file,
+)
 
 import logging
 
@@ -48,6 +55,7 @@ class MergeProcessor:
         self.project_path = str(Path(project_path).resolve())
         self.project_name = project_name
         self.refinery_session_id: Optional[str] = None
+        self._refinery_system_prompt: Optional[str] = None
         self._refinery_message_count: int = 0
         self._refinery_token_estimate: int = 0
         self._main_dirty_blocked: bool = False
@@ -368,6 +376,10 @@ class MergeProcessor:
         # Build the refinery prompt
         # Prefer worker test_command over global Config.TEST_COMMAND
         test_cmd = entry.get("test_command") or Config.TEST_COMMAND
+
+        # Gather fresh project notes for this merge
+        notes = self.db.get_notes(project=self.project_name, limit=10)
+
         prompt = build_refinery_prompt(
             issue_title=entry.get("issue_title", "Unknown"),
             issue_id=entry["issue_id"],
@@ -375,13 +387,15 @@ class MergeProcessor:
             worktree_path=worktree_path,
             agent_name=entry.get("agent_name"),
             test_command=test_cmd,
+            notes=notes if notes else None,
         )
 
-        # Send to refinery
+        # Send to refinery (system prompt only takes effect on first message of a new session)
         await self.backend.send_message_async(
             session_id,
             parts=[{"type": "text", "text": prompt}],
             model=Config.REFINERY_MODEL,
+            system=self._refinery_system_prompt,
             directory=self.project_path,
         )
 
@@ -626,6 +640,9 @@ class MergeProcessor:
         )
         session_id: str = session["id"]
         self.refinery_session_id = session_id
+
+        # Build system prompt with project conventions (CLAUDE.md)
+        self._refinery_system_prompt = build_refinery_system_prompt(self.project_path)
 
         # Reset counters for new session
         self._refinery_message_count = 0

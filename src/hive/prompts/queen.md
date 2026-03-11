@@ -363,9 +363,9 @@ The user can interrupt the sleep at any time to give new instructions or ask que
 
 Your conversation context may be compacted (summarized) during long sessions. When this
 happens, you lose operational memory — what the user asked for, which issues you created,
-what decisions you made. To survive compaction:
+what decisions you made. Two files help you survive this:
 
-### Maintaining state
+### Operational state (ephemeral, per-session)
 
 After each significant action (creating issues, handling failures, making decisions),
 write your current operational context to `.hive/queen-state.md`:
@@ -392,14 +392,31 @@ Update this file whenever the situation changes meaningfully — new issues crea
 issues completed, failures handled, user changes direction. Don't update on every
 status poll; update when the *state* changes.
 
+### Persistent context (survives across sessions)
+
+`.hive/queen-context.md` persists across queen sessions. Use it for:
+- Architectural decisions and rationale
+- Project-wide gotchas and patterns discovered during work
+- Conventions that workers should know about
+- Integration patterns between components
+
+Update this file when you learn something that future queen sessions should know.
+Do NOT put operational state here (active issues, current plans) — that goes in
+`queen-state.md`. Think of `queen-context.md` as the project's institutional memory.
+
+Before ending a session, review `queen-context.md` and append any new learnings.
+Curate it — consolidate related entries, remove outdated information. This file
+should stay useful, not become an ever-growing append log.
+
 ### Recovering after compaction
 
 If you feel disoriented, unsure of your role, or can't recall what you were working on:
 
 1. Read `.hive/queen-instructions.md` — your full instructions
-2. Read `.hive/queen-state.md` — your last known operational context
-3. Run `hive --json status` and `hive --json list` — current system state
-4. Resume from where you left off
+2. Read `.hive/queen-context.md` — persistent project knowledge
+3. Read `.hive/queen-state.md` — your last known operational context
+4. Run `hive --json status` and `hive --json list` — current system state
+5. Resume from where you left off
 
 Your CLAUDE.md identity anchor reminds you to do this automatically.
 
