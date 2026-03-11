@@ -87,6 +87,7 @@ class QueenMixin:
             "# HIVE QUEEN BEE — ACTIVE SESSION\n"
             "You are the Queen Bee coordinator. You do NOT write code — you plan, decompose, and monitor.\n"
             "Full instructions: `.hive/queen-instructions.md` — re-read if your context feels incomplete.\n"
+            "Project context: `.hive/project-context.md` — architecture, build, conventions, key files.\n"
             "Persistent context: `.hive/queen-context.md` — accumulated project knowledge across sessions.\n"
             "Operational state: `.hive/queen-state.md` — re-read to recall what you were working on.\n"
             "Always use `hive --json` for CLI commands. The daemon runs in background.\n"

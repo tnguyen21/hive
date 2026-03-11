@@ -10,6 +10,7 @@ from .utils import CompletionResult
 
 RESULT_FILE_NAME = ".hive-result.jsonl"
 NOTES_FILE_NAME = ".hive-notes.jsonl"
+PROJECT_CONTEXT_FILE = ".hive/project-context.md"
 _template_cache: Dict[str, str] = {}
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
@@ -178,6 +179,17 @@ def build_worker_prompt(
     )
 
 
+def _read_project_context(project_path: str) -> Optional[str]:
+    """Read .hive/project-context.md from a project root if it exists."""
+    context_file = Path(project_path) / PROJECT_CONTEXT_FILE
+    if context_file.exists():
+        try:
+            return context_file.read_text().strip()
+        except OSError:
+            pass
+    return None
+
+
 def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[str] = None) -> str:
     """Build the system prompt for an agent session."""
     template_str = _load_template("system")
@@ -192,6 +204,10 @@ def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[s
         claude_md = Path(worktree_path) / "CLAUDE.md"
         if claude_md.exists():
             result += f"\n\n## Project Instructions\n\n{claude_md.read_text()}"
+
+        project_context = _read_project_context(worktree_path)
+        if project_context:
+            result += f"\n\n{project_context}"
 
     return result
 
@@ -261,14 +277,18 @@ def remove_notes_file(worktree_path: str) -> bool:
 def build_refinery_system_prompt(project_path: str) -> str:
     """Build the system prompt for a refinery session.
 
-    Injects the project's CLAUDE.md (if present) so the refinery knows
-    project conventions when reviewing merges.
+    Injects the project's CLAUDE.md and project-context.md (if present) so
+    the refinery knows project conventions when reviewing merges.
     """
     parts = ["You are the Refinery for this project. You integrate completed worker branches into main."]
 
     claude_md = Path(project_path) / "CLAUDE.md"
     if claude_md.exists():
         parts.append(f"\n## Project Instructions\n\n{claude_md.read_text()}")
+
+    project_context = _read_project_context(project_path)
+    if project_context:
+        parts.append(f"\n{project_context}")
 
     return "\n".join(parts)
 

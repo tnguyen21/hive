@@ -98,9 +98,20 @@ def setup(ctx: typer.Context) -> None:
 
 
 @app.command()
-def init(ctx: typer.Context) -> None:
-    """Alias for setup."""
-    setup(ctx)
+def init(
+    ctx: typer.Context,
+    analyze: Annotated[bool, typer.Option("--analyze", help="Run LLM-powered project analysis to generate .hive/project-context.md")] = False,
+) -> None:
+    """Initialize project for Hive. Use --analyze to generate project context via LLM."""
+    try:
+        project_path, project_name = resolve_project(ctx.obj.project)
+    except Exception as exc:
+        _fail(ctx.obj, exc)
+    do_setup(project_path, project_name, json_mode=ctx.obj.json_mode)
+    if analyze:
+        from .runtime import do_analyze
+
+        do_analyze(project_path, project_name, json_mode=ctx.obj.json_mode)
 
 
 @app.command()

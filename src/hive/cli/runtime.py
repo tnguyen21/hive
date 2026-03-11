@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 from ..config import Config
@@ -63,3 +66,65 @@ def initialize_cli(*, db_override: str | None, project: str | None) -> tuple[Dat
 
     cli = HiveCLI(db, str(project_path))
     return db, cli, project_path, project_name
+
+
+def do_analyze(project_path: Path, project_name: str, *, json_mode: bool = False):
+    """Launch a Claude CLI session to analyze the project and generate .hive/project-context.md."""
+    from ..prompts import _load_template
+
+    hive_dir = project_path / ".hive"
+    hive_dir.mkdir(exist_ok=True)
+
+    context_path = hive_dir / "project-context.md"
+    if context_path.exists():
+        if json_mode:
+            print(json.dumps({"context_exists": True, "path": str(context_path)}))
+        else:
+            print(f"{context_path} already exists. Delete it first to re-analyze.")
+        return
+
+    init_prompt = _load_template("init")
+
+    claude_cmd = os.environ.get("CLAUDE_CMD", "claude")
+    cmd = [
+        claude_cmd,
+        "--print",
+        "--model",
+        Config.DEFAULT_MODEL,
+        "--dangerously-skip-permissions",
+        "-p",
+        init_prompt,
+    ]
+
+    if not json_mode:
+        print(f"Analyzing {project_name}...")
+
+    try:
+        result = subprocess.run(cmd, cwd=str(project_path), capture_output=not sys.stdout.isatty())
+    except FileNotFoundError:
+        msg = "Claude CLI not found. Install `claude` and ensure it's on PATH, or set CLAUDE_CMD."
+        if json_mode:
+            print(json.dumps({"error": msg}))
+        else:
+            print(msg)
+        return
+
+    if result.returncode != 0:
+        msg = f"Analysis failed (exit code {result.returncode})"
+        if json_mode:
+            print(json.dumps({"error": msg}))
+        else:
+            print(msg)
+        return
+
+    if context_path.exists():
+        if json_mode:
+            print(json.dumps({"context_created": str(context_path)}))
+        else:
+            print(f"Created {context_path}")
+    else:
+        msg = "Analysis completed but .hive/project-context.md was not written. Check Claude output."
+        if json_mode:
+            print(json.dumps({"error": msg}))
+        else:
+            print(msg)
