@@ -24,7 +24,7 @@ Hive has three moving parts:
 
 **Workers** are Claude Code sessions that pick up issues and implement them. Each worker gets its own git worktree, a full isolated copy of the repo. Workers run in parallel, up to your configured concurrency limit. When a worker finishes, its branch goes through merge validation (rebase, tests, optional refinery review) before anything touches main.
 
-**The Queen** is how you drive Hive. It's a Claude Code session that acts as your project manager: it reads your spec, explores the codebase, decomposes work into issues, monitors progress, and handles failures. The Queen doesn't write code. It plans and coordinates, and you approve the plan before any issues are created.
+**The Queen** is how you drive Hive. It's a Claude Code session that acts as your project manager: it reads your spec, explores the codebase, decomposes work into issues, monitors progress, and handles failures. The Queen doesn't write code. It plans and coordinates, and you approve the plan before any issues are created. The Queen also supports a headless mode for non-interactive dispatch (see below).
 
 The typical flow:
 
@@ -147,6 +147,27 @@ Categories are optional. The default is `context`; use `--category pattern`, `--
 
 Workers also write notes during execution (discoveries, gotchas, dependency observations) which get relayed to sibling workers on the same epic. This is how parallel workers stay loosely coordinated without sharing a context window.
 
+## Headless Queen Mode
+
+The Queen can run non-interactively with `--headless`. Instead of proposing a plan and waiting for approval, headless mode creates issues directly from your prompt and exits.
+
+```bash
+# Dispatch a task without interaction
+hive queen --headless -p "Bump all Python dependencies and update the lockfile"
+
+# Combine with backend override
+hive queen --headless -p "Add rate limiting to all API endpoints" --backend codex
+```
+
+Headless mode:
+- Skips the plan-approval step — issues are created directly
+- Uses `--dangerously-skip-permissions` (no human to approve tool calls)
+- Reads `.hive/project-context.md` and `.hive/queen-context.md` for project knowledge
+- Updates `.hive/queen-context.md` with any new learnings
+- Prints a summary of created issues before exiting
+
+This is useful for scripting, cron jobs, or piping tasks from external systems. The `--prompt` / `-p` flag is required when `--headless` is set.
+
 ## Cost and Performance
 
 Hive spawns multiple Claude Code sessions. Costs scale linearly with concurrency and task complexity.
@@ -159,7 +180,8 @@ Hive tracks token usage per issue and per run. Use `hive metrics --costs` for ro
 
 | Command                    | What it does                                  |
 | -------------------------- | --------------------------------------------- |
-| `hive queen`               | Launch the Queen (main interface)             |
+| `hive queen`               | Launch the Queen (main interface)              |
+| `hive queen --headless -p` | Non-interactive dispatch (see below)           |
 | `hive setup`               | One-time project config                       |
 | `hive create`              | Create an issue manually                      |
 | `hive start` / `hive stop` | Start/stop the daemon                         |

@@ -500,7 +500,7 @@ Implemented in `src/hive/cli.py`.
 
 - `hive start`
 - `hive stop`
-- `hive queen [--backend opencode|claude|codex]`
+- `hive queen [--backend claude|codex] [--headless -p <prompt>]`
 - `hive note`
 - `hive setup` / `hive init`
 
