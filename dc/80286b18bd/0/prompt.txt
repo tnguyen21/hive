@@ -1,0 +1,116 @@
+can you read @../mission-control/SPEC-dispatch.md 
+
+so, we're moving up the abstraction stack and i'm thinking of having a queen + refinery available per project. for certain kinds of tasks, i think it'd make way more sense to quickly delegate and merge the tasks. a lot of development already, in fact, has been done this way (duh look at this repo's git history), so there's no reason not to move up this level of management and let me be a little more removed from certain details.
+
+what do you think? how might we accomplish this in hive? you may spin subagents to explore the repo before coming to a conclusion.
+
+---
+
+hrm, well i'm still somewhat leaning towards a per-project queen and refinery, specifically because i foresee myself quickly growing scope and dispatching feature development, or perf work, or whatever via this headless dispatch, non-interactive method as well. we'll add more automated checks and guardrails of course, but this enables us to strive for modestly high quality code.
+
+like my thinking here is you want per-project context/memory so that the project's queen/refinery has more local context
+
+---
+
+yeah can you plan what 1+2 would look like. don't make any changes yet; let me review before you start implementing
+
+---
+
+seems reasonable; implement
+
+---
+
+merge into main; change seems reasonable
+
+---
+
+wait prior to that -- do we have per project refineries and queens? more importantly, can we think of how we can make these sessions more effective at their roles (e.g. queen, getting tasks, finding relevant files, planning out changes at a higher level; the refinery, updating context on how to build + test, and project/dependency specific gotchas and patterns that should be enforced)
+
+---
+
+this is pretty reasonable. i think we should start an LLM instance that searches the repo and has some guidelines for figuring out guidelines, conventions, idioms, and mapping out the repo. maybe lik ean init-prompt.md or something like that. it should encourage the use of some static analysis tools too, during the init. this might be a bit heavy handed at first, so maybe we just start with a high level `tree` view of the source?
+
+i'm still thinking about the convention of layered agents.md file, but now that im working on many projects that have many layers, i'm convinced it's a good practice.
+
+after the prompts have been seeded per project, we'll have to commit .hive into repos (which i haven't been doing)
+
+but yeah the structure and overall direction i agree with.
+
+---
+
+yes this is reasonable as a first step to getting per project context that gets better over time
+
+---
+
+hive init --analyze
+/Users/tau/projects/hive/.hive.toml already exists.
+╭───────────────────────────────── Traceback (most recent call last) ──────────────────────────────────╮
+│ /Users/tau/.local/share/uv/tools/hive/lib/python3.14/site-packages/hive/config.py:183 in __getattr__ │
+│                                                                                                      │
+│   180 │   │   # Delegate attribute access to the global config for backward compat.                  │
+│   181 │   │   # __getattr__ is only called when normal attribute lookup fails.                       │
+│   182 │   │   try:                                                                                   │
+│ ❱ 183 │   │   │   return getattr(self.current, name)                                                 │
+│   184 │   │   except RuntimeError:                                                                   │
+│   185 │   │   │   raise RuntimeError(f"ConfigRegistry: cannot access '{name}' before load_glob       │
+│   186                                                                                                │
+│                                                                                                      │
+│ /Users/tau/.local/share/uv/tools/hive/lib/python3.14/site-packages/hive/config.py:176 in current     │
+│                                                                                                      │
+│   173 │   def current(self) -> _Config:                                                              │
+│   174 │   │   """Access the global/CLI config. Raises RuntimeError if load_global() not called       │
+│   175 │   │   if self._global is None:                                                               │
+│ ❱ 176 │   │   │   raise RuntimeError("ConfigRegistry.load_global() not called — no global conf       │
+│   177 │   │   return self._global                                                                    │
+│   178 │                                                                                              │
+│   179 │   def __getattr__(self, name: str):                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: ConfigRegistry.load_global() not called — no global config loaded
+
+During handling of the above exception, another exception occurred:
+
+╭───────────────────────────────── Traceback (most recent call last) ──────────────────────────────────╮
+│ /Users/tau/.local/share/uv/tools/hive/lib/python3.14/site-packages/hive/cli/typer_app.py:114 in init │
+│                                                                                                      │
+│   111 │   if analyze:                                                                                │
+│   112 │   │   from .runtime import do_analyze                                                        │
+│   113 │   │                                                                                          │
+│ ❱ 114 │   │   do_analyze(project_path, project_name, json_mode=ctx.obj.json_mode)                    │
+│   115                                                                                                │
+│   116                                                                                                │
+│   117 @app.command()                                                                                 │
+│                                                                                                      │
+│ /Users/tau/.local/share/uv/tools/hive/lib/python3.14/site-packages/hive/cli/runtime.py:93 in         │
+│ do_analyze                                                                                           │
+│                                                                                                      │
+│    90 │   │   claude_cmd,                                                                            │
+│    91 │   │   "--print",                                                                             │
+│    92 │   │   "--model",                                                                             │
+│ ❱  93 │   │   Config.DEFAULT_MODEL,                                                                  │
+│    94 │   │   "--dangerously-skip-permissions",                                                      │
+│    95 │   │   "-p",                                                                                  │
+│    96 │   │   init_prompt,                                                                           │
+│                                                                                                      │
+│ /Users/tau/.local/share/uv/tools/hive/lib/python3.14/site-packages/hive/config.py:185 in __getattr__ │
+│                                                                                                      │
+│   182 │   │   try:                                                                                   │
+│   183 │   │   │   return getattr(self.current, name)                                                 │
+│   184 │   │   except RuntimeError:                                                                   │
+│ ❱ 185 │   │   │   raise RuntimeError(f"ConfigRegistry: cannot access '{name}' before load_glob       │
+│   186                                                                                                │
+│   187                                                                                                │
+│   188 Config = ConfigRegistry()                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: ConfigRegistry: cannot access 'DEFAULT_MODEL' before load_global() is called
+
+---
+
+ok, so on the topic of a headless dispatch mode -- i'm not convinced we need an entirely new CLI command and API for this
+
+why shouldn't we use the existing hive create <issue> command?
+
+another agent could use the --help flag to figure out the right syntax
+
+the biggest reason i can think of is that we need a queen instance to spin up with per-project context, do a file system search, and then also get auto-approval permission so it will create that issue by itself.
+
+is this something reasonable to expect? or no?
