@@ -32,7 +32,6 @@ env/
 *.db-wal
 *.db-shm
 .DS_Store
-.hive/
 .worktrees
 .opencode/agents/queen.md
 .claude/
