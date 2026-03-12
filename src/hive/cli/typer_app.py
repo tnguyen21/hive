@@ -310,16 +310,28 @@ def merges(
     _run(ctx, "merges", status=status)
 
 
+def _has_project_context(project: str | None) -> bool:
+    """Check if we're inside a git repo without printing errors."""
+    from pathlib import Path
+
+    if project:
+        return Path(project).resolve().joinpath(".git").exists()
+    current = Path.cwd().resolve()
+    while True:
+        if (current / ".git").exists():
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+
+
 @app.command()
 def status(ctx: typer.Context) -> None:
     """Show orchestrator status."""
-    try:
-        resolve_project(ctx.obj.project)
-        # Project detected — use existing single-project path
+    if _has_project_context(ctx.obj.project):
         _run(ctx, "status")
         return
-    except (SystemExit, Exception):
-        pass
 
     # No project context — show global multi-project view
     db = initialize_global(db_override=ctx.obj.db_override)
