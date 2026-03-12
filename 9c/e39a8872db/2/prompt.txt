@@ -1,0 +1,250 @@
+Implement the following plan:
+
+# Plan: Global Multi-Project Status View
+
+## Context
+
+`hive status` currently only works inside a project (git repo). Since start/stop
+now work globally via `initialize_global()`, we should extend `status` to show a
+multi-project dashboard when run outside a project. The daemon is global and
+serves all registered projects — users need visibility into all of them from
+anywhere.
+
+## Approach
+
+The `status` command in `typer_app.py` tries `resolve_project()`. If it succeeds,
+use existing single-project path. If it fails (no git repo), fall back to
+`initialize_global()` and build a global view from all registered projects in the DB.
+
+## Changes
+
+### 1. New module: `src/hive/cli/global_status.py`
+
+Single function `get_global_status(db: Database) -> dict` that:
+
+- Gets daemon status via `HiveDaemon(db_path=db.db_path).status()`
+- Calls `db.list_projects()` to get all registered projects
+- For each project:
+  - Checks `Path(project["path"]).exists()` — if missing, sets `path_missing: True` and skips queries
+  - Queries issue counts: `SELECT status, COUNT(*) FROM issues WHERE project = ? GROUP BY status`
+  - Queries active agents: `db.get_active_agents(project=name)`, enriched with issue titles via `db.get_issue()`
+  - Queries refinery: `SELECT mq.issue_id, i.title FROM merge_queue mq LEFT JOIN issues i ON mq.issue_id = i.id WHERE mq.status = 'running' AND mq.project = ?`
+  - Queries merge stats: new `db.get_merge_queue_stats(project=name)` (see below)
+  - Queries escalated issues: `SELECT id, title FROM issues WHERE project = ? AND status = 'escalated'`
+  - Git worktree check: only if project has queued/running merges, otherwise `status: "unchecked"`
+- Computes aggregate totals (open, in_progress, done, escalated, workers) across all projects
+
+Returns:
+```python
+{
+    "daemon": {"running": bool, "pid": int|None, "log_file": str},
+    "totals": {"open": N, "in_progress": N, "done": N, "escalated": N, "workers": N},
+    "projects": [
+        {
+            "name": str, "path": str, "path_missing": bool,
+            "issues": {status: count, ...}, "total_issues": N,
+            "active_agents": N,
+            "workers": [{"name": str, "issue_id": str, "issue_title": str}],
+            "refinery": {"active": bool, "issue_id": str|None, "issue_title": str|None},
+            "merge_queue": {"queued": N, "running": N, "merged": N, "failed": N},
+            "merge_blockers": [...],
+            "main_worktree": {"dirty": bool, "status": str, ...},
+            "attention_issues": [{"id": str, "title": str}],
+        },
+        ...
+    ],
+}
+```
+
+### 2. Modify `db.get_merge_queue_stats()` in `src/hive/db/core.py`
+
+Add optional `project` parameter to existing method:
+
+```python
+def get_merge_queue_stats(self, project: str | None = None) -> dict[str, int]:
+    if project:
+        cursor = self.conn.execute(
+            "SELECT status, COUNT(*) as count FROM merge_queue WHERE project = ? GROUP BY status",
+            (project,),
+        )
+    else:
+        cursor = self.conn.execute(
+            "SELECT status, COUNT(*) as count FROM merge_queue GROUP BY status"
+        )
+    stats = {"queued": 0, "running": 0, "merged": 0, "failed": 0}
+    for row in cursor.fetchall():
+        stats[row["status"]] = row["count"]
+    return stats
+```
+
+### 3. Add `render_global_status()` to `src/hive/cli/rich_views.py`
+
+- **Header panel** ("Hive Global Status"): daemon PID/status, aggregate totals
+- **Per-project panels**: one `Panel` per project, titled with project name
+  - Issue counts table (non-zero statuses only)
+  - Workers table (name, issue ID, truncated title)
+  - Refinery status line
+  - Merge queue summary
+  - Escalated issues table (if any)
+  - Merge blockers (if any)
+- **Path-missing projects**: warning text instead of data panels
+
+Reuses existing helpers: `_kv_panel`, `_simple_table`, `_render_refinery`,
+`_render_merge_queue`, `_render_daemon`, `render_error`.
+
+### 4. Rewrite `status` command in `src/hive/cli/typer_app.py`
+
+Same pattern as `start`/`stop`: try project detection, fall back to global.
+
+```python
+@app.command()
+def status(ctx: typer.Context) -> None:
+    """Show orchestrator status."""
+    try:
+        resolve_project(ctx.obj.project)
+        # Project detected — use existing single-project path
+        _run(ctx, "status")
+        return
+    except (SystemExit, Exception):
+        pass
+
+    # No project context — show global multi-project view
+    db = initialize_global(db_override=ctx.obj.db_override)
+    try:
+        from .global_status import get_global_status
+        result = get_global_status(db)
+        if ctx.obj.json_mode:
+            ctx.obj.console.print_json(json.dumps(result))
+        else:
+            from .rich_views import render_global_status
+            ctx.obj.console.print(render_global_status(result))
+    finally:
+        db.close()
+```
+
+## Files to modify
+
+| File | Change |
+|------|--------|
+| `src/hive/cli/global_status.py` | **New** — `get_global_status(db)` function |
+| `src/hive/db/core.py` | Add `project` param to `get_merge_queue_stats()` |
+| `src/hive/cli/rich_views.py` | Add `render_global_status()` |
+| `src/hive/cli/typer_app.py` | Rewrite `status` command with fallback logic |
+
+## What stays the same
+
+- `HiveCLI.status()` in `core.py` — unchanged, still used for single-project view
+- `render_status()` in `rich_views.py` — unchanged, still used for single-project view
+- All existing status tests — they operate within a project context and keep working
+
+## Verification
+
+1. `uvx ruff check src/` and `uvx ruff format --check src/`
+2. `uv run python -m pytest tests/ -v --timeout=30` — all 433 tests pass
+3. `cd ~/projects/hive && hive status` — single-project view (unchanged)
+4. `cd /tmp && hive status` — global multi-project view
+5. `cd /tmp && hive --json status` — JSON output with daemon/totals/projects structure
+6. Register a project with a nonexistent path, verify it shows "path not found" warning
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/c094d873-0b9b-4b38-a475-28f170d6862d.jsonl
+
+If this plan can be broken down into multiple independent tasks, consider using the TeamCreate tool to create a team and parallelize the work.
+
+---
+
+Path not found: /Users/tau/projects/kairos                                              │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-002862c551fb ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-002862c551fb     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-0d8484cae7b7 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-0d8484cae7b7     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-142c1c03f0ec ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-142c1c03f0ec     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-209bf1d3ba49 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-209bf1d3ba49     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-35a4117b77b4 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-35a4117b77b4     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-443f6fd60187 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-443f6fd60187     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-5ad8b95a4523 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-5ad8b95a4523     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-5e6d4c3497b6 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-5e6d4c3497b6     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-8a4b43189480 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-8a4b43189480     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-a2f865123b4f ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-a2f865123b4f     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-a31393447e99 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-a31393447e99     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-af89d3bc4bf5 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-af89d3bc4bf5     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-b79ae8cad628 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-b79ae8cad628     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-db719471bb5e ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-db719471bb5e     │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────── worker-f3dc55bfda80 ──────────────────────────────────╮
+│ Path not found: /Users/tau/projects/takeoff-protocol/.worktrees/worker-f3dc55bfda80
+
+how do i clean up these paths
+
+---
+
+so there are lingering projects that i'd like to rm from hive (no longer maintained so i removed the dir, or the dir name was changed)╭──────────────────────────────────────── kairos ─────────────────────────────────────────╮
+│ Path not found: /Users/tau/projects/kairos                                              │
+╰─────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────── labrat ─────────────────────────────────────────╮
+│ Refinery: idle                                                                          │
+│ Merge queue: empty                                                                      │
+╰────────────────────────────────── 0 issues, 0 workers ──────────────────────────────────╯
+╭─────────────────────────────────────── nailbook ────────────────────────────────────────╮
+│                                                                                         │
+│   Status      Count                                                                     │
+│  ━━━━━━━━━━━━━━━━━━━                                                                    │
+│   done            1                                                                     │
+│   finalized     124                                                                     │
+│   escalated       2                                                                     │
+│   canceled       44                                                                     │
+│                                                                                         │
+│ Refinery: idle                                                                          │
+│ Merge queue: 118 merged, 17 failed                                                      │
+│ ╭────────────────────────────────── Needs Attention ──────────────────────────────────╮ │
+│ │                                                                                     │ │
+│ │   Issue            Title                                                            │ │
+│ │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━             │ │
+│ │   w-d6f9f301ee7c   E2E: clients list, create, search, edit, archive                 │ │
+│ │   w-53c32feaae47   E2E: settings hub, salon settings, booking settings              │ │
+│ │                                                                                     │ │
+│ ╰─────────────────────────────────────────────────────────────────────────────────────╯ │
+╰───────────────────────────────── 171 issues, 0 workers ─────────────────────────────────╯
+╭──────────────────────────────────── pycallgraph-rs ─────────────────────────────────────╮
+│ Path not found: /Users/tau/projects/pycallgraph-rs                                      │
+╰─────────────────────────────────────────────────────
+
+how can we deal with this
+
+---
+
+can we have the layout be a little more amenable to fitting all information on a single screen
+
+I prefer using watch to refresh status and see all the projects at once
+
+---
+
+fatal: not a git repository (searched up from /Users/tau/projects)
+
+where is this from?
