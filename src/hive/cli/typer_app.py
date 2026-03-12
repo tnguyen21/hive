@@ -468,6 +468,45 @@ def queen(
         _fail(ctx.obj, exc)
 
 
+@app.command()
+def forget(
+    ctx: typer.Context,
+    project_name: Annotated[str | None, typer.Argument(help="Project name to unregister")] = None,
+    stale: Annotated[bool, typer.Option("--stale", help="Remove all projects whose paths no longer exist")] = False,
+) -> None:
+    """Unregister a project (or all stale projects with --stale)."""
+    from pathlib import Path
+
+    if not project_name and not stale:
+        print_error(ctx.obj.console, "Provide a project name or use --stale")
+        raise typer.Exit(1)
+
+    db = initialize_global(db_override=ctx.obj.db_override)
+    try:
+        removed = []
+        if stale:
+            for proj in db.list_projects():
+                if not Path(proj["path"]).exists():
+                    db.unregister_project(proj["name"])
+                    removed.append(proj["name"])
+        if project_name:
+            if db.unregister_project(project_name):
+                removed.append(project_name)
+            else:
+                _fail(ctx.obj, ValueError(f"Project not found: {project_name}"))
+
+        if ctx.obj.json_mode:
+            ctx.obj.console.print_json(json.dumps({"removed": removed}))
+        else:
+            if removed:
+                for name in removed:
+                    ctx.obj.console.print(f"Removed [cyan]{name}[/cyan]")
+            else:
+                ctx.obj.console.print("Nothing to remove.", style="dim")
+    finally:
+        db.close()
+
+
 @app.command("note")
 def add_note(
     ctx: typer.Context,

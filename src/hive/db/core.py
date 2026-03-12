@@ -797,6 +797,12 @@ class DatabaseCore:
         rows = self.conn.execute("SELECT name, path, registered_at FROM projects ORDER BY name").fetchall()
         return [dict(r) for r in rows]
 
+    def unregister_project(self, name: str) -> bool:
+        """Remove a project from the registry. Returns True if a row was deleted."""
+        with self.transaction() as conn:
+            cursor = conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+            return cursor.rowcount > 0
+
     def get_project_path(self, name: str) -> Optional[str]:
         """Return the disk path for a project by name, or None if not found."""
         row = self.conn.execute("SELECT path FROM projects WHERE name = ?", (name,)).fetchone()
