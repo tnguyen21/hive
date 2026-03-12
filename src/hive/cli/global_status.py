@@ -21,6 +21,8 @@ def get_global_status(db: Database) -> dict:
     }
 
     projects_raw = db.list_projects()
+    # Filter out stale worktree entries that were accidentally registered as projects
+    projects_raw = [p for p in projects_raw if "/.worktrees/" not in p["path"] and not p["name"].startswith("worker-")]
     projects = []
     totals = {"open": 0, "in_progress": 0, "done": 0, "escalated": 0, "workers": 0}
 
