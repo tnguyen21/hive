@@ -50,8 +50,8 @@ def _gather_system() -> dict:
     uv = shutil.which("uv")
     if uv:
         try:
-            result = subprocess.run([uv, "--version"], capture_output=True, text=True, timeout=5)
-            info["uv_version"] = result.stdout.strip()
+            res = subprocess.run([uv, "--version"], capture_output=True, text=True, timeout=5)
+            info["uv_version"] = res.stdout.strip()
         except Exception:
             info["uv_version"] = "error"
     else:
@@ -61,8 +61,8 @@ def _gather_system() -> dict:
     claude = shutil.which("claude")
     if claude:
         try:
-            result = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=5)
-            info["claude_cli_version"] = result.stdout.strip()
+            res = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=5)
+            info["claude_cli_version"] = res.stdout.strip()
         except Exception:
             info["claude_cli_version"] = "error"
     else:

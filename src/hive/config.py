@@ -102,7 +102,7 @@ class _Config:
         global_section = _read_hive_section(global_toml)
         project_section = _read_hive_section(project_toml)
 
-        result = []
+        res = []
         for key, (env_var, typ, default) in _FIELDS.items():
             attr = key.upper()
             value = getattr(self, attr, default)
@@ -119,7 +119,7 @@ class _Config:
             # Redact sensitive fields
             display_value = "***" if key in _SENSITIVE_FIELDS and value else value
 
-            result.append(
+            res.append(
                 {
                     "field": attr,
                     "value": display_value,
@@ -128,7 +128,7 @@ class _Config:
                 }
             )
 
-        return result
+        return res
 
 
 def _coerce(value: object, typ: type) -> object:

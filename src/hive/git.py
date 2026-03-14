@@ -18,10 +18,10 @@ class GitWorktreeError(Exception):
 
 def _run_git(*args: str, cwd: str, check: bool = True) -> str:
     """Run a git command and return stripped stdout. Raises GitWorktreeError on non-zero exit if check=True."""
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
-    if check and result.returncode != 0:
-        raise GitWorktreeError(result.stderr.strip())
-    return result.stdout.strip()
+    res = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    if check and res.returncode != 0:
+        raise GitWorktreeError(res.stderr.strip())
+    return res.stdout.strip()
 
 
 def _async_wrapper(fn):
@@ -97,19 +97,19 @@ def rebase_onto_main(worktree_path: str, main_branch: str = "main") -> bool:
     """
     _run_git("fetch", "origin", main_branch, cwd=str(worktree_path), check=False)
 
-    result = subprocess.run(
+    res = subprocess.run(
         ["git", "rebase", main_branch],
         cwd=str(worktree_path),
         capture_output=True,
         text=True,
     )
-    if result.returncode == 0:
+    if res.returncode == 0:
         return True
-    if "CONFLICT" in result.stdout or "conflict" in result.stderr.lower() or "could not apply" in result.stderr.lower():
+    if "CONFLICT" in res.stdout or "conflict" in res.stderr.lower() or "could not apply" in res.stderr.lower():
         return False
-    if result.returncode in (1, 128):
+    if res.returncode in (1, 128):
         return False
-    raise GitWorktreeError(f"Rebase failed unexpectedly: {result.stderr}")
+    raise GitWorktreeError(f"Rebase failed unexpectedly: {res.stderr}")
 
 
 def abort_rebase(worktree_path: str):
@@ -145,7 +145,7 @@ def run_command_in_worktree(worktree_path: str, cmd: str, timeout: int = 300) ->
     Returns (success: bool, output: str) where output is combined stdout+stderr.
     """
     try:
-        result = subprocess.run(
+        res = subprocess.run(
             cmd,
             shell=True,
             cwd=str(worktree_path),
@@ -153,8 +153,8 @@ def run_command_in_worktree(worktree_path: str, cmd: str, timeout: int = 300) ->
             text=True,
             timeout=timeout,
         )
-        output = result.stdout + result.stderr
-        return (result.returncode == 0, output)
+        output = res.stdout + res.stderr
+        return (res.returncode == 0, output)
     except subprocess.TimeoutExpired:
         return (False, f"Command timed out after {timeout}s: {cmd}")
     except Exception as e:
@@ -163,8 +163,8 @@ def run_command_in_worktree(worktree_path: str, cmd: str, timeout: int = 300) ->
 
 def get_commit_hash(worktree_path: str) -> Optional[str]:
     """Get the current commit hash in a worktree."""
-    result = _run_git("rev-parse", "HEAD", cwd=str(worktree_path), check=False)
-    return result or None
+    res = _run_git("rev-parse", "HEAD", cwd=str(worktree_path), check=False)
+    return res or None
 
 
 def has_diff_from_main(worktree_path: str, main_branch: str = "main") -> bool:

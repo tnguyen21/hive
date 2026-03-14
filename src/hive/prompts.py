@@ -198,18 +198,18 @@ def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[s
         project=project,
     )
 
-    result = base.rstrip()
+    res = base.rstrip()
 
     if worktree_path:
         claude_md = Path(worktree_path) / "CLAUDE.md"
         if claude_md.exists():
-            result += f"\n\n## Project Instructions\n\n{claude_md.read_text()}"
+            res += f"\n\n## Project Instructions\n\n{claude_md.read_text()}"
 
         project_context = _read_project_context(worktree_path)
         if project_context:
-            result += f"\n\n{project_context}"
+            res += f"\n\n{project_context}"
 
-    return result
+    return res
 
 
 def assess_completion(file_result: Optional[Dict[str, Any]] = None) -> CompletionResult:

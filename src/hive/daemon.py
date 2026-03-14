@@ -86,20 +86,20 @@ class HiveDaemon:
         This catches orphaned daemons that the PID file doesn't track.
         """
         try:
-            result = subprocess.run(
+            res = subprocess.run(
                 ["ps", "ax", "-o", "pid,command"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            if result.returncode != 0:
+            if res.returncode != 0:
                 return []
         except Exception:
             return []
 
         my_pid = os.getpid()
         pids = []
-        for line in result.stdout.splitlines():
+        for line in res.stdout.splitlines():
             line = line.strip()
             if "hive" not in line or "start" not in line or "--foreground" not in line:
                 continue

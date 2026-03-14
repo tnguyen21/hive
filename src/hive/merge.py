@@ -233,7 +233,7 @@ class MergeProcessor:
         worktree_path = entry["worktree"]
 
         try:
-            result = await self._send_to_refinery_inner(entry, worktree_path)
+            res = await self._send_to_refinery_inner(entry, worktree_path)
         except RefinerySessionDied as e:
             # First death — log, reset session, and retry once
             self.db.log_event(
@@ -245,7 +245,7 @@ class MergeProcessor:
             await self._force_reset_refinery_session(f"Session died: {e}")
 
             try:
-                result = await self._send_to_refinery_inner(entry, worktree_path)
+                res = await self._send_to_refinery_inner(entry, worktree_path)
             except RefinerySessionDied as e2:
                 # Second death — give up
                 self.db.log_event(
@@ -255,7 +255,7 @@ class MergeProcessor:
                     {"error": str(e2), "queue_id": queue_id, "retry": False},
                 )
                 await self._force_reset_refinery_session(f"Session died twice: {e2}")
-                result = {
+                res = {
                     "status": "needs_human",
                     "summary": f"Refinery session died twice: {e2}",
                     "tests_passed": False,
@@ -276,7 +276,7 @@ class MergeProcessor:
 
         # Process result
         needs_cleanup = False
-        if result["status"] == "merged":
+        if res["status"] == "merged":
             branch_name = entry["branch_name"]
             try:
                 await merge_to_main_async(self.project_path, branch_name)
@@ -296,14 +296,14 @@ class MergeProcessor:
                     issue_id,
                     agent_id,
                     "refinery_review_passed",
-                    {"conflicts_resolved": result.get("conflicts_resolved", 0)},
+                    {"conflicts_resolved": res.get("conflicts_resolved", 0)},
                 )
-        elif result["status"] == "rejected":
+        elif res["status"] == "rejected":
             self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
             self.db.try_transition_issue_status(issue_id, from_status="done", to_status="open")
-            self.db.log_event(issue_id, agent_id, "refinery_review_rejected", {"summary": result.get("summary", "")})
+            self.db.log_event(issue_id, agent_id, "refinery_review_rejected", {"summary": res.get("summary", "")})
 
-            rejection_reason = result.get("summary", "Unknown reason")
+            rejection_reason = res.get("summary", "Unknown reason")
             note_content = f"[Refinery rejection] {rejection_reason}\nBranch: {entry['branch_name']}"
             self.db.add_note(
                 issue_id=issue_id,
@@ -317,7 +317,7 @@ class MergeProcessor:
             # needs_human or unknown
             self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
             self.db.try_transition_issue_status(issue_id, from_status="done", to_status="escalated")
-            self.db.log_event(issue_id, agent_id, "refinery_review_escalated", {"summary": result.get("summary", "")})
+            self.db.log_event(issue_id, agent_id, "refinery_review_escalated", {"summary": res.get("summary", "")})
             needs_cleanup = True
 
         # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
@@ -400,13 +400,13 @@ class MergeProcessor:
             raise RuntimeError("Refinery session did not pick up the message")
 
         # Wait for refinery to finish (poll session status)
-        result = await self._wait_for_refinery(session_id, worktree_path=worktree_path, min_message_count=pre_send_count)
+        res = await self._wait_for_refinery(session_id, worktree_path=worktree_path, min_message_count=pre_send_count)
 
         # Increment counters after successful refinery processing
         self._refinery_message_count += 2  # one for the prompt sent, one for the response
         self._refinery_token_estimate += len(prompt) // 4  # rough estimate for input
 
-        return result
+        return res
 
     async def _wait_for_refinery(
         self, session_id: str, worktree_path: str, timeout: Optional[int] = None, min_message_count: int = 0

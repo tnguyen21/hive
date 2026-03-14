@@ -141,15 +141,15 @@ def _normalize_project_name(name: str) -> str:
 def _git_remote_name(project_root: Path) -> str | None:
     """Get the repo name from git remote origin."""
     try:
-        result = subprocess.run(
+        res = subprocess.run(
             ["git", "remote", "get-url", "origin"],
             cwd=str(project_root),
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return _parse_repo_name(result.stdout)
+        if res.returncode == 0 and res.stdout.strip():
+            return _parse_repo_name(res.stdout)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return None

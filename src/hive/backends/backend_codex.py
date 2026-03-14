@@ -215,17 +215,17 @@ class CodexAppServerBackend(HiveBackend):
         }
 
         # Codex ignores unknown keys; keep payload minimal.
-        result = await self._request("thread/start", params)
-        thread = result.get("thread", {})
+        res = await self._request("thread/start", params)
+        thread = res.get("thread", {})
         thread_id = thread.get("id")
         if not thread_id:
-            raise RuntimeError(f"Codex thread/start returned no thread.id: {result}")
+            raise RuntimeError(f"Codex thread/start returned no thread.id: {res}")
 
         self.sessions[str(thread_id)] = ThreadState(
             directory=directory,
             title=title,
             status="idle",
-            model=result.get("model"),
+            model=res.get("model"),
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
         )
