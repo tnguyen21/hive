@@ -13,6 +13,17 @@ from ..backends import HiveBackend
 
 logger = logging.getLogger(__name__)
 
+PERMISSION_DECISIONS = {
+    "question": "reject",
+    "plan_enter": "reject",
+    "plan_exit": "reject",
+    "external_directory": "reject",
+    "read": "once",
+    "edit": "once",
+    "write": "once",
+    "bash": "once",
+}
+
 
 class OrchestratorCore:
     """Core orchestration engine for Hive."""
@@ -127,13 +138,15 @@ class OrchestratorCore:
                 # fetch pending permissions and resolve
                 pending = await self.backend.get_pending_permissions()
                 for perm in pending:
-                    decision = self.evaluate_permission_policy(perm)
+                    permission = perm.get("permission")
+                    decision = PERMISSION_DECISIONS.get(permission) if isinstance(permission, str) else None
                     if decision:
                         await self.backend.reply_permission(perm["id"], reply=decision)
                         self._log_permission_resolved(perm, decision)
                 return
 
-            decision = self.evaluate_permission_policy(event_data)
+            permission = event_data.get("permission")
+            decision = PERMISSION_DECISIONS.get(permission) if isinstance(permission, str) else None
             if decision:
                 await self.backend.reply_permission(perm_id, reply=decision)
                 self._log_permission_resolved(event_data, decision)
@@ -529,36 +542,6 @@ class OrchestratorCore:
             except Exception as e:
                 logger.error(f"Error in merge processor: {e}")
             await asyncio.sleep(Config.MERGE_POLL_INTERVAL)
-
-    def evaluate_permission_policy(self, perm: Dict[str, Any]) -> Optional[str]:
-        """
-        Apply policy rules to decide allow/deny.
-
-        Args:
-            perm: Permission request dict from the backend
-
-        Returns:
-            "once", "always", or None if no rule matches
-        """
-        permission = perm.get("permission")
-
-        # Session-level permissions handle most cases (set at session creation).
-        # This catches runtime permission requests that slip through.
-
-        # Workers should never ask questions or enter plan mode
-        if permission in ("question", "plan_enter", "plan_exit"):
-            return "reject"
-
-        # Workers should never leave their worktree
-        if permission == "external_directory":
-            return "reject"
-
-        # Allow standard tool usage within the session's directory scope
-        if permission in ("read", "edit", "write", "bash"):
-            return "once"
-
-        # Unknown permission - let it block (human reviews)
-        return None
 
     def _mark_agent_failed(self, agent_id: str):
         """Mark an agent failed in DB and clear issue/session references."""

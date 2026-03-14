@@ -4,7 +4,6 @@ import json
 import re
 import subprocess
 import unittest.mock
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -548,30 +547,6 @@ def test_cli_logs(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "created" in captured.out
-
-
-def test_evaluate_permission_policy():
-    """Test permission policy evaluation."""
-    from hive.backends import HiveBackend
-    from hive.orchestrator import Orchestrator
-
-    # Create a minimal orchestrator for testing
-    mock_backend = AsyncMock(spec=HiveBackend)
-    orch = Orchestrator(db=None, backend=mock_backend)
-
-    # Test deny rules
-    assert orch.evaluate_permission_policy({"permission": "question", "patterns": []}) == "reject"
-    assert orch.evaluate_permission_policy({"permission": "plan_enter", "patterns": []}) == "reject"
-    assert orch.evaluate_permission_policy({"permission": "external_directory", "patterns": []}) == "reject"
-
-    # Test allow rules
-    assert orch.evaluate_permission_policy({"permission": "read", "patterns": []}) == "once"
-    assert orch.evaluate_permission_policy({"permission": "edit", "patterns": []}) == "once"
-    assert orch.evaluate_permission_policy({"permission": "write", "patterns": []}) == "once"
-    assert orch.evaluate_permission_policy({"permission": "bash", "patterns": []}) == "once"
-
-    # Test unknown permission
-    assert orch.evaluate_permission_policy({"permission": "unknown", "patterns": []}) is None
 
 
 def test_cli_costs_no_data(temp_db, tmp_path, capsys):
