@@ -1,5 +1,6 @@
 """Prompt templates and worktree JSONL helpers for Hive agents."""
 
+import functools
 import hashlib
 import json
 from pathlib import Path
@@ -11,16 +12,14 @@ from .utils import CompletionResult
 RESULT_FILE_NAME = ".hive-result.jsonl"
 NOTES_FILE_NAME = ".hive-notes.jsonl"
 PROJECT_CONTEXT_FILE = ".hive/project-context.md"
-_template_cache: Dict[str, str] = {}
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
+@functools.lru_cache(maxsize=32)
 def _load_template(name: str) -> str:
     """Load and cache a prompt template."""
-    if name not in _template_cache:
-        template_path = _PROMPTS_DIR / f"{name}.md"
-        _template_cache[name] = template_path.read_text()
-    return _template_cache[name]
+    template_path = _PROMPTS_DIR / f"{name}.md"
+    return template_path.read_text()
 
 
 def get_prompt_version(template_name: str) -> str:
