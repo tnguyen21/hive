@@ -2,7 +2,6 @@
 
 import asyncio
 import functools
-import os
 import shutil
 import subprocess
 import time
@@ -69,17 +68,17 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
 
 def remove_worktree(worktree_path: str) -> bool:
     """Remove a git worktree."""
-    abs_path = os.path.abspath(worktree_path)
-    if not os.path.exists(abs_path):
+    abs_path = Path(worktree_path).resolve()
+    if not abs_path.exists():
         return False
     try:
-        _run_git("worktree", "remove", "--force", abs_path, cwd=os.path.dirname(abs_path))
+        _run_git("worktree", "remove", "--force", str(abs_path), cwd=str(abs_path.parent))
         return True
     except GitWorktreeError:
         # Fallback: force remove if worktree is dirty
         try:
             shutil.rmtree(abs_path, ignore_errors=True)
-            _run_git("worktree", "prune", cwd=os.path.dirname(abs_path), check=False)
+            _run_git("worktree", "prune", cwd=str(abs_path.parent), check=False)
             return True
         except Exception:
             return False
