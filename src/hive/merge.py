@@ -276,49 +276,51 @@ class MergeProcessor:
 
         # Process result
         needs_cleanup = False
-        if res["status"] == "merged":
-            branch_name = entry["branch_name"]
-            try:
-                await merge_to_main_async(self.project_path, branch_name)
-            except GitWorktreeError as e:
+        match res.get("status"):
+            case "merged":
+                branch_name = entry["branch_name"]
+                try:
+                    await merge_to_main_async(self.project_path, branch_name)
+                except GitWorktreeError as e:
+                    self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
+                    self.db.log_event(
+                        issue_id,
+                        agent_id,
+                        "merge_failed",
+                        {"error": str(e), "branch": branch_name, "after_refinery": True},
+                    )
+                    needs_cleanup = True
+
+                if not needs_cleanup:
+                    await self._finalize_issue(entry)
+                    self.db.log_event(
+                        issue_id,
+                        agent_id,
+                        "refinery_review_passed",
+                        {"conflicts_resolved": res.get("conflicts_resolved", 0)},
+                    )
+
+            case "rejected":
                 self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "merge_failed",
-                    {"error": str(e), "branch": branch_name, "after_refinery": True},
+                self.db.try_transition_issue_status(issue_id, from_status="done", to_status="open")
+                self.db.log_event(issue_id, agent_id, "refinery_review_rejected", {"summary": res.get("summary", "")})
+
+                rejection_reason = res.get("summary", "Unknown reason")
+                note_content = f"[Refinery rejection] {rejection_reason}\nBranch: {entry['branch_name']}"
+                self.db.add_note(
+                    issue_id=issue_id,
+                    agent_id=agent_id,
+                    category="rejection",
+                    content=note_content,
+                    project=self.project_name,
                 )
                 needs_cleanup = True
 
-            if not needs_cleanup:
-                await self._finalize_issue(entry)
-                self.db.log_event(
-                    issue_id,
-                    agent_id,
-                    "refinery_review_passed",
-                    {"conflicts_resolved": res.get("conflicts_resolved", 0)},
-                )
-        elif res["status"] == "rejected":
-            self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
-            self.db.try_transition_issue_status(issue_id, from_status="done", to_status="open")
-            self.db.log_event(issue_id, agent_id, "refinery_review_rejected", {"summary": res.get("summary", "")})
-
-            rejection_reason = res.get("summary", "Unknown reason")
-            note_content = f"[Refinery rejection] {rejection_reason}\nBranch: {entry['branch_name']}"
-            self.db.add_note(
-                issue_id=issue_id,
-                agent_id=agent_id,
-                category="rejection",
-                content=note_content,
-                project=self.project_name,
-            )
-            needs_cleanup = True
-        else:
-            # needs_human or unknown
-            self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
-            self.db.try_transition_issue_status(issue_id, from_status="done", to_status="escalated")
-            self.db.log_event(issue_id, agent_id, "refinery_review_escalated", {"summary": res.get("summary", "")})
-            needs_cleanup = True
+            case _:  # needs_human or unknown
+                self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
+                self.db.try_transition_issue_status(issue_id, from_status="done", to_status="escalated")
+                self.db.log_event(issue_id, agent_id, "refinery_review_escalated", {"summary": res.get("summary", "")})
+                needs_cleanup = True
 
         # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
         try:

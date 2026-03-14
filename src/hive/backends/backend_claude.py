@@ -375,44 +375,43 @@ class ClaudeWSBackend(HiveBackend):
         if not session:
             return
 
-        msg_type = msg.get("type")
+        match msg:
+            case {"type": "system", "subtype": "init"}:
+                session.cli_session_id = msg.get("session_id")
+                session.connected.set()
+                logger.info(f"Session {session_id} initialized (cli_session={session.cli_session_id})")
 
-        if msg_type == "system" and msg.get("subtype") == "init":
-            session.cli_session_id = msg.get("session_id")
-            session.connected.set()
-            logger.info(f"Session {session_id} initialized (cli_session={session.cli_session_id})")
+            case {"type": "assistant"}:
+                prev_status = session.status
+                session.status = "busy"
+                session.messages.append(msg)
+                if prev_status != "busy":
+                    logger.info(f"Session {session_id} status transition {prev_status} -> busy (source=assistant)")
+                # Emit activity event for lease renewal
+                try:
+                    await self._emit("session.status", {"sessionID": session_id, "status": {"type": "busy"}})
+                except Exception as e:
+                    logger.exception(f"Failed to emit busy session.status for session {session_id}: {e}")
+                    raise
 
-        elif msg_type == "assistant":
-            prev_status = session.status
-            session.status = "busy"
-            session.messages.append(msg)
-            if prev_status != "busy":
-                logger.info(f"Session {session_id} status transition {prev_status} -> busy (source=assistant)")
-            # Emit activity event for lease renewal
-            try:
-                await self._emit("session.status", {"sessionID": session_id, "status": {"type": "busy"}})
-            except Exception as e:
-                logger.exception(f"Failed to emit busy session.status for session {session_id}: {e}")
-                raise
+            case {"type": "result"}:
+                prev_status = session.status
+                session.status = "idle"
+                session.result = msg
+                session.messages.append(msg)
+                session.total_usage = msg.get("usage", {})
+                logger.info(
+                    f"Session {session_id} status transition {prev_status} -> idle (result_usage_keys={list(session.total_usage.keys())})"
+                )
+                # Emit SSE-compatible idle event
+                try:
+                    await self._emit("session.status", {"sessionID": session_id, "status": {"type": "idle"}})
+                except Exception as e:
+                    logger.exception(f"Failed to emit idle session.status for session {session_id}: {e}")
+                    raise
 
-        elif msg_type == "result":
-            prev_status = session.status
-            session.status = "idle"
-            session.result = msg
-            session.messages.append(msg)
-            session.total_usage = msg.get("usage", {})
-            logger.info(f"Session {session_id} status transition {prev_status} -> idle (result_usage_keys={list(session.total_usage.keys())})")
-            # Emit SSE-compatible idle event
-            try:
-                await self._emit("session.status", {"sessionID": session_id, "status": {"type": "idle"}})
-            except Exception as e:
-                logger.exception(f"Failed to emit idle session.status for session {session_id}: {e}")
-                raise
-
-        elif msg_type == "control_request":
-            # Shouldn't happen with bypassPermissions, but handle gracefully
-            subtype = msg.get("request", {}).get("subtype")
-            if subtype == "can_use_tool":
+            case {"type": "control_request", "request": {"subtype": "can_use_tool"}}:
+                # Shouldn't happen with bypassPermissions, but handle gracefully
                 await self._ws_send(
                     session_id,
                     {
@@ -428,11 +427,11 @@ class ClaudeWSBackend(HiveBackend):
                     },
                 )
 
-        elif msg_type in ("keep_alive", "user", "control_response"):
-            pass  # Expected protocol messages, no action needed
+            case {"type": "control_request"} | {"type": "keep_alive"} | {"type": "user"} | {"type": "control_response"}:
+                pass  # Expected protocol messages, no action needed
 
-        else:
-            logger.debug(f"Unhandled message type '{msg_type}' from session {session_id}")
+            case _:
+                logger.debug(f"Unhandled message type '{msg.get('type')}' from session {session_id}")
 
     def _translate_message(self, msg: dict) -> dict:
         """Translate WS protocol message to standard message format."""
