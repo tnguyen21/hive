@@ -129,6 +129,125 @@ class CompletionMixin:
     # - FAIL_VALIDATION_NO_DIFF  -> log validation_failed + _handle_agent_failure
     # - SUCCESS_DONE             -> update done + enqueue merge + log completed
     # - ERROR_COMPLETION_HANDLER -> log completion_error
+    def _log_completion_skip(self, agent: AgentIdentity, reason: str):
+        """Log a completion-path skip reason."""
+        self.db.log_event(
+            agent.issue_id,
+            agent.agent_id,
+            "agent_complete_skipped",
+            {"reason": reason},
+        )
+
+    def _harvest_worker_notes(self, agent: AgentIdentity):
+        """Best-effort note harvesting from the worker worktree."""
+        import hive.orchestrator as _mod
+
+        read_notes_file = _mod.read_notes_file
+        remove_notes_file = _mod.remove_notes_file
+
+        # Harvest notes before terminal checks so canceled/failed workers'
+        # discoveries are still preserved.
+        try:
+            notes_data = read_notes_file(agent.worktree)
+            if notes_data:
+                for note in notes_data:
+                    self.db.add_note(
+                        issue_id=agent.issue_id,
+                        agent_id=agent.agent_id,
+                        content=note.get("content", ""),
+                        category=note.get("category", "discovery"),
+                        project=agent.project,
+                    )
+                self.db.log_event(agent.issue_id, agent.agent_id, "notes_harvested", {"count": len(notes_data)})
+                logger.info(f"Harvested {len(notes_data)} notes from {agent.name}")
+        except Exception as e:
+            logger.warning(f"Failed to harvest notes from {agent.name}: {e}")
+        finally:
+            remove_notes_file(agent.worktree)
+
+    async def _handle_completion_failure(self, agent: AgentIdentity, decision: CompletionDecision):
+        """Apply completion failure side effects and route through failure handling."""
+        import hive.orchestrator as _mod
+
+        if decision.transition == CompletionTransition.FAIL_BUDGET:
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "budget_exceeded",
+                {"issue_tokens": decision.budget_tokens, "limit": _mod.Config.MAX_TOKENS_PER_ISSUE},
+            )
+        elif decision.transition == CompletionTransition.FAIL_VALIDATION_NO_DIFF:
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "validation_failed",
+                {
+                    "reason": "No commits relative to main despite claiming success",
+                    "original_summary": decision.validation_original_summary,
+                },
+            )
+
+        if decision.result is not None:
+            await self._handle_agent_failure(agent, decision.result)
+
+    async def _handle_completion_success(
+        self,
+        agent: AgentIdentity,
+        decision: CompletionDecision,
+        file_result: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Apply success side effects. Returns True when teardown should remove the worktree."""
+        import hive.orchestrator as _mod
+
+        get_commit_hash = _mod.get_commit_hash
+
+        if decision.result is None:
+            raise RuntimeError("Missing completion result for success transition")
+
+        transitioned = self.db.try_transition_issue_status(
+            agent.issue_id,
+            from_status="in_progress",
+            to_status="done",
+            expected_assignee=agent.agent_id,
+        )
+        if not transitioned:
+            current_issue = self.db.get_issue(agent.issue_id)
+            current_status = current_issue.get("status") if current_issue else None
+            if current_status != "done":
+                self._log_completion_skip(
+                    agent,
+                    f"success result but issue is {current_status or 'missing'}, skipping merge enqueue",
+                )
+                return True
+
+        commit_hash = decision.result.git_commit or get_commit_hash(agent.worktree)
+        test_command = file_result.get("test_command") if file_result else None
+
+        self.db.enqueue_merge(
+            issue_id=agent.issue_id,
+            agent_id=agent.agent_id,
+            project=agent.project,
+            worktree=agent.worktree,
+            branch_name=f"agent/{agent.name}",
+            test_command=test_command,
+        )
+
+        agent_row = self.db.get_agent(agent.agent_id)
+        model = agent_row["model"] if agent_row else None
+
+        self.db.log_event(
+            agent.issue_id,
+            agent.agent_id,
+            "completed",
+            {
+                "summary": decision.result.summary,
+                "commit": commit_hash,
+                "artifacts": decision.result.artifacts,
+                "model": model,
+            },
+        )
+        return False
+
     async def handle_agent_complete(
         self,
         agent: AgentIdentity,
@@ -146,9 +265,6 @@ class CompletionMixin:
         import hive.orchestrator as _mod
 
         remove_result_file = _mod.remove_result_file
-        read_notes_file = _mod.read_notes_file
-        remove_notes_file = _mod.remove_notes_file
-        get_commit_hash = _mod.get_commit_hash
 
         if not self._try_claim_agent_for_handling(agent, handler_name="completion handling"):
             return
@@ -159,26 +275,7 @@ class CompletionMixin:
         try:
             # Always clean up the result file if it exists
             remove_result_file(agent.worktree)
-
-            # Harvest notes (best-effort) — do this BEFORE the canceled check
-            # so even canceled/failed workers' discoveries are saved.
-            try:
-                notes_data = read_notes_file(agent.worktree)
-                if notes_data:
-                    for note in notes_data:
-                        self.db.add_note(
-                            issue_id=agent.issue_id,
-                            agent_id=agent.agent_id,
-                            content=note.get("content", ""),
-                            category=note.get("category", "discovery"),
-                            project=agent.project,
-                        )
-                    self.db.log_event(agent.issue_id, agent.agent_id, "notes_harvested", {"count": len(notes_data)})
-                    logger.info(f"Harvested {len(notes_data)} notes from {agent.name}")
-            except Exception as e:
-                logger.warning(f"Failed to harvest notes from {agent.name}: {e}")
-            finally:
-                remove_notes_file(agent.worktree)
+            self._harvest_worker_notes(agent)
 
             decision = await self._decide_completion_transition(agent, file_result=file_result)
 
@@ -186,95 +283,25 @@ class CompletionMixin:
                 case CompletionTransition.SKIP_TERMINAL_ISSUE:
                     status = decision.terminal_status or "unknown"
                     remove_worktree_on_teardown = True
-                    self.db.log_event(
-                        agent.issue_id,
-                        agent.agent_id,
-                        "agent_complete_skipped",
-                        {"reason": f"issue already {status}, cleaning up session"},
-                    )
+                    self._log_completion_skip(agent, f"issue already {status}, cleaning up session")
 
                 case CompletionTransition.FAIL_BUDGET:
                     remove_worktree_on_teardown = True
-                    self.db.log_event(
-                        agent.issue_id,
-                        agent.agent_id,
-                        "budget_exceeded",
-                        {"issue_tokens": decision.budget_tokens, "limit": _mod.Config.MAX_TOKENS_PER_ISSUE},
-                    )
-                    if decision.result is not None:
-                        await self._handle_agent_failure(agent, decision.result)
+                    await self._handle_completion_failure(agent, decision)
 
                 case CompletionTransition.FAIL_VALIDATION_NO_DIFF:
                     remove_worktree_on_teardown = True
-                    self.db.log_event(
-                        agent.issue_id,
-                        agent.agent_id,
-                        "validation_failed",
-                        {
-                            "reason": "No commits relative to main despite claiming success",
-                            "original_summary": decision.validation_original_summary,
-                        },
-                    )
-                    if decision.result is not None:
-                        await self._handle_agent_failure(agent, decision.result)
+                    await self._handle_completion_failure(agent, decision)
 
                 case CompletionTransition.FAIL_ASSESSMENT:
                     remove_worktree_on_teardown = True
-                    if decision.result is not None:
-                        await self._handle_agent_failure(agent, decision.result)
+                    await self._handle_completion_failure(agent, decision)
 
                 case CompletionTransition.SUCCESS_DONE:
-                    if decision.result is None:
-                        raise RuntimeError("Missing completion result for success transition")
-
-                    transitioned = self.db.try_transition_issue_status(
-                        agent.issue_id,
-                        from_status="in_progress",
-                        to_status="done",
-                        expected_assignee=agent.agent_id,
-                    )
-                    if not transitioned:
-                        current_issue = self.db.get_issue(agent.issue_id)
-                        current_status = current_issue.get("status") if current_issue else None
-                        if current_status != "done":
-                            remove_worktree_on_teardown = True
-                            self.db.log_event(
-                                agent.issue_id,
-                                agent.agent_id,
-                                "agent_complete_skipped",
-                                {"reason": f"success result but issue is {current_status or 'missing'}, skipping merge enqueue"},
-                            )
-                            return
-
-                    # Get commit hash if available.
-                    commit_hash = decision.result.git_commit or get_commit_hash(agent.worktree)
-
-                    # Extract test_command from worker's file_result.
-                    test_command = file_result.get("test_command") if file_result else None
-
-                    self.db.enqueue_merge(
-                        issue_id=agent.issue_id,
-                        agent_id=agent.agent_id,
-                        project=agent.project,
-                        worktree=agent.worktree,
-                        branch_name=f"agent/{agent.name}",
-                        test_command=test_command,
-                    )
-
-                    # Get agent model from database.
-                    agent_row = self.db.get_agent(agent.agent_id)
-                    model = agent_row["model"] if agent_row else None
-
-                    self.db.log_event(
-                        agent.issue_id,
-                        agent.agent_id,
-                        "completed",
-                        {
-                            "summary": decision.result.summary,
-                            "commit": commit_hash,
-                            "artifacts": decision.result.artifacts,
-                            "model": model,
-                        },
+                    remove_worktree_on_teardown = await self._handle_completion_success(
+                        agent,
+                        decision,
+                        file_result=file_result,
                     )
 
                 case _:
