@@ -298,7 +298,7 @@ class CompletionMixin:
                 {"error": str(e), "transition": transition},
             )
         finally:
-            await self._teardown_agent(agent, remove_worktree=remove_worktree_on_teardown)
+            await self._cleanup_agent(agent, remove_worktree=remove_worktree_on_teardown)
 
     def _choose_escalation(self, issue_id: str, *, include_anomaly: bool = True) -> EscalationDecision:
         """Decide retry/switch/escalate tier for an issue."""

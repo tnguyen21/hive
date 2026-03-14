@@ -578,15 +578,6 @@ class OrchestratorCore:
         )
         self.db.conn.commit()
 
-    def _release_issue(self, issue_id: str, *, expected_assignee: str) -> bool:
-        """Release an issue back to the open queue (CAS)."""
-        return self.db.try_transition_issue_status(
-            issue_id,
-            from_status="in_progress",
-            to_status="open",
-            expected_assignee=expected_assignee,
-        )
-
     def _try_escalate_issue(
         self,
         issue_id: str,
@@ -654,15 +645,6 @@ class OrchestratorCore:
         except Exception as e:
             logger.debug(f"Best-effort cleanup failed ({label}): {e}")
 
-    async def _cleanup_session(self, agent: AgentIdentity):
-        """Abort and delete an agent's backend session.
-
-        Called after agent completion or failure to ensure the session
-        does not linger and consume tokens.
-        """
-        logger.info(f"Cleaning up session {agent.session_id} (agent={agent.agent_id}, issue={agent.issue_id}, worktree={agent.worktree})")
-        await self.backend.cleanup_session(agent.session_id, directory=agent.worktree)
-
     async def _cleanup_agent(
         self,
         agent: AgentIdentity,
@@ -676,7 +658,11 @@ class OrchestratorCore:
         import hive.orchestrator as _mod
 
         if cleanup_session:
-            await self._best_effort_cleanup("cleanup_session", self._cleanup_session(agent))
+            logger.info(f"Cleaning up session {agent.session_id} (agent={agent.agent_id}, issue={agent.issue_id}, worktree={agent.worktree})")
+            await self._best_effort_cleanup(
+                "cleanup_session",
+                self.backend.cleanup_session(agent.session_id, directory=agent.worktree),
+            )
 
         if unregister_agent and agent.agent_id in self.active_agents:
             self._unregister_agent(agent.agent_id)
@@ -721,7 +707,3 @@ class OrchestratorCore:
 
         if delete_agent_row:
             self._delete_agent_row(agent_id)
-
-    async def _teardown_agent(self, agent: AgentIdentity, *, remove_worktree: bool = False):
-        """Best-effort cleanup for session, in-memory registration, worktree, and DB state."""
-        await self._cleanup_agent(agent, remove_worktree=remove_worktree)

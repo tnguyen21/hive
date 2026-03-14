@@ -437,7 +437,7 @@ class LifecycleMixin:
                 {"error": str(e)},
             )
             # Tear down the agent so it doesn't leak in active_agents
-            await self._teardown_agent(agent)
+            await self._cleanup_agent(agent)
         finally:
             # Clean up using the snapshotted session_id, not agent.session_id.
             logger.debug(
@@ -647,7 +647,7 @@ class LifecycleMixin:
             {"reason": "issue canceled by user, session aborted"},
         )
 
-        await self._teardown_agent(agent, remove_worktree=True)
+        await self._cleanup_agent(agent, remove_worktree=True)
 
     async def handle_stalled_agent(self, agent: AgentIdentity):
         """
@@ -689,7 +689,7 @@ class LifecycleMixin:
                 await self._handle_agent_failure(agent, stall_result)
         finally:
             logger.debug(f"Stall transition for {agent.name}: {stalled_transition.value}")
-            await self._teardown_agent(agent, remove_worktree=True)
+            await self._cleanup_agent(agent, remove_worktree=True)
 
     async def check_stalled_agents(self):
         """Check for stalled agents owned by THIS daemon and handle them.
