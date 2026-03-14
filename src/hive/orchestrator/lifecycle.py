@@ -40,6 +40,15 @@ class MonitorSignal(str, Enum):
     STOP_MONITORING = "stop_monitoring"
 
 
+class AgentLivenessState(str, Enum):
+    """Observed liveness state for one agent/session probe."""
+
+    FILE_RESULT = "file_result"
+    SESSION_IDLE = "session_idle"
+    SESSION_BUSY = "session_busy"
+    SESSION_UNAVAILABLE = "session_unavailable"
+
+
 @dataclass
 class MonitorStep:
     """A single monitor loop outcome."""
@@ -47,6 +56,16 @@ class MonitorStep:
     signal: MonitorSignal
     detection_via: Optional[str] = None
     file_result: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class AgentLivenessProbe:
+    """Result of reading completion truth plus backend session state."""
+
+    state: AgentLivenessState
+    file_result: Optional[Dict[str, Any]] = None
+    session_status: Optional[str] = None
+    error: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -266,40 +285,6 @@ class LifecycleMixin:
         except Exception:
             return False
 
-    async def _poll_session_idle(
-        self,
-        session_id: str,
-        worktree: str,
-        *,
-        agent_id: Optional[str] = None,
-        issue_id: Optional[str] = None,
-    ) -> bool:
-        """Poll backend to check if a session has gone idle.
-
-        Fallback for when SSE events are missed (e.g., reconnect gap).
-        Returns True if the session is idle, False otherwise.
-        """
-        try:
-            status = await self.backend.get_session_status(session_id, directory=worktree)
-            status_type = status.get("type") if isinstance(status, dict) else None
-
-            if status_type == "idle":
-                logger.info(f"Session poll detected idle for session {session_id} (agent={agent_id}, issue={issue_id}, status={status})")
-                return True
-
-            if status_type in ("not_found", "error", None):
-                logger.warning(
-                    f"Session poll observed non-runnable status for session {session_id} (agent={agent_id}, issue={issue_id}, status={status})"
-                )
-            else:
-                logger.debug(
-                    f"Session poll observed active status for session {session_id} (agent={agent_id}, issue={issue_id}, status={status})"
-                )
-            return False
-        except Exception as e:
-            logger.warning(f"Session poll failed for session {session_id} (agent={agent_id}, issue={issue_id}): {e}")
-            return False
-
     async def _dispatch_worker_to_issue(
         self,
         *,
@@ -429,6 +414,10 @@ class LifecycleMixin:
                     return
                 if step.signal == MonitorSignal.STOP_MONITORING:
                     return
+                if step.signal == MonitorSignal.FILE_RESULT:
+                    file_result = step.file_result
+                    completion_detected_via = step.detection_via or completion_detected_via
+                    break
                 if step.signal == MonitorSignal.IDLE_HINT:
                     completion_detected_via = step.detection_via or completion_detected_via
                     idle_hint_seen = True
@@ -471,6 +460,45 @@ class LifecycleMixin:
             signal=MonitorSignal.FILE_RESULT,
             detection_via="file",
             file_result=file_result,
+        )
+
+    async def _probe_agent_liveness(
+        self,
+        agent: AgentIdentity,
+        *,
+        session_id: Optional[str] = None,
+    ) -> AgentLivenessProbe:
+        """Read result-file truth first, then one backend session-status snapshot."""
+        completion_truth = self._read_monitor_completion_truth(agent)
+        if completion_truth is not None:
+            return AgentLivenessProbe(
+                state=AgentLivenessState.FILE_RESULT,
+                file_result=completion_truth.file_result,
+            )
+
+        probe_session_id = session_id or agent.session_id
+        try:
+            status = await self.backend.get_session_status(probe_session_id, directory=agent.worktree)
+        except Exception as e:
+            return AgentLivenessProbe(
+                state=AgentLivenessState.SESSION_UNAVAILABLE,
+                error=str(e),
+            )
+
+        status_type = status.get("type") if isinstance(status, dict) else None
+        if status_type == "idle":
+            return AgentLivenessProbe(
+                state=AgentLivenessState.SESSION_IDLE,
+                session_status="idle",
+            )
+        if status_type == "busy":
+            return AgentLivenessProbe(
+                state=AgentLivenessState.SESSION_BUSY,
+                session_status="busy",
+            )
+        return AgentLivenessProbe(
+            state=AgentLivenessState.SESSION_UNAVAILABLE,
+            session_status=status_type,
         )
 
     async def _wait_for_monitor_signal(
@@ -523,22 +551,56 @@ class LifecycleMixin:
             await self.cancel_agent_for_issue(agent.issue_id)
             return MonitorStep(signal=MonitorSignal.CANCELED)
 
-        if await self._poll_session_idle(
-            session_id,
-            agent.worktree,
-            agent_id=agent.agent_id,
-            issue_id=agent.issue_id,
-        ):
+        probe = await self._probe_agent_liveness(agent, session_id=session_id)
+        if probe.state == AgentLivenessState.FILE_RESULT:
+            return MonitorStep(
+                signal=MonitorSignal.FILE_RESULT,
+                detection_via="poll_file",
+                file_result=probe.file_result,
+            )
+
+        if probe.state == AgentLivenessState.SESSION_IDLE:
+            logger.info(
+                f"Session poll detected idle for session {session_id} "
+                f"(agent={agent.agent_id}, issue={agent.issue_id}, status={probe.session_status})"
+            )
             return MonitorStep(
                 signal=MonitorSignal.IDLE_HINT,
                 detection_via="poll_hint",
             )
 
+        if probe.state == AgentLivenessState.SESSION_BUSY:
+            logger.debug(
+                f"Session poll observed active status for session {session_id} "
+                f"(agent={agent.agent_id}, issue={agent.issue_id}, status={probe.session_status})"
+            )
+        elif probe.error:
+            logger.warning(f"Session poll failed for session {session_id} (agent={agent.agent_id}, issue={agent.issue_id}): {probe.error}")
+        else:
+            logger.warning(
+                f"Session poll observed non-runnable status for session {session_id} "
+                f"(agent={agent.agent_id}, issue={agent.issue_id}, status={probe.session_status})"
+            )
+
         if not self._monitor_lease_expired(session_id, lease_duration):
             return MonitorStep(signal=MonitorSignal.CONTINUE_MONITORING)
 
+        if probe.state == AgentLivenessState.SESSION_BUSY:
+            self._session_last_activity[session_id] = datetime.now()
+            self.db.try_touch_agent_heartbeat(agent.agent_id)
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "heartbeat_refreshed",
+                {"session_status": "busy"},
+            )
+            return MonitorStep(signal=MonitorSignal.CONTINUE_MONITORING)
+
         # Heartbeat appears stale. Re-check file/session once.
-        check_result = await self._handle_stalled_with_session_check(agent)
+        check_result = await self._handle_stalled_with_session_check(
+            agent,
+            session_id_override=session_id,
+        )
         if check_result == StalledSessionCheckResult.CONTINUE_MONITORING:
             # Status is still busy; keep monitor alive.
             self._session_last_activity[session_id] = datetime.now()
@@ -672,7 +734,12 @@ class LifecycleMixin:
         for agent in stalled:
             await self._handle_stalled_with_session_check(agent)
 
-    async def _handle_stalled_with_session_check(self, agent: AgentIdentity) -> StalledSessionCheckResult:
+    async def _handle_stalled_with_session_check(
+        self,
+        agent: AgentIdentity,
+        *,
+        session_id_override: Optional[str] = None,
+    ) -> StalledSessionCheckResult:
         """Handle stalled agent with backend session status verification.
 
         Heartbeat-expiry policy:
@@ -682,55 +749,48 @@ class LifecycleMixin:
           - busy -> refresh heartbeat and continue monitoring
           - error/not_found -> stalled path
         """
-        import hive.orchestrator as _mod
-
-        read_result_file = _mod.read_result_file
-
-        file_result = read_result_file(agent.worktree)
-        if file_result is not None:
+        probe = await self._probe_agent_liveness(agent, session_id=session_id_override)
+        if probe.state == AgentLivenessState.FILE_RESULT:
             self.db.log_event(
                 agent.issue_id,
                 agent.agent_id,
                 "missed_completion",
                 {"source": "heartbeat_expiry", "reason": "result_file_present"},
             )
-            await self.handle_agent_complete(agent, file_result=file_result)
+            await self.handle_agent_complete(agent, file_result=probe.file_result)
             return StalledSessionCheckResult.STOP_MONITORING
 
-        try:
-            # Query backend for actual session status
-            status = await self.backend.get_session_status(agent.session_id, directory=agent.worktree)
-            status_type = status.get("type") if isinstance(status, dict) else None
+        if probe.state == AgentLivenessState.SESSION_IDLE:
+            # Idle is only a hint; completion still routes through standard handler.
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "missed_completion",
+                {"source": "heartbeat_expiry", "session_status": "idle"},
+            )
+            await self.handle_agent_complete(agent)
+            return StalledSessionCheckResult.STOP_MONITORING
 
-            if status_type == "idle":
-                # Idle is only a hint; completion still routes through standard handler.
-                self.db.log_event(
-                    agent.issue_id,
-                    agent.agent_id,
-                    "missed_completion",
-                    {"source": "heartbeat_expiry", "session_status": "idle"},
-                )
-                await self.handle_agent_complete(agent)
-                return StalledSessionCheckResult.STOP_MONITORING
+        if probe.state == AgentLivenessState.SESSION_BUSY:
+            activity_session_id = session_id_override or agent.session_id
+            self._session_last_activity[activity_session_id] = datetime.now()
+            self.db.try_touch_agent_heartbeat(agent.agent_id)
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "heartbeat_refreshed",
+                {"session_status": "busy"},
+            )
+            return StalledSessionCheckResult.CONTINUE_MONITORING
 
-            if status_type == "busy":
-                self._session_last_activity[agent.session_id] = datetime.now()
-                self.db.try_touch_agent_heartbeat(agent.agent_id)
-                self.db.log_event(
-                    agent.issue_id,
-                    agent.agent_id,
-                    "heartbeat_refreshed",
-                    {"session_status": "busy"},
-                )
-                return StalledSessionCheckResult.CONTINUE_MONITORING
-
-            if status_type in ("error", "not_found"):
-                await self.handle_stalled_agent(agent)
-                return StalledSessionCheckResult.STOP_MONITORING
-
-        except Exception as e:
+        if probe.error:
             # Backend API failure falls through to stalled path.
-            self.db.log_event(agent.issue_id, agent.agent_id, "session_check_failed", {"error": str(e), "fallback": "handle_stalled_agent"})
+            self.db.log_event(
+                agent.issue_id,
+                agent.agent_id,
+                "session_check_failed",
+                {"error": probe.error, "fallback": "handle_stalled_agent"},
+            )
 
         # Default fallback behavior
         await self.handle_stalled_agent(agent)

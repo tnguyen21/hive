@@ -142,7 +142,7 @@ async def test_bug1_monitor_poll_uses_snapshotted_session_id(temp_db, tmp_path):
     agent = _make_agent(temp_db, orch, name="poll-worker", issue_title="Step 1", session_id=old_session_id, worktree=str(tmp_path))
 
     orch.session_status_events[old_session_id] = asyncio.Event()
-    orch._poll_session_idle = AsyncMock(return_value=True)
+    mock_oc.get_session_status = AsyncMock(return_value={"type": "idle"})
     orch.handle_agent_complete = AsyncMock()
 
     async def timeout_and_mutate(awaitable, timeout):
@@ -153,11 +153,9 @@ async def test_bug1_monitor_poll_uses_snapshotted_session_id(temp_db, tmp_path):
     with patch("hive.orchestrator.asyncio.wait_for", side_effect=timeout_and_mutate):
         await orch.monitor_agent(agent)
 
-    orch._poll_session_idle.assert_awaited_once_with(
+    mock_oc.get_session_status.assert_awaited_once_with(
         old_session_id,
-        str(tmp_path),
-        agent_id=agent.agent_id,
-        issue_id=agent.issue_id,
+        directory=str(tmp_path),
     )
 
 
@@ -188,8 +186,6 @@ async def test_monitor_keeps_running_after_busy_heartbeat_refresh(temp_db, tmp_p
         raise asyncio.TimeoutError
 
     orch.handle_agent_complete = AsyncMock()
-    orch._poll_session_idle = AsyncMock(return_value=False)
-
     with (
         patch("hive.orchestrator.asyncio.wait_for", side_effect=timeout_and_stale),
         patch("hive.orchestrator.read_result_file", side_effect=[None, None, file_result]),
