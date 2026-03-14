@@ -376,20 +376,20 @@ class OrchestratorCore:
         self._issue_to_agent.clear()
         logger.info("All sessions shut down")
 
-    def _log_token_usage(self, agent: AgentIdentity, messages: List[Dict[str, Any]]):
+    def _log_token_usage(self, agent: AgentIdentity, msgs: List[Dict[str, Any]]):
         """
         Extract token usage from messages and log as 'tokens_used' event.
 
         Args:
             agent: Agent identity
-            messages: List of session messages from the backend
+            msgs: List of session messages from the backend
         """
         total_input_tokens = 0
         total_output_tokens = 0
         model = None
 
-        for message in messages:
-            metadata = message.get("metadata") or {}
+        for msg in msgs:
+            metadata = msg.get("metadata") or {}
             total_input_tokens += metadata.get("input_tokens", 0)
             total_output_tokens += metadata.get("output_tokens", 0)
             if msg_model := metadata.get("model"):

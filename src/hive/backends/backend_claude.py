@@ -256,10 +256,10 @@ class ClaudeWSBackend(HiveBackend):
         session = self.sessions.get(session_id)
         if not session:
             return []
-        messages = session.messages
+        msgs = session.messages
         if limit:
-            messages = messages[-limit:]
-        return [self._translate_message(m) for m in messages]
+            msgs = msgs[-limit:]
+        return [self._translate_message(m) for m in msgs]
 
     async def abort_session(self, session_id: str, directory: Optional[str] = None) -> bool:
         """Send interrupt control request."""

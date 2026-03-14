@@ -78,8 +78,8 @@ class CompletionMixin:
                 skip_reason=f"issue already {terminal_issue['status']}, cleaning up session",
             )
 
-        messages = await self.backend.get_messages(agent.session_id, directory=agent.worktree)
-        self._log_token_usage(agent, messages)
+        msgs = await self.backend.get_messages(agent.session_id, directory=agent.worktree)
+        self._log_token_usage(agent, msgs)
 
         if Config.MAX_TOKENS_PER_ISSUE:
             budget_tokens = self.db.get_issue_token_total(agent.issue_id)

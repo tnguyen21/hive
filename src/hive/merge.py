@@ -448,9 +448,9 @@ class MergeProcessor:
 
                 if status and status.get("type") == "idle":
                     # Session finished — verify new messages were produced (fence against stale results)
-                    messages = await self.backend.get_messages(session_id, directory=self.project_path)
+                    msgs = await self.backend.get_messages(session_id, directory=self.project_path)
 
-                    if len(messages) <= min_message_count:
+                    if len(msgs) <= min_message_count:
                         # No new messages, the prompt wasn't processed - continue waiting
                         continue
 
