@@ -12,14 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class IssuesMixin:
-    def try_transition_issue_status(
-        self,
-        issue_id: str,
-        *,
-        from_status: str,
-        to_status: str,
-        expected_assignee: Optional[str] = None,
-    ) -> bool:
+    def try_transition_issue_status(self, issue_id: str, *, from_status: str, to_status: str, expected_assignee: Optional[str] = None) -> bool:
         """CAS-style issue status transition.
 
         For transitions to 'open', clears assignee (INV-2).

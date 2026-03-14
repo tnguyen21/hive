@@ -43,13 +43,7 @@ class RefinerySessionDied(Exception):
 class MergeProcessor:
     """Processes the merge queue: rebase, test, merge, finalize."""
 
-    def __init__(
-        self,
-        db: Database,
-        backend: HiveBackend,
-        project_path: str,
-        project_name: str,
-    ):
+    def __init__(self, db: Database, backend: HiveBackend, project_path: str, project_name: str):
         self.db = db
         self.backend = backend
         self.project_path = str(Path(project_path).resolve())

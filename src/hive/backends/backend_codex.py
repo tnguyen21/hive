@@ -339,12 +339,7 @@ class CodexAppServerBackend(HiveBackend):
             return {"type": "not_found"}
         return {"type": "idle" if state.status != "busy" else "busy"}
 
-    async def get_messages(
-        self,
-        session_id: str,
-        directory: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         state = self.sessions.get(session_id)
         if not state:
             return []
@@ -356,13 +351,7 @@ class CodexAppServerBackend(HiveBackend):
         # Codex approvals are handled directly via JSON-RPC server->client requests.
         return []
 
-    async def reply_permission(
-        self,
-        request_id: str,
-        reply: str,
-        message: Optional[str] = None,
-        directory: Optional[str] = None,
-    ):
+    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
         # No-op: we auto-handle Codex approval requests.
         return
 

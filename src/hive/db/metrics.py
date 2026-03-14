@@ -43,12 +43,7 @@ class MetricsMixin:
         cursor = self.conn.execute(query, params)
         return cursor.fetchall()
 
-    def get_token_usage(
-        self,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        project: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    def get_token_usage(self, issue_id: Optional[str] = None, agent_id: Optional[str] = None, project: Optional[str] = None) -> Dict[str, Any]:
         """
         Get aggregated token usage from 'tokens_used' events.
 

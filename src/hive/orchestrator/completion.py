@@ -55,11 +55,7 @@ class CompletionDecision:
 class CompletionMixin:
     """Mixin providing agent completion and failure handling."""
 
-    async def _decide_completion_transition(
-        self,
-        agent: AgentIdentity,
-        file_result: Optional[Dict[str, Any]] = None,
-    ) -> CompletionDecision:
+    async def _decide_completion_transition(self, agent: AgentIdentity, file_result: Optional[Dict[str, Any]] = None) -> CompletionDecision:
         """Decision phase for completion handling.
 
         Determines the next completion transition and any payload required by
@@ -239,11 +235,7 @@ class CompletionMixin:
         )
         return False
 
-    async def handle_agent_complete(
-        self,
-        agent: AgentIdentity,
-        file_result: Optional[Dict[str, Any]] = None,
-    ):
+    async def handle_agent_complete(self, agent: AgentIdentity, file_result: Optional[Dict[str, Any]] = None):
         """
         Handle agent completion.
 

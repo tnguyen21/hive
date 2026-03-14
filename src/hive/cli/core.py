@@ -519,12 +519,7 @@ class HiveCLI(QueenMixin):
         }
 
     @cli_command(formatter=_fmt_message)
-    def dep_add(
-        self,
-        issue_id: str,
-        depends_on: str,
-        dep_type: str = "blocks",
-    ):
+    def dep_add(self, issue_id: str, depends_on: str, dep_type: str = "blocks"):
         """Add a dependency between issues."""
         # Verify both issues exist
         if not self.db.get_issue(issue_id):
@@ -745,12 +740,7 @@ class HiveCLI(QueenMixin):
     # ── Notes ─────────────────────────────────────────────────────────
 
     @cli_command(formatter=_fmt_add_note)
-    def add_note(
-        self,
-        content: str,
-        issue_id: Optional[str] = None,
-        category: str = "discovery",
-    ):
+    def add_note(self, content: str, issue_id: Optional[str] = None, category: str = "discovery"):
         """Add a note to the knowledge base."""
         note_id = self.db.add_note(agent_id=None, issue_id=issue_id, content=content, category=category, project=self.project_name)
 

@@ -462,12 +462,7 @@ class LifecycleMixin:
             file_result=file_result,
         )
 
-    async def _probe_agent_liveness(
-        self,
-        agent: AgentIdentity,
-        *,
-        session_id: Optional[str] = None,
-    ) -> AgentLivenessProbe:
+    async def _probe_agent_liveness(self, agent: AgentIdentity, *, session_id: Optional[str] = None) -> AgentLivenessProbe:
         """Read result-file truth first, then one backend session-status snapshot."""
         completion_truth = self._read_monitor_completion_truth(agent)
         if completion_truth is not None:

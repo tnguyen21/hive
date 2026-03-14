@@ -52,26 +52,14 @@ def _cli_session(state: AppState) -> Iterator:
         db.close()
 
 
-def _run_cli_command(
-    state: AppState,
-    command_name: str,
-    *args,
-    json_mode: bool | None = None,
-    **kwargs,
-) -> None:
+def _run_cli_command(state: AppState, command_name: str, *args, json_mode: bool | None = None, **kwargs) -> None:
     """Run a ``HiveCLI`` command through the shared execution pipeline."""
     use_json = state.json_mode if json_mode is None else json_mode
     with _cli_session(state) as cli:
         cli.run_command(command_name, *args, json_mode=use_json, **kwargs)
 
 
-def _run(
-    ctx: typer.Context,
-    command_name: str,
-    *args,
-    json_mode: bool | None = None,
-    **kwargs,
-) -> None:
+def _run(ctx: typer.Context, command_name: str, *args, json_mode: bool | None = None, **kwargs) -> None:
     """Run a CLI command using the ``AppState`` stored in the Typer context."""
     _run_cli_command(ctx.obj, command_name, *args, json_mode=json_mode, **kwargs)
 

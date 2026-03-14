@@ -17,11 +17,7 @@ logger = logging.getLogger(__name__)
 class OrchestratorCore:
     """Core orchestration engine for Hive."""
 
-    def __init__(
-        self,
-        db: Database,
-        backend: HiveBackend,
-    ):
+    def __init__(self, db: Database, backend: HiveBackend):
         """
         Initialize orchestrator.
 

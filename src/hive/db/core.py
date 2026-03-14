@@ -470,14 +470,7 @@ class DatabaseCore:
             )
             return cursor.rowcount == 1
 
-    def try_transition_merge_queue_status(
-        self,
-        queue_id: int,
-        *,
-        from_status: str,
-        to_status: str,
-        completed_at: Optional[str] = None,
-    ) -> bool:
+    def try_transition_merge_queue_status(self, queue_id: int, *, from_status: str, to_status: str, completed_at: Optional[str] = None) -> bool:
         """CAS-style merge_queue status transition.
 
         Returns:
@@ -565,13 +558,7 @@ class DatabaseCore:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def try_transition_agent_status(
-        self,
-        agent_id: str,
-        *,
-        from_status: str,
-        to_status: str,
-    ) -> bool:
+    def try_transition_agent_status(self, agent_id: str, *, from_status: str, to_status: str) -> bool:
         """CAS-style agent status transition."""
         with self.transaction() as conn:
             cursor = conn.execute(
@@ -585,12 +572,7 @@ class DatabaseCore:
             )
             return cursor.rowcount == 1
 
-    def try_touch_agent_heartbeat(
-        self,
-        agent_id: str,
-        *,
-        required_status: str = "working",
-    ) -> bool:
+    def try_touch_agent_heartbeat(self, agent_id: str, *, required_status: str = "working") -> bool:
         """Update an agent heartbeat if it is in the expected status."""
         with self.transaction() as conn:
             cursor = conn.execute(

@@ -63,12 +63,7 @@ class HiveBackend(ABC):
         """Get session status. Returns dict with {"type": "idle"|"busy"|"error"}."""
 
     @abstractmethod
-    async def get_messages(
-        self,
-        session_id: str,
-        directory: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get messages from a session."""
 
     @abstractmethod
@@ -76,13 +71,7 @@ class HiveBackend(ABC):
         """Get pending permission requests."""
 
     @abstractmethod
-    async def reply_permission(
-        self,
-        request_id: str,
-        reply: str,
-        message: Optional[str] = None,
-        directory: Optional[str] = None,
-    ):
+    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
         """Reply to a permission request."""
 
     # ── Event streaming ───────────────────────────────────────────────
@@ -125,9 +114,4 @@ class HiveBackend(ABC):
     async def __aenter__(self) -> Self: ...
 
     @abstractmethod
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None: ...
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None: ...

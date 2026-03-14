@@ -87,12 +87,7 @@ class FakeBackend(HiveBackend):
             return {"type": "not_found"}
         return {"id": session_id, "type": session["status"]}
 
-    async def get_messages(
-        self,
-        session_id: str,
-        directory: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         msgs = self.messages.get(session_id, [])
         if limit:
             return msgs[-limit:]
@@ -101,13 +96,7 @@ class FakeBackend(HiveBackend):
     async def get_pending_permissions(self, directory: Optional[str] = None) -> List[Dict[str, Any]]:
         return self.pending_permissions
 
-    async def reply_permission(
-        self,
-        request_id: str,
-        reply: str,
-        message: Optional[str] = None,
-        directory: Optional[str] = None,
-    ):
+    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
         self.pending_permissions = [p for p in self.pending_permissions if p.get("id") != request_id]
 
     # ── Event streaming ───────────────────────────────────────────────

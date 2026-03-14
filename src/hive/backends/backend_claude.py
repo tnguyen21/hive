@@ -246,12 +246,7 @@ class ClaudeWSBackend(HiveBackend):
 
         return {"type": session.status}
 
-    async def get_messages(
-        self,
-        session_id: str,
-        directory: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return collected messages, translated to standard format."""
         session = self.sessions.get(session_id)
         if not session:
@@ -309,13 +304,7 @@ class ClaudeWSBackend(HiveBackend):
         """No-op — CLI runs with bypassPermissions."""
         return []
 
-    async def reply_permission(
-        self,
-        request_id: str,
-        reply: str,
-        message: Optional[str] = None,
-        directory: Optional[str] = None,
-    ):
+    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
         """No-op — CLI runs with bypassPermissions."""
         pass
 
@@ -520,12 +509,7 @@ class ClaudeWSBackend(HiveBackend):
     async def __aenter__(self) -> "ClaudeWSBackend":
         return self
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
         self.stop()
         # Kill all child processes immediately (SIGKILL to process groups).
         # No graceful abort/WS-close — we're shutting down the whole daemon.
