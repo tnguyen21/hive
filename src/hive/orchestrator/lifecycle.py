@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import WORKER_PERMISSIONS
@@ -48,6 +49,27 @@ class MonitorStep:
     file_result: Optional[Dict[str, Any]] = None
 
 
+@dataclass(frozen=True)
+class SpawnContext:
+    """Resolved spawn inputs for a single worker launch."""
+
+    issue: Dict[str, Any]
+    issue_id: str
+    issue_project: str
+    agent_name: str
+    model: str
+    project_path: Path
+
+
+@dataclass
+class SpawnResources:
+    """Resources allocated while spawning a worker."""
+
+    agent_id: str
+    worktree: Optional[str] = None
+    session_id: Optional[str] = None
+
+
 class LifecycleMixin:
     """Mixin providing worker spawn, monitor, and stall handling."""
 
@@ -68,65 +90,93 @@ class LifecycleMixin:
 
     async def _spawn_worker_inner(self, issue: Dict[str, str]):
         """Inner spawn logic, wrapped by spawn_worker's TOCTOU guard."""
+        ctx = self._prepare_spawn(issue)
+        resources = await self._create_spawn_resources(ctx)
+        if resources is None:
+            return
+
+        if not await self._claim_spawn_issue(ctx, resources):
+            return
+
+        await self._activate_spawn(ctx, resources)
+
+    def _prepare_spawn(self, issue: Dict[str, Any]) -> SpawnContext:
+        """Resolve the immutable inputs for a worker spawn."""
         import hive.orchestrator as _mod
 
         Config = _mod.Config
-        create_worktree_async = _mod.create_worktree_async
 
         issue_id = issue["id"]
         issue_project = issue["project"]
         agent_name = generate_id("worker")
         model = issue.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
 
-        # Resolve project path from the DB — raises ValueError for unknown projects
+        # Resolve project path from the DB — raises ValueError for unknown projects.
         project_path = self._resolve_project_path(issue_project)
 
-        # Ensure the merge pool has a processor for this project (lazy registration)
+        # Ensure the merge pool has a processor for this project (lazy registration).
         self.merge_pool.get(issue_project, str(project_path))
 
-        # Create agent identity in database
-        agent_id = self.db.create_agent(
-            name=agent_name,
+        return SpawnContext(
+            issue=issue,
+            issue_id=issue_id,
+            issue_project=issue_project,
+            agent_name=agent_name,
             model=model,
-            metadata={"issue_id": issue_id},
-            project=issue_project,
+            project_path=project_path,
         )
 
-        # Create git worktree (in executor to avoid blocking event loop)
+    async def _create_spawn_resources(self, ctx: SpawnContext) -> Optional[SpawnResources]:
+        """Create the DB agent row and worktree needed before issue claim."""
+        import hive.orchestrator as _mod
+
+        agent_id = self.db.create_agent(
+            name=ctx.agent_name,
+            model=ctx.model,
+            metadata={"issue_id": ctx.issue_id},
+            project=ctx.issue_project,
+        )
+        resources = SpawnResources(agent_id=agent_id)
+
         try:
-            worktree_path = await create_worktree_async(str(project_path), agent_name)
+            resources.worktree = await _mod.create_worktree_async(str(ctx.project_path), ctx.agent_name)
         except Exception as e:
             self.db.log_event(
-                issue_id,
-                agent_id,
+                ctx.issue_id,
+                resources.agent_id,
                 "worktree_error",
                 {"error": _exc_detail(e)},
             )
-            await self._cleanup_spawn_orphan(agent_id=agent_id)
-            return
+            await self._cleanup_spawn_orphan(agent_id=resources.agent_id)
+            return None
 
-        # Atomic claim
-        claimed = self.db.claim_issue(issue_id, agent_id)
-        if not claimed:
-            # Someone else claimed it first, clean up worktree and delete agent
-            await self._cleanup_spawn_orphan(
-                agent_id=agent_id,
-                worktree=worktree_path,
-                remove_worktree=True,
-            )
-            return
+        return resources
 
-        # Create backend session
-        session_id = None  # Track for cleanup on failure
+    async def _claim_spawn_issue(self, ctx: SpawnContext, resources: SpawnResources) -> bool:
+        """Attempt to claim the issue for this freshly-created agent."""
+        claimed = self.db.claim_issue(ctx.issue_id, resources.agent_id)
+        if claimed:
+            return True
+
+        await self._cleanup_spawn_orphan(
+            agent_id=resources.agent_id,
+            worktree=resources.worktree,
+            remove_worktree=True,
+        )
+        return False
+
+    async def _activate_spawn(self, ctx: SpawnContext, resources: SpawnResources) -> Optional[AgentIdentity]:
+        """Create the backend session, register the agent, and dispatch work."""
+        assert resources.worktree is not None
+
         try:
             session = await self.backend.create_session(
-                directory=worktree_path,
-                title=f"{agent_name}: {issue['title']}",
+                directory=resources.worktree,
+                title=f"{ctx.agent_name}: {ctx.issue['title']}",
                 permissions=WORKER_PERMISSIONS,
             )
-            session_id = session["id"]
+            resources.session_id = session["id"]
 
-            # Update agent with session info
             self.db.conn.execute(
                 """
                 UPDATE agents
@@ -136,59 +186,60 @@ class LifecycleMixin:
                     last_progress_at = datetime('now')
                 WHERE id = ?
                 """,
-                (session_id, worktree_path, agent_id),
+                (resources.session_id, resources.worktree, resources.agent_id),
             )
             self.db.conn.commit()
 
-            # Create agent identity
             agent = AgentIdentity(
-                agent_id=agent_id,
-                name=agent_name,
-                issue_id=issue_id,
-                worktree=worktree_path,
-                session_id=session_id,
-                project=issue_project,
+                agent_id=resources.agent_id,
+                name=ctx.agent_name,
+                issue_id=ctx.issue_id,
+                worktree=resources.worktree,
+                session_id=resources.session_id,
+                project=ctx.issue_project,
             )
             self._register_active_agent(agent)
 
             await self._dispatch_worker_to_issue(
                 agent=agent,
-                issue=issue,
-                model=model,
+                issue=ctx.issue,
+                model=ctx.model,
                 started_event_type="worker_started",
                 started_event_detail={
-                    "session_id": session_id,
-                    "worktree": worktree_path,
+                    "session_id": resources.session_id,
+                    "worktree": resources.worktree,
                     "routing_method": "new_agent",
                     "prompt_version": get_prompt_version("worker"),
-                    "model": model,
+                    "model": ctx.model,
                 },
             )
+            return agent
 
         except Exception as e:
             self.db.log_event(
-                issue_id,
-                agent_id,
+                ctx.issue_id,
+                resources.agent_id,
                 "spawn_error",
                 {"error": _exc_detail(e)},
             )
             await self._cleanup_spawn_orphan(
-                agent_id=agent_id,
-                worktree=worktree_path,
-                session_id=session_id,
-                cleanup_session=bool(session_id),
+                agent_id=resources.agent_id,
+                worktree=resources.worktree,
+                session_id=resources.session_id,
+                cleanup_session=bool(resources.session_id),
                 unregister_agent=True,
                 mark_failed=True,
                 remove_worktree=True,
                 delete_agent_row=False,
             )
             self.db.try_transition_issue_status(
-                issue_id,
+                ctx.issue_id,
                 from_status="in_progress",
                 to_status="escalated",
-                expected_assignee=agent_id,
+                expected_assignee=resources.agent_id,
             )
-            self.db.log_event(issue_id, agent_id, "escalated", {"reason": "Spawn failure"})
+            self.db.log_event(ctx.issue_id, resources.agent_id, "escalated", {"reason": "Spawn failure"})
+            return None
 
     def _gather_notes_for_worker(self, issue_id: str, project: str) -> Optional[List[Dict[str, Any]]]:
         """Gather relevant notes to inject into a worker's prompt.
