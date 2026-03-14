@@ -22,6 +22,7 @@ Hive spawns `claude` CLI processes with
 """
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 import os
@@ -274,31 +275,26 @@ class ClaudeWSBackend(HiveBackend):
         if session.process and session.process.returncode is None:
             # Send SIGTERM to the process group (child is a session leader
             # via start_new_session=True) so grandchildren are also killed.
-            try:
+            with suppress(ProcessLookupError, PermissionError):
                 os.killpg(session.process.pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
             try:
                 await asyncio.wait_for(session.process.wait(), timeout=5)
             except asyncio.TimeoutError:
-                try:
+                with suppress(ProcessLookupError, PermissionError):
                     os.killpg(session.process.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    session.process.kill()
+                if session.process.returncode is None:
+                    with suppress(ProcessLookupError):
+                        session.process.kill()
         if session.ws and not session.ws.closed:
             await session.ws.close()
         return True
 
     async def cleanup_session(self, session_id: str, directory: Optional[str] = None):
         """Abort + delete. Best-effort."""
-        try:
+        with suppress(Exception):
             await self.abort_session(session_id, directory)
-        except Exception:
-            pass
-        try:
+        with suppress(Exception):
             await self.delete_session(session_id, directory)
-        except Exception:
-            pass
 
     async def get_pending_permissions(self, directory: Optional[str] = None) -> List[Dict[str, Any]]:
         """No-op — CLI runs with bypassPermissions."""
@@ -514,16 +510,12 @@ class ClaudeWSBackend(HiveBackend):
         # No graceful abort/WS-close — we're shutting down the whole daemon.
         for session_id, session in list(self.sessions.items()):
             if session.process and session.process.returncode is None:
-                try:
+                with suppress(ProcessLookupError, PermissionError):
                     os.killpg(session.process.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    try:
+                if session.process.returncode is None:
+                    with suppress(ProcessLookupError):
                         session.process.kill()
-                    except ProcessLookupError:
-                        pass
         self.sessions.clear()
         if self._runner:
-            try:
+            with suppress(Exception):
                 await asyncio.wait_for(self._runner.cleanup(), timeout=3)
-            except (asyncio.TimeoutError, Exception):
-                pass
