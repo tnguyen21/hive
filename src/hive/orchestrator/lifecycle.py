@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -275,11 +276,10 @@ class LifecycleMixin:
 
     def _is_issue_canceled(self, issue_id: str) -> bool:
         """Check if an issue has been canceled in the database."""
-        try:
+        with suppress(Exception):
             issue = self.db.get_issue(issue_id)
             return issue is not None and issue.get("status") == IssueStatus.CANCELED
-        except Exception:
-            return False
+        return False
 
     async def _dispatch_worker_to_issue(
         self,
@@ -693,8 +693,8 @@ class LifecycleMixin:
         # Check each active agent against heartbeat freshness in DB.
         stalled = []
         for agent_id, agent in list(self.active_agents.items()):
-            try:
-                cursor = self.db.conn.execute(
+            with suppress(Exception):
+                row = self.db.conn.execute(
                     """
                     SELECT last_heartbeat_at
                     FROM agents
@@ -705,12 +705,9 @@ class LifecycleMixin:
                       )
                     """,
                     (agent_id, f"-{deps.Config.LEASE_DURATION} seconds"),
-                )
-                row = cursor.fetchone()
+                ).fetchone()
                 if row:
                     stalled.append(agent)
-            except Exception:
-                pass
 
         # For stalled agents, check backend session status before handling
         for agent in stalled:

@@ -2,9 +2,10 @@
 
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..status import BackendSessionStatusType, SESSION_STATUS_EVENT, parse_backend_session_status_type
 from ..db import Database
@@ -192,10 +193,8 @@ class OrchestratorCore:
         # Find agent for this session and touch heartbeat in DB.
         agent_id = self._session_to_agent.get(session_id)
         if agent_id and agent_id in self.active_agents:
-            try:
+            with suppress(Exception):
                 self.db.try_touch_agent_heartbeat(agent_id)
-            except Exception:
-                pass  # Non-critical, best-effort
 
     async def _reconcile_fetch_live_sessions(self) -> Optional[set]:
         """Phase 0: fetch live session IDs from the backend.
@@ -264,10 +263,8 @@ class OrchestratorCore:
                 logger.info(f"Preserving worktree {worktree} for pending merge of {issue_id}")
                 return
 
-        try:
+        with suppress(Exception):
             await deps.remove_worktree_async(worktree)
-        except Exception:
-            pass
 
     async def _reconcile_cleanup_orphans(self, live_session_ids: Optional[set]) -> None:
         """Phase 2: cleanup orphan sessions alive on backend but not in DB."""
@@ -351,7 +348,7 @@ class OrchestratorCore:
         logger.info(f"Shutting down {len(self.active_agents)} active session(s)")
 
         for agent_id, agent in list(self.active_agents.items()):
-            try:
+            with suppress(Exception):
                 self.db.conn.execute(
                     """
                     UPDATE agents
@@ -368,13 +365,9 @@ class OrchestratorCore:
                     """,
                     (agent.issue_id,),
                 )
-            except Exception:
-                pass
 
-        try:
+        with suppress(Exception):
             self.db.conn.commit()
-        except Exception:
-            pass
 
         self.active_agents.clear()
         self._session_to_agent.clear()
@@ -601,13 +594,6 @@ class OrchestratorCore:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
 
-    async def _best_effort_cleanup(self, label: str, op: Awaitable[Any]):
-        """Run async cleanup operation and suppress failures with debug logging."""
-        try:
-            await op
-        except Exception as e:
-            logger.debug(f"Best-effort cleanup failed ({label}): {e}")
-
     async def _cleanup_agent(
         self,
         agent: AgentIdentity,
@@ -620,10 +606,8 @@ class OrchestratorCore:
         """Execute best-effort cleanup for an active or recently-active agent."""
         if cleanup_session:
             logger.info(f"Cleaning up session {agent.session_id} (agent={agent.agent_id}, issue={agent.issue_id}, worktree={agent.worktree})")
-            await self._best_effort_cleanup(
-                "cleanup_session",
-                self.backend.cleanup_session(agent.session_id, directory=agent.worktree),
-            )
+            with suppress(Exception):
+                await self.backend.cleanup_session(agent.session_id, directory=agent.worktree)
 
         if unregister_agent and agent.agent_id in self.active_agents:
             self._unregister_agent(agent.agent_id)
@@ -634,7 +618,8 @@ class OrchestratorCore:
             self._mark_agent_failed(agent.agent_id)
 
         if remove_worktree and agent.worktree:
-            await self._best_effort_cleanup("remove_worktree", deps.remove_worktree_async(agent.worktree))
+            with suppress(Exception):
+                await deps.remove_worktree_async(agent.worktree)
 
     async def _cleanup_spawn_orphan(
         self,
@@ -650,10 +635,8 @@ class OrchestratorCore:
     ):
         """Clean up an agent that failed before normal lifecycle ownership began."""
         if cleanup_session and session_id and worktree:
-            await self._best_effort_cleanup(
-                "spawn_session_cleanup",
-                self.backend.cleanup_session(session_id, directory=worktree),
-            )
+            with suppress(Exception):
+                await self.backend.cleanup_session(session_id, directory=worktree)
 
         if unregister_agent and agent_id in self.active_agents:
             self._unregister_agent(agent_id)
@@ -662,7 +645,8 @@ class OrchestratorCore:
             self._mark_agent_failed(agent_id)
 
         if remove_worktree and worktree:
-            await self._best_effort_cleanup("remove_worktree", deps.remove_worktree_async(worktree))
+            with suppress(Exception):
+                await deps.remove_worktree_async(worktree)
 
         if delete_agent_row:
             self._delete_agent_row(agent_id)

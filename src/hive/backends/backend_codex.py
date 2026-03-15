@@ -32,6 +32,7 @@ Internal contract details this file relies on:
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 import os
@@ -325,14 +326,10 @@ class CodexAppServerBackend(HiveBackend):
         return True
 
     async def cleanup_session(self, session_id: str, directory: Optional[str] = None):
-        try:
+        with suppress(Exception):
             await self.abort_session(session_id, directory=directory)
-        except Exception:
-            pass
-        try:
+        with suppress(Exception):
             await self.delete_session(session_id, directory=directory)
-        except Exception:
-            pass
 
     async def get_session_status(self, session_id: str, directory: Optional[str] = None) -> Dict[str, Any]:
         state = self.sessions.get(session_id)
@@ -465,10 +462,8 @@ class CodexAppServerBackend(HiveBackend):
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except Exception:
-            try:
+            with suppress(Exception):
                 proc.terminate()
-            except Exception:
-                pass
 
         try:
             await asyncio.wait_for(proc.wait(), timeout=3)
@@ -476,10 +471,8 @@ class CodexAppServerBackend(HiveBackend):
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except Exception:
-                try:
+                with suppress(Exception):
                     proc.kill()
-                except Exception:
-                    pass
 
     async def _read_stream_lines(self, stream: asyncio.StreamReader, *, errors: str = "strict"):
         while True:
@@ -671,11 +664,8 @@ class CodexAppServerBackend(HiveBackend):
                 await asyncio.sleep(interval)
                 if not self.running or state.status != BackendSessionState.BUSY:
                     break
-                try:
+                with suppress(Exception):
                     await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, BackendSessionState.BUSY))
-                except Exception:
-                    # Heartbeat is best-effort.
-                    pass
 
         state.heartbeat_task = asyncio.create_task(_beat())
 

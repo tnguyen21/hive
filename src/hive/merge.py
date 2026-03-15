@@ -6,6 +6,7 @@ Processes the done→finalized pipeline:
 """
 
 import asyncio
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -92,22 +93,17 @@ class MergeProcessor:
         """Initialize the merge processor, including eager refinery session creation."""
         # Reset any merge entries stuck in 'running' from a previous crash.
         # Without this, a daemon crash mid-merge leaves the entry permanently stuck.
-        try:
+        with suppress(Exception):
             cursor = self.db.conn.execute("SELECT COUNT(*) FROM merge_queue WHERE status = 'running'")
             stuck_count = cursor.fetchone()[0]
             if stuck_count > 0:
                 with self.db.transaction() as conn:
                     conn.execute("UPDATE merge_queue SET status = 'queued' WHERE status = 'running'")
                     self.db.log_system_event("stuck_merges_reset", {"count": stuck_count}, commit=False)
-        except Exception:
-            pass  # Non-fatal
 
-        try:
+        with suppress(Exception):
             # Pre-create refinery session so it's warm when first merge arrives
             await self._ensure_refinery_session()
-        except Exception:
-            # Non-fatal if creation fails, will fall back to lazy creation
-            pass
 
     async def health_check(self) -> bool:
         """Check if the refinery session is alive, recreate if needed.
@@ -324,19 +320,18 @@ class MergeProcessor:
 
         # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
         try:
-            notes_data = read_notes_file(worktree_path)
-            if notes_data:
-                for note in notes_data:
-                    self.db.add_note(
-                        issue_id=issue_id,
-                        agent_id=agent_id,
-                        content=note.get("content", ""),
-                        category=note.get("category", "discovery"),
-                        project=self.project_name,
-                    )
-                self.db.log_event(issue_id, agent_id, "notes_harvested", {"count": len(notes_data), "source": "refinery"})
-        except Exception:
-            pass  # Best-effort
+            with suppress(Exception):
+                notes_data = read_notes_file(worktree_path)
+                if notes_data:
+                    for note in notes_data:
+                        self.db.add_note(
+                            issue_id=issue_id,
+                            agent_id=agent_id,
+                            content=note.get("content", ""),
+                            category=note.get("category", "discovery"),
+                            project=self.project_name,
+                        )
+                    self.db.log_event(issue_id, agent_id, "notes_harvested", {"count": len(notes_data), "source": "refinery"})
         finally:
             remove_notes_file(worktree_path)
 
@@ -533,30 +528,25 @@ class MergeProcessor:
         Args:
             entry: Merge queue entry dict
         """
+
         # Clean up the backend session if one exists for the agent
         agent_id = entry.get("agent_id")
         if agent_id:
             agent = self.db.get_agent(agent_id)
             session_id = agent.get("session_id") if agent else None
             if session_id:
-                try:
+                with suppress(Exception):
                     await self.backend.cleanup_session(session_id, directory=entry.get("worktree"))
-                except Exception:
-                    pass  # Best-effort
 
         # Remove worktree (in executor to avoid blocking event loop)
         if entry.get("worktree"):
-            try:
+            with suppress(GitWorktreeError, FileNotFoundError, OSError):
                 await remove_worktree_async(entry["worktree"])
-            except (GitWorktreeError, FileNotFoundError, OSError):
-                pass  # Best-effort cleanup
 
         # Delete branch (in executor to avoid blocking event loop)
         if entry.get("branch_name"):
-            try:
+            with suppress(GitWorktreeError, FileNotFoundError, OSError):
                 await delete_branch_async(self.project_path, entry["branch_name"], force=True)
-            except (GitWorktreeError, FileNotFoundError, OSError):
-                pass  # Best-effort cleanup
 
         # Delete ephemeral agent (events/notes/merge_queue retain agent_id as correlation key)
         if agent_id:
@@ -615,12 +605,10 @@ class MergeProcessor:
         """
         # Check if existing session is still alive
         if self.refinery_session_id:
-            try:
+            with suppress(Exception):
                 status = await self.backend.get_session_status(self.refinery_session_id, directory=self.project_path)
                 if status is not None:
                     return self.refinery_session_id
-            except Exception:
-                pass
             self.refinery_session_id = None
 
         # Create new refinery session
