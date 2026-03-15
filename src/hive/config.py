@@ -57,6 +57,7 @@ _FIELDS: dict[str, FieldSpec] = {
     "codex_personality": FieldSpec("HIVE_CODEX_PERSONALITY", str, "pragmatic"),
     "codex_heartbeat_interval": FieldSpec("HIVE_CODEX_HEARTBEAT_INTERVAL", int, 60),
 }
+_FIELD_ATTRS = {_attr_name(key) for key in _FIELDS}
 
 
 def _read_hive_section(path: Path | None) -> dict:
@@ -167,6 +168,18 @@ class ConfigRegistry:
         cfg.load(project_root=project_root)
         return cfg
 
+    def _clear_shadowed_field_attrs(self) -> None:
+        """Drop config-field attrs set directly on the registry instance.
+
+        Some tests patch or assign `Config.MAX_AGENTS`-style attributes on the
+        registry object itself. If those survive into the next load, they shadow
+        delegated reads from `self.current`. Clearing them here makes each fresh
+        load behave like production.
+        """
+        for attr in _FIELD_ATTRS:
+            self.__dict__.pop(attr, None)
+        self.__dict__.pop("HIVE_DIR", None)
+
     def get(self, project_name: str, project_root: Path | None = None) -> _Config:
         """Get or lazy-load config for a named project."""
         if project_name not in self._configs:
@@ -175,6 +188,7 @@ class ConfigRegistry:
 
     def load_global(self, project_root: Path | None = None) -> _Config:
         """Load config for the current CLI context (backward compat)."""
+        self._clear_shadowed_field_attrs()
         self._global = self._load_config(project_root=project_root)
         return self._global
 

@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from ..status import IssueStatus
 from ..utils import AgentIdentity, CompletionResult
+from .deps import deps
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,6 @@ class CompletionMixin:
         Determines the next completion transition and any payload required by
         transition side effects.
         """
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-        assess_completion = _mod.assess_completion
-        has_diff_from_main_async = _mod.has_diff_from_main_async
-
         terminal_issue = self.db.get_issue(agent.issue_id)
         if terminal_issue and terminal_issue.get("status") in (IssueStatus.CANCELED, IssueStatus.FINALIZED):
             return CompletionDecision(
@@ -78,32 +73,32 @@ class CompletionMixin:
         msgs = await self.backend.get_messages(agent.session_id, directory=agent.worktree)
         self._log_token_usage(agent, msgs)
 
-        if Config.MAX_TOKENS_PER_ISSUE:
+        if deps.Config.MAX_TOKENS_PER_ISSUE:
             budget_tokens = self.db.get_issue_token_total(agent.issue_id)
-            if budget_tokens > Config.MAX_TOKENS_PER_ISSUE:
-                logger.warning(f"Issue {agent.issue_id} exceeded token budget ({budget_tokens} > {Config.MAX_TOKENS_PER_ISSUE})")
+            if budget_tokens > deps.Config.MAX_TOKENS_PER_ISSUE:
+                logger.warning(f"Issue {agent.issue_id} exceeded token budget ({budget_tokens} > {deps.Config.MAX_TOKENS_PER_ISSUE})")
                 return CompletionDecision(
                     transition=CompletionTransition.FAIL,
                     result=CompletionResult(
                         success=False,
-                        reason=f"Exceeded per-issue token budget ({budget_tokens} > {Config.MAX_TOKENS_PER_ISSUE})",
+                        reason=f"Exceeded per-issue token budget ({budget_tokens} > {deps.Config.MAX_TOKENS_PER_ISSUE})",
                         summary=f"Terminated: per-issue token budget exceeded ({budget_tokens} tokens)",
                     ),
                     failure_event_type="budget_exceeded",
                     failure_event_detail={
                         "issue_tokens": budget_tokens,
-                        "limit": Config.MAX_TOKENS_PER_ISSUE,
+                        "limit": deps.Config.MAX_TOKENS_PER_ISSUE,
                     },
                 )
 
-        result = assess_completion(file_result=file_result)
+        result = deps.assess_completion(file_result=file_result)
         if not result.success:
             return CompletionDecision(
                 transition=CompletionTransition.FAIL,
                 result=result,
             )
 
-        has_commits = await has_diff_from_main_async(agent.worktree)
+        has_commits = await deps.has_diff_from_main_async(agent.worktree)
         if not has_commits:
             return CompletionDecision(
                 transition=CompletionTransition.FAIL,
@@ -139,15 +134,10 @@ class CompletionMixin:
 
     def _harvest_worker_notes(self, agent: AgentIdentity):
         """Best-effort note harvesting from the worker worktree."""
-        import hive.orchestrator as _mod
-
-        read_notes_file = _mod.read_notes_file
-        remove_notes_file = _mod.remove_notes_file
-
         # Harvest notes before terminal checks so canceled/failed workers'
         # discoveries are still preserved.
         try:
-            notes_data = read_notes_file(agent.worktree)
+            notes_data = deps.read_notes_file(agent.worktree)
             if notes_data:
                 for note in notes_data:
                     self.db.add_note(
@@ -162,7 +152,7 @@ class CompletionMixin:
         except Exception as e:
             logger.warning(f"Failed to harvest notes from {agent.name}: {e}")
         finally:
-            remove_notes_file(agent.worktree)
+            deps.remove_notes_file(agent.worktree)
 
     async def _handle_completion_failure(self, agent: AgentIdentity, decision: CompletionDecision):
         """Apply completion failure side effects and route through failure handling."""
@@ -185,10 +175,6 @@ class CompletionMixin:
         file_result: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Apply success side effects. Returns True when teardown should remove the worktree."""
-        import hive.orchestrator as _mod
-
-        get_commit_hash = _mod.get_commit_hash
-
         if decision.result is None:
             raise RuntimeError("Missing completion result for success transition")
 
@@ -208,7 +194,7 @@ class CompletionMixin:
                 )
                 return True
 
-        commit_hash = decision.result.git_commit or get_commit_hash(agent.worktree)
+        commit_hash = decision.result.git_commit or deps.get_commit_hash(agent.worktree)
         test_command = file_result.get("test_command") if file_result else None
 
         self.db.enqueue_merge(
@@ -246,10 +232,6 @@ class CompletionMixin:
                 If provided, used directly for completion assessment (skips
                 message parsing heuristics).
         """
-        import hive.orchestrator as _mod
-
-        remove_result_file = _mod.remove_result_file
-
         if not self._try_claim_agent_for_handling(agent, handler_name="completion handling"):
             return
 
@@ -258,7 +240,7 @@ class CompletionMixin:
 
         try:
             # Always clean up the result file if it exists
-            remove_result_file(agent.worktree)
+            deps.remove_result_file(agent.worktree)
             self._harvest_worker_notes(agent)
 
             decision = await self._decide_completion_transition(agent, file_result=file_result)
@@ -295,21 +277,17 @@ class CompletionMixin:
 
     def _choose_escalation(self, issue_id: str, *, include_anomaly: bool = True) -> EscalationDecision:
         """Decide retry/switch/escalate tier for an issue."""
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
-        if include_anomaly and Config.ANOMALY_FAILURE_THRESHOLD and Config.ANOMALY_WINDOW_MINUTES:
-            recent_failures = self.db.count_events_in_window_after_reset(issue_id, "incomplete", Config.ANOMALY_WINDOW_MINUTES)
-            if recent_failures >= Config.ANOMALY_FAILURE_THRESHOLD:
+        if include_anomaly and deps.Config.ANOMALY_FAILURE_THRESHOLD and deps.Config.ANOMALY_WINDOW_MINUTES:
+            recent_failures = self.db.count_events_in_window_after_reset(issue_id, "incomplete", deps.Config.ANOMALY_WINDOW_MINUTES)
+            if recent_failures >= deps.Config.ANOMALY_FAILURE_THRESHOLD:
                 return EscalationDecision.ANOMALY_ESCALATE
 
         retry_count = self.db.count_events_by_type_since_reset(issue_id, "retry")
-        if retry_count < Config.MAX_RETRIES:
+        if retry_count < deps.Config.MAX_RETRIES:
             return EscalationDecision.RETRY
 
         agent_switch_count = self.db.count_events_by_type_since_reset(issue_id, "agent_switch")
-        if agent_switch_count < Config.MAX_AGENT_SWITCHES:
+        if agent_switch_count < deps.Config.MAX_AGENT_SWITCHES:
             return EscalationDecision.AGENT_SWITCH
 
         return EscalationDecision.ESCALATE
@@ -324,13 +302,9 @@ class CompletionMixin:
         model: Optional[str],
     ) -> bool:
         """Apply retry/switch/escalate side effects for a failure decision."""
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
         if decision == EscalationDecision.ANOMALY_ESCALATE:
-            recent_failures = self.db.count_events_in_window_after_reset(issue_id, "incomplete", Config.ANOMALY_WINDOW_MINUTES)
-            logger.warning(f"Anomaly: {recent_failures} failures on {issue_id} in {Config.ANOMALY_WINDOW_MINUTES}m — auto-escalating")
+            recent_failures = self.db.count_events_in_window_after_reset(issue_id, "incomplete", deps.Config.ANOMALY_WINDOW_MINUTES)
+            logger.warning(f"Anomaly: {recent_failures} failures on {issue_id} in {deps.Config.ANOMALY_WINDOW_MINUTES}m — auto-escalating")
             return self._try_escalate_issue(
                 issue_id,
                 agent.agent_id,
@@ -339,7 +313,7 @@ class CompletionMixin:
                 detail={
                     "reason": "Anomaly detection: rapid repeated failures",
                     "recent_failures": recent_failures,
-                    "window_minutes": Config.ANOMALY_WINDOW_MINUTES,
+                    "window_minutes": deps.Config.ANOMALY_WINDOW_MINUTES,
                     "final_failure_reason": reason,
                 },
                 skip_event_type="anomaly_escalate_skipped",
@@ -357,7 +331,7 @@ class CompletionMixin:
                 skip_reason="issue not releasable",
             ):
                 return False
-            logger.info(f"Retrying issue {issue_id} (attempt {retry_count + 1}/{Config.MAX_RETRIES})")
+            logger.info(f"Retrying issue {issue_id} (attempt {retry_count + 1}/{deps.Config.MAX_RETRIES})")
             return True
 
         if decision == EscalationDecision.AGENT_SWITCH:
@@ -372,7 +346,7 @@ class CompletionMixin:
                 skip_reason="issue not releasable",
             ):
                 return False
-            logger.info(f"Switching agent for issue {issue_id} (switch {agent_switch_count + 1}/{Config.MAX_AGENT_SWITCHES})")
+            logger.info(f"Switching agent for issue {issue_id} (switch {agent_switch_count + 1}/{deps.Config.MAX_AGENT_SWITCHES})")
             return True
 
         retry_count = self.db.count_events_by_type_since_reset(issue_id, "retry")

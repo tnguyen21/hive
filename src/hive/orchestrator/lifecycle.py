@@ -13,6 +13,7 @@ from ..prompts import build_retry_context, build_system_prompt, build_worker_pro
 from ..status import BackendSessionState, BackendSessionStatusType, IssueStatus, parse_backend_session_status_type
 from ..utils import AgentIdentity, CompletionResult, generate_id
 from .completion import _exc_detail
+from .deps import deps
 
 logger = logging.getLogger(__name__)
 
@@ -122,14 +123,10 @@ class LifecycleMixin:
 
     def _prepare_spawn(self, issue: Dict[str, Any]) -> SpawnContext:
         """Resolve the immutable inputs for a worker spawn."""
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
         issue_id = issue["id"]
         issue_project = issue["project"]
         agent_name = generate_id("worker")
-        model = issue.get("model") or Config.WORKER_MODEL or Config.DEFAULT_MODEL
+        model = issue.get("model") or deps.Config.WORKER_MODEL or deps.Config.DEFAULT_MODEL
 
         # Resolve project path from the DB — raises ValueError for unknown projects.
         project_path = self._resolve_project_path(issue_project)
@@ -148,8 +145,6 @@ class LifecycleMixin:
 
     async def _create_spawn_resources(self, ctx: SpawnContext) -> Optional[SpawnResources]:
         """Create the DB agent row and worktree needed before issue claim."""
-        import hive.orchestrator as _mod
-
         agent_id = self.db.create_agent(
             name=ctx.agent_name,
             model=ctx.model,
@@ -159,7 +154,7 @@ class LifecycleMixin:
         resources = SpawnResources(agent_id=agent_id)
 
         try:
-            resources.worktree = await _mod.create_worktree_async(str(ctx.project_path), ctx.agent_name)
+            resources.worktree = await deps.create_worktree_async(str(ctx.project_path), ctx.agent_name)
         except Exception as e:
             self.db.log_event(
                 ctx.issue_id,
@@ -359,10 +354,6 @@ class LifecycleMixin:
         Args:
             agent: Agent identity
         """
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
         # Snapshot the session_id we're monitoring and always clean up that key.
         # This keeps monitor cleanup stable even if the agent object is mutated.
         my_session_id = agent.session_id
@@ -379,7 +370,7 @@ class LifecycleMixin:
 
             # Poll loop: result file is the source of completion truth.
             # SSE/poll idle are only hints that completion may now be available.
-            check_interval = min(30, Config.LEASE_DURATION // 4)
+            check_interval = min(30, deps.Config.LEASE_DURATION // 4)
             completion_detected_via = "unknown"
             file_result: Optional[Dict[str, Any]] = None
             idle_hint_seen = False
@@ -409,7 +400,7 @@ class LifecycleMixin:
                     session_id=my_session_id,
                     event=event,
                     check_interval=check_interval,
-                    lease_duration=Config.LEASE_DURATION,
+                    lease_duration=deps.Config.LEASE_DURATION,
                 )
                 if step.signal == MonitorSignal.CANCELED:
                     return
@@ -452,9 +443,7 @@ class LifecycleMixin:
 
     def _read_monitor_completion_truth(self, agent: AgentIdentity) -> Optional[MonitorStep]:
         """Return structured completion truth when the result file is present."""
-        import hive.orchestrator as _mod
-
-        file_result = _mod.read_result_file(agent.worktree)
+        file_result = deps.read_result_file(agent.worktree)
         if file_result is None:
             return None
         return MonitorStep(
@@ -698,10 +687,6 @@ class LifecycleMixin:
         Now enhanced with session status inspection to avoid false positives
         from missed SSE events.
         """
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
         if not self.active_agents:
             return
 
@@ -719,7 +704,7 @@ class LifecycleMixin:
                         OR last_heartbeat_at < datetime('now', ?)
                       )
                     """,
-                    (agent_id, f"-{Config.LEASE_DURATION} seconds"),
+                    (agent_id, f"-{deps.Config.LEASE_DURATION} seconds"),
                 )
                 row = cursor.fetchone()
                 if row:

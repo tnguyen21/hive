@@ -11,6 +11,7 @@ from ..db import Database
 from ..merge import MergeProcessorPool
 from ..utils import AgentIdentity
 from ..backends import HiveBackend
+from .deps import deps
 
 logger = logging.getLogger(__name__)
 
@@ -212,10 +213,6 @@ class OrchestratorCore:
 
     async def _reconcile_stale_agent(self, agent: dict, live_session_ids: Optional[set]) -> None:
         """Reconcile one stale working agent from a previous daemon run."""
-        import hive.orchestrator as _mod
-
-        remove_worktree_async = _mod.remove_worktree_async
-
         agent_id = agent["id"]
         issue_id = agent["current_issue"]
         session_id = agent["session_id"]
@@ -268,7 +265,7 @@ class OrchestratorCore:
                 return
 
         try:
-            await remove_worktree_async(worktree)
+            await deps.remove_worktree_async(worktree)
         except Exception:
             pass
 
@@ -467,13 +464,9 @@ class OrchestratorCore:
 
     async def main_loop(self):
         """Main orchestration loop."""
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
         while self.running:
             try:
-                if len(self.active_agents) + len(self._spawning_issues) < Config.MAX_AGENTS:
+                if len(self.active_agents) + len(self._spawning_issues) < deps.Config.MAX_AGENTS:
                     ready = self.db.get_ready_queue(project=None, limit=1)
 
                     if ready:
@@ -486,15 +479,15 @@ class OrchestratorCore:
                         except Exception as e:
                             logger.error(f"Failed to spawn worker for {issue['id']}: {e}")
                     else:
-                        await asyncio.sleep(Config.POLL_INTERVAL)
+                        await asyncio.sleep(deps.Config.POLL_INTERVAL)
                 else:
-                    await asyncio.sleep(Config.POLL_INTERVAL)
+                    await asyncio.sleep(deps.Config.POLL_INTERVAL)
 
                 await self.check_stalled_agents()
 
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
-                await asyncio.sleep(Config.POLL_INTERVAL)
+                await asyncio.sleep(deps.Config.POLL_INTERVAL)
 
     def _on_merge_task_done(self, task: asyncio.Task):
         """Handle merge_processor_loop task completion/failure.
@@ -521,15 +514,11 @@ class OrchestratorCore:
         Runs on MERGE_POLL_INTERVAL, processes one merge at a time.
         Includes periodic health checks for the refinery session.
         """
-        import hive.orchestrator as _mod
-
-        Config = _mod.Config
-
         health_check_counter = 0
 
         while self.running:
             try:
-                if Config.MERGE_QUEUE_ENABLED:
+                if deps.Config.MERGE_QUEUE_ENABLED:
                     await self.merge_pool.process_all()
 
                 # Health check every 6 iterations (~60s at 10s poll interval)
@@ -540,7 +529,7 @@ class OrchestratorCore:
 
             except Exception as e:
                 logger.error(f"Error in merge processor: {e}")
-            await asyncio.sleep(Config.MERGE_POLL_INTERVAL)
+            await asyncio.sleep(deps.Config.MERGE_POLL_INTERVAL)
 
     def _mark_agent_failed(self, agent_id: str):
         """Mark an agent failed in DB and clear issue/session references."""
@@ -629,8 +618,6 @@ class OrchestratorCore:
         remove_worktree: bool = False,
     ):
         """Execute best-effort cleanup for an active or recently-active agent."""
-        import hive.orchestrator as _mod
-
         if cleanup_session:
             logger.info(f"Cleaning up session {agent.session_id} (agent={agent.agent_id}, issue={agent.issue_id}, worktree={agent.worktree})")
             await self._best_effort_cleanup(
@@ -647,7 +634,7 @@ class OrchestratorCore:
             self._mark_agent_failed(agent.agent_id)
 
         if remove_worktree and agent.worktree:
-            await self._best_effort_cleanup("remove_worktree", _mod.remove_worktree_async(agent.worktree))
+            await self._best_effort_cleanup("remove_worktree", deps.remove_worktree_async(agent.worktree))
 
     async def _cleanup_spawn_orphan(
         self,
@@ -662,8 +649,6 @@ class OrchestratorCore:
         delete_agent_row: bool = True,
     ):
         """Clean up an agent that failed before normal lifecycle ownership began."""
-        import hive.orchestrator as _mod
-
         if cleanup_session and session_id and worktree:
             await self._best_effort_cleanup(
                 "spawn_session_cleanup",
@@ -677,7 +662,7 @@ class OrchestratorCore:
             self._mark_agent_failed(agent_id)
 
         if remove_worktree and worktree:
-            await self._best_effort_cleanup("remove_worktree", _mod.remove_worktree_async(worktree))
+            await self._best_effort_cleanup("remove_worktree", deps.remove_worktree_async(worktree))
 
         if delete_agent_row:
             self._delete_agent_row(agent_id)
