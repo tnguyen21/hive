@@ -428,72 +428,71 @@ class MergeProcessor:
         timeout_seconds = Config.LEASE_DURATION if timeout is None else timeout
 
         poll_interval = 5
-        elapsed = 0
         consecutive_errors = 0
 
-        while elapsed < timeout_seconds:
-            await asyncio.sleep(poll_interval)
-            elapsed += poll_interval
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                while True:
+                    await asyncio.sleep(poll_interval)
 
-            try:
-                status = await self.backend.get_session_status(session_id, directory=self.project_path)
+                    try:
+                        status = await self.backend.get_session_status(session_id, directory=self.project_path)
 
-                # Detect dead session (backend returned error or not_found)
-                if status and status.get("type") in ("error", "not_found"):
-                    raise RefinerySessionDied(f"Refinery session returned {status.get('type')}")
+                        # Detect dead session (backend returned error or not_found)
+                        if status and status.get("type") in ("error", "not_found"):
+                            raise RefinerySessionDied(f"Refinery session returned {status.get('type')}")
 
-                if status and status.get("type") == "idle":
-                    # Session finished — verify new messages were produced (fence against stale results)
-                    msgs = await self.backend.get_messages(session_id, directory=self.project_path)
+                        if status and status.get("type") == "idle":
+                            # Session finished — verify new messages were produced (fence against stale results)
+                            msgs = await self.backend.get_messages(session_id, directory=self.project_path)
 
-                    if len(msgs) <= min_message_count:
-                        # No new messages, the prompt wasn't processed - continue waiting
-                        continue
+                            if len(msgs) <= min_message_count:
+                                # No new messages, the prompt wasn't processed - continue waiting
+                                continue
 
-                    # Read result from file
-                    file_result = read_result_file(worktree_path)
-                    remove_result_file(worktree_path)
+                            # Read result from file
+                            file_result = read_result_file(worktree_path)
+                            remove_result_file(worktree_path)
 
-                    if file_result:
-                        return {
-                            "status": file_result.get("status", "needs_human"),
-                            "summary": file_result.get("summary", ""),
-                            "tests_passed": file_result.get("tests_passed", False),
-                            "conflicts_resolved": int(file_result.get("conflicts_resolved", 0)),
-                        }
+                            if file_result:
+                                return {
+                                    "status": file_result.get("status", "needs_human"),
+                                    "summary": file_result.get("summary", ""),
+                                    "tests_passed": file_result.get("tests_passed", False),
+                                    "conflicts_resolved": int(file_result.get("conflicts_resolved", 0)),
+                                }
 
-                    # No result file — refinery didn't write one
-                    return {
-                        "status": "needs_human",
-                        "summary": "Refinery did not write result file (.hive-result.jsonl)",
-                        "tests_passed": False,
-                        "conflicts_resolved": 0,
-                    }
+                            # No result file — refinery didn't write one
+                            return {
+                                "status": "needs_human",
+                                "summary": "Refinery did not write result file (.hive-result.jsonl)",
+                                "tests_passed": False,
+                                "conflicts_resolved": 0,
+                            }
 
-                # Reset consecutive errors on successful status check
-                consecutive_errors = 0
+                        # Reset consecutive errors on successful status check
+                        consecutive_errors = 0
 
-            except RefinerySessionDied:
-                raise  # Propagate dead-session signal to caller for retry
-            except Exception as e:
-                consecutive_errors += 1
-                if consecutive_errors >= 5:
-                    # Too many consecutive errors, bail early with needs_human
-                    return {
-                        "status": "needs_human",
-                        "summary": f"Refinery failed after {consecutive_errors} consecutive errors: {str(e)}",
-                        "tests_passed": False,
-                        "conflicts_resolved": 0,
-                    }
-                # Otherwise continue polling
-
-        # Timeout
-        return {
-            "status": "needs_human",
-            "summary": f"Refinery timed out after {timeout}s",
-            "tests_passed": False,
-            "conflicts_resolved": 0,
-        }
+                    except RefinerySessionDied:
+                        raise  # Propagate dead-session signal to caller for retry
+                    except Exception as e:
+                        consecutive_errors += 1
+                        if consecutive_errors >= 5:
+                            # Too many consecutive errors, bail early with needs_human
+                            return {
+                                "status": "needs_human",
+                                "summary": f"Refinery failed after {consecutive_errors} consecutive errors: {str(e)}",
+                                "tests_passed": False,
+                                "conflicts_resolved": 0,
+                            }
+                        # Otherwise continue polling
+        except TimeoutError:
+            return {
+                "status": "needs_human",
+                "summary": f"Refinery timed out after {timeout_seconds}s",
+                "tests_passed": False,
+                "conflicts_resolved": 0,
+            }
 
     async def _finalize_issue(self, entry: Dict[str, Any]):
         """
