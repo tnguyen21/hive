@@ -1,0 +1,501 @@
+Base directory for this skill: /Users/tau/.claude/skills/sitrep
+
+# Repo Sitrep
+
+Produce a concise situational report on the repository rooted at the current working directory. The goal is to orient a developer who is context-switching into this project — or to prime an agent with the context it needs before starting work.
+
+You have a token budget but no time pressure. Be thorough in your research, concise in your output.
+
+## Phase 1: Gather (parallel where possible)
+
+Run all of the following in parallel using subagents or parallel tool calls. Do not skip any category — missing data is itself a signal.
+
+### 1a. Identity and purpose
+- Read README.md (or README.rst, README.txt) if it exists
+- Read CLAUDE.md / .claude/CLAUDE.md if it exists
+- Read pyproject.toml, package.json, Cargo.toml, or equivalent project manifest
+- Read any ARCHITECTURE.md, CONTRIBUTING.md, or docs/index.md
+- Identify: project name, one-line description, language/stack, intended audience
+
+### 1b. Structure
+- List top-level directory contents
+- Glob for source entry points (main.py, src/lib.rs, src/index.ts, etc.)
+- Count files and rough LOC by language (use `tokei` if available, otherwise `find | wc -l`)
+- Identify test locations and test framework
+- Note any monorepo structure (workspaces, packages/)
+
+### 1c. Git state
+- `git log --oneline -20` — recent commit history
+- `git log --oneline --since="2 weeks ago"` — velocity/recency
+- `git branch -a` — all branches, identify which look active vs stale
+- `git status` — uncommitted changes (staged and unstaged)
+- `git stash list` — any stashed work
+- `git diff --stat` — what's dirty right now
+- If there are uncommitted changes, `git diff` to understand what's in flight
+
+### 1d. CI / GitHub state
+- Check for .github/workflows/ — what CI exists?
+- If `gh` CLI is available and repo has a remote:
+  - `gh pr list` — open PRs
+  - `gh issue list` — open issues
+  - `gh run list -L 5` — recent CI runs and their status
+
+### 1e. Dependencies and health
+- Check for lockfiles (uv.lock, Cargo.lock, bun.lockb, package-lock.json, etc.)
+- If Rust: `cargo outdated` or check Cargo.toml versions
+- If Python/uv: `uv pip list --outdated` or similar
+- If JS/TS: check for outdated deps
+- Look for TODO/FIXME/HACK/XXX comments: `rg -c "TODO|FIXME|HACK|XXX"` (just counts per file)
+
+### 1f. Documentation and specs
+- Glob for any spec files, design docs, or ADRs (docs/, specs/, decisions/, *.spec.md)
+- Check for CHANGELOG.md or HISTORY.md
+- Look for any .md files in the repo root beyond README
+
+## Phase 2: Synthesize
+
+From the gathered data, produce a structured report. Do NOT just dump raw tool output. Interpret and synthesize.
+
+### Output format
+
+```
+# Sitrep: {project name}
+
+## What this is
+{One paragraph. What the project does, who it's for, what stack it uses.
+Mention the repo's maturity: greenfield, active development, mature/stable, stale.}
+
+## Current state
+- **Last commit**: {date, relative} — "{message}"
+- **Branch**: {current branch} ({N total branches})
+- **Dirty**: {yes/no — if yes, summarize what's uncommitted}
+- **CI**: {passing/failing/none}
+- **Open PRs**: {count, with titles if few}
+- **Open issues**: {count, with titles if few}
+
+## What's in flight
+{Based on recent commits, branch names, uncommitted changes, and open PRs,
+deduce what work is currently happening. What was the developer working on
+when they last touched this? What branches look like active feature work?}
+
+## Architecture snapshot
+{Brief description of how the code is organized. Entry points, main modules,
+key abstractions. Not a full architecture doc — just enough to orient.}
+
+## Health signals
+- **Dependencies**: {clean / N outdated — list names if <10}
+- **TODOs**: {count across codebase, hotspot files if clustered}
+- **Test coverage**: {exists/doesn't exist, framework, rough extent}
+- **Stale branches**: {list any that look mergeable or deletable}
+
+## Likely next moves
+{Based on everything above, what are the 2-4 most natural next actions?
+Be specific and opinionated. Examples:
+- "Finish the feature on branch X and merge"
+- "The uncommitted changes look like a half-done refactor of Y — decide whether to commit or discard"
+- "Bump the 3 outdated deps and run tests"
+- "This has no CI — adding a basic GitHub Actions workflow would be high-value"
+Don't suggest things that aren't grounded in what you found.}
+```
+
+## Guidelines
+
+- If a section has no data (e.g., no CI, no issues), say so in one line and move on. Don't pad.
+- "Likely next moves" is the most valuable section. Spend your reasoning budget there.
+- If you find CLAUDE.md or PM memory files, use them to inform your interpretation — they contain the developer's own context about the project.
+- Be dense, not verbose. No padding, no filler — but don't truncate meaningful findings to hit an arbitrary word count. Let the complexity of the repo dictate the length.
+- Do not use emoji.
+- Write in second person ("you were working on..." not "the developer was working on...").
+
+---
+
+<task-notification>
+<task-id>a9fe3507f61fab556</task-id>
+<tool-use-id>toolu_01WGnExBixZwtEJJtck3Nfqk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/3c6244a4-9e09-46fd-a21e-a3663f21637f/tasks/a9fe3507f61fab556.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather repo identity and docs" completed</summary>
+<result>Perfect! Let me compile the final research report.
+
+---
+
+## Project Research Summary
+
+### Project Identity
+- **Name**: Hive
+- **One-line description**: Multi-agent coding orchestrator that coordinates parallel Claude Code workers against a shared issue queue with automated merge processing
+- **Language/Stack**: Python 3.12+, SQLite (WAL mode), aiohttp, Typer CLI
+- **Intended Audience**: Software teams running decomposable coding tasks; developers needing parallel LLM-driven implementation, refactoring, or feature work with human review gates
+
+---
+
+### Key Documentation Found
+
+1. **README.md** — Primary user guide covering:
+   - When to use Hive vs Claude Code (multi-step workflows)
+   - How it works (Issues, Workers, Queen orchestration pattern)
+   - Quick start and configuration
+   - CLI command reference (25+ commands)
+   - Backend configuration (Claude WS or Codex)
+
+2. **TECHNICAL_DESIGN_DOC.md** — Implementation spec (2026-02-16):
+   - Architecture overview (orchestrator → workers → SQLite queue)
+   - Data model (7 tables: issues, dependencies, agents, events, notes, merge_queue)
+   - Scheduling and claiming logic
+   - Orchestrator runtime (startup, main loop, worker spawn, completion detection)
+   - Merge pipeline (2-tier: mechanical rebase + tests, then Refinery LLM fallback)
+   - Backend abstraction (OpenCode REST + SSE, Claude WS)
+   - Prompt system and file protocols
+   - CLI surface (25+ commands)
+   - Doctor invariants and cost tracking
+
+3. **IMPLEMENTATION_NOTES.md** — Status and post-mortems (2026-03-15):
+   - Phases 1-8 completed (full orchestrator with 250 passing tests)
+   - Delivered features: orchestration, merge pipeline, notes system, cost tracking
+   - Post-mortem on infinite spawn loop bug (2026-02-14) — stalled agents bypassed retry escalation
+   - Phase 8 complexity cleanup: deleted `tools.py`, simplified completion detection, fixed retry logic
+   - Open questions on scale ceiling, cost management, OpenCode dependency
+
+4. **PYTHON_REFACTOR_SUGGESTIONS.md** — Maintenance guidance (2026-03-15):
+   - Suggests `StrEnum` for domain statuses across orchestrator, backends, CLI
+   - Replace `Dict[str, Any]` payloads with `TypedDict` or `@dataclass`
+   - Context managers for DB/resource/environment cleanup
+   - Explicit state machines with `match` or dispatch tables
+   - Declarative config and migration metadata
+   - Standardize repeated DB idioms
+
+5. **Additional docs** (`/docs/`):
+   - `ORCHESTRATOR_LOC_REDUCTION_PLAN.md` — Follow-up refactoring roadmap
+   - `NOTES_RAG_DESIGN.md` — Knowledge transfer protocol design
+   - `NOTES_SPEC.md` — Inter-worker note system spec
+   - `SMART_ROUTING_SPEC.md` — Capability-based worker routing
+   - `ABBR.md` — Project abbreviations and terminology
+
+6. **pyproject.toml**:
+   - Python 3.12+ required
+   - Core deps: aiohttp, pyyaml, rich, typer
+   - Optional: datasette (UI)
+   - Dev: pytest-asyncio, pytest-xdist, pytest-timeout
+   - Ruff linter with 144-char line length
+
+---
+
+### Architecture at a Glance
+
+```
+Human (CLI)
+    ↓
+SQLite DB (~/.hive/hive.db)
+    ↓
+Orchestrator (async loop)
+  - Ready queue polling & claiming
+  - Worker spawn & lifecycle
+  - Retry/escalation logic
+    ↓
+Workers (per-issue git worktrees)
+  - Claude Code sessions via OpenCode or Claude WS
+  - Parallel execution, up to configured concurrency
+    ↓
+Merge Pipeline (2-tier)
+  - Tier 1: Mechanical (rebase + tests)
+  - Tier 2: Refinery LLM (conflict resolution)
+```
+
+---
+
+### Implementation Status
+- **Alpha software** with 250 passing unit tests across 15 modules
+- ~6,500 lines production code (Python)
+- **Full feature set**: orchestration, worker lifecycle, merge queue, notes, cost tracking, CLI (25+ commands)
+- Recent cleanup resolved complexity (deleted 544-line indirection layer, simplified completion detection)
+- Known issue: Infinite spawn loop post-mortem (2026-02-14) fixed via universal retry budget enforcement
+
+---
+
+### File Locations
+- **Main code**: `/Users/tau/projects/hive/src/hive/`
+- **Config**: `/Users/tau/projects/hive/src/hive/config.py`
+- **Database**: `/Users/tau/projects/hive/src/hive/db/` (core.py, issues.py, notes.py, metrics.py)
+- **Orchestrator**: `/Users/tau/projects/hive/src/hive/orchestrator/` (core.py, lifecycle.py, completion.py)
+- **Merge processor**: `/Users/tau/projects/hive/src/hive/merge.py`
+- **Backends**: `/Users/tau/projects/hive/src/hive/backends/` (base.py, backend_opencode.py, backend_claude.py, backend_codex.py)
+- **CLI**: `/Users/tau/projects/hive/src/hive/cli/` (core.py, queen.py, rich_views.py)
+- **Tests**: `/Users/tau/projects/hive/tests/`
+- **Docs**: `/Users/tau/projects/hive/docs/`</result>
+<usage><total_tokens>35228</total_tokens><tool_uses>9</tool_uses><duration_ms>19438</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/3c6244a4-9e09-46fd-a21e-a3663f21637f/tasks/a9fe3507f61fab556.output
+
+---
+
+<task-notification>
+<task-id>a364ed9968b5e0754</task-id>
+<tool-use-id>toolu_01WDTV4SzooLX3eLDSJmKHdm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/3c6244a4-9e09-46fd-a21e-a3663f21637f/tasks/a364ed9968b5e0754.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather CI, GitHub, deps, health" completed</summary>
+<result>Perfect! Now let me compile my findings into a comprehensive report.
+
+## Project CI, Dependencies, and Health Report
+
+### 1. CI/GitHub Workflows
+- **No `.github/workflows/` directory** — No GitHub Actions CI configured
+- **Pre-commit hooks** exist at `.pre-commit-config.yaml` with:
+  - Ruff linting and formatting (astral-sh/ruff v0.9.7)
+  - Local `ty` type checking hook (runs `uv run ty check src`)
+  - Integration tests hook (runs `uv run pytest -m integration -q`)
+
+### 2. GitHub CLI Status
+- GitHub CLI (`gh`) is not available or not authenticated in this environment
+
+### 3. Lockfiles
+- **uv.lock** exists (1,147 lines) — active dependency management with `uv`
+- No other lockfiles found (no Cargo.lock, bun.lockb, package-lock.json)
+
+### 4. Dependencies (from pyproject.toml)
+
+**Core Dependencies:**
+- aiohttp >= 3.9.0 (async HTTP client/server)
+- pyyaml >= 6.0 (YAML parsing)
+- rich >= 13.9.0 (CLI formatting)
+- typer >= 0.16.0 (CLI framework)
+
+**Dev Dependencies (via dependency-groups):**
+- pytest >= 9.0.2
+- pytest-asyncio >= 1.3.0
+- pytest-timeout >= 2.4.0
+- pytest-xdist >= 3.5.0 (distributed testing)
+- datasette >= 0.65 (SQL inspector UI)
+- ty >= 0.0.23 (type checker)
+
+**Optional Dependencies:**
+- datasette >= 0.65 (for UI extras)
+
+**Build System:**
+- hatchling (as build backend)
+- Python >= 3.12 required
+
+### 5. Code Quality Markers
+- **No TODO/FIXME/HACK/XXX markers found** — Clean codebase with no TODO debt tracked in comments
+
+### 6. Test Infrastructure
+- **16 test files** in `/tests/` directory:
+  - test_backend_codex.py
+  - test_claude_ws.py
+  - test_cli.py
+  - test_config.py
+  - test_cost_guardrails.py
+  - test_db.py
+  - test_diag.py
+  - test_git.py
+  - test_ids.py
+  - test_integration.py
+  - test_merge.py
+  - test_metrics.py
+  - test_orchestrator.py
+  - test_prompts.py
+  - test_race_conditions.py
+  - test_utils.py
+
+- **conftest.py** (258 lines) provides:
+  - Auto-loading of global Config before each test
+  - Temp database and git repo fixtures
+  - Integration orchestrator fixture with fast polling (POLL_INTERVAL=0.1, LEASE_DURATION=4)
+  - FakeBackend for testing SSE/WebSocket communication
+  - Helper functions: `run_orchestrator_until()`, `await_session_created()`, `complete_worker()`, `create_worker_commit()`, `write_hive_result()`
+
+- **pytest.ini** configuration:
+  - Custom markers: `integration` (marks integration tests)
+  - Default options: `-v -m "not integration" -n auto` (verbose, skip integration by default, auto xdist workers)
+  - Integration tests get 30-second timeout
+
+### 7. Environment Files
+- **No `.env` or `.env.example` files found**
+- Configuration via `.hive.toml` (local), `~/.hive/config.toml` (user), and environment variables
+- `.hive.toml` in project root shows example: backend selection (claude/codex), token limits
+
+### 8. Build/Task Files
+- **No Makefile or justfile** — Uses uv for task running
+- Tasks run via: `uv run <command>` (e.g., `uv run pytest`, `uv run ty check`, `uv run ruff`)
+
+### 9. Additional Health Signals
+- **uv.lock** is actively maintained (revision 3, Python >= 3.12)
+- **.pre-commit hooks** enforce code quality gates:
+  - Ruff format check must pass
+  - Type checking via `ty` must pass
+  - Integration tests must pass (on commit)
+- **.gitignore** is comprehensive: excludes venv, databases, build artifacts, analysis-output, .claude/, .opencode/, .worktrees
+
+### 10. Recent Work (from git status)
+- Modified files ready for commit:
+  - `docs/IMPLEMENTATION_NOTES.md`
+  - `src/hive/db/core.py`
+  - `src/hive/merge.py`
+  - `src/hive/orchestrator/core.py`
+  - `src/hive/orchestrator/lifecycle.py`
+- Untracked new file: `docs/PYTHON_REFACTOR_SUGGESTIONS.md`
+
+**Summary:** This is a mature Python project with solid testing infrastructure, no CI/CD pipeline (local pre-commit hooks only), and no TODO/FIXME debt. Uses `uv` for dependency management, pytest for testing with xdist parallelization, and requires Python 3.12+. Active development with recent changes to orchestrator and database modules.</result>
+<usage><total_tokens>26324</total_tokens><tool_uses>27</tool_uses><duration_ms>32212</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/3c6244a4-9e09-46fd-a21e-a3663f21637f/tasks/a364ed9968b5e0754.output
+
+---
+
+<task-notification>
+<task-id>a421762ccaacd98a6</task-id>
+<tool-use-id>toolu_014uuJMk1121SHKdYLmZYvWE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/3c6244a4-9e09-46fd-a21e-a3663f21637f/tasks/a421762ccaacd98a6.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather git state and structure" completed</summary>
+<result>Perfect! Now let me compile and report all findings:
+
+## Git State & Code Structure Report
+
+### 1. Git Log (Last 20 Commits)
+```
+b551d42 Use shared enums for backend session status
+b5da722 Use shared status enums for issue state
+0718bb2 Freeze identity-like dataclasses
+57fa342 Share Codex stream reader logic
+b158e38 Use asyncio.timeout for refinery polling
+049c7bb Add slots to hot-path dataclasses
+0222367 Use Path for git worktree cleanup
+4935118 Inline permission decision lookup
+76996e8 Use removesuffix for repo parsing
+7ae52c1 Use suppress for best-effort cleanup
+290a01c Use match-case for protocol dispatch
+dbedfb1 Use lru_cache for prompt templates
+c42b025 Remove abbreviation adoption checklist
+a6a4de7 Adopt res for scratch locals
+b7161ca Collapse short multiline signatures
+3e6abea Rename anomaly window metrics helper
+74696b5 Adopt msg abbreviations in local scopes
+7b20253 Adopt ctx and exc abbreviations
+a1ced83 Refine abbreviation adoption guidance
+43a4f59 Trim orchestrator cleanup wrappers
+```
+
+### 2. Git Log (Last 2 Weeks)
+All 20 commits shown above fall within the last 2 weeks, indicating active development with consistent small, focused commits.
+
+### 3. Branches
+**Local:**
+- `main` (current, ahead by 10 commits)
+- `entire/b551d42-e3b0c4`
+- `entire/checkpoints/v1`
+- `feat/notes-delivery`
+
+**Remote tracking:**
+- `remotes/origin/HEAD -> origin/main`
+- Multiple `remotes/origin/bolt/*` performance optimization branches
+- `remotes/origin/entire/*` branches
+- `remotes/origin/perf/*` branches
+
+### 4. Current Git Status
+**Branch:** main (10 commits ahead of origin/main)
+**Modified files (5):**
+- `docs/IMPLEMENTATION_NOTES.md` (+1 line, date update)
+- `src/hive/db/core.py` (+18 lines, new `foreign_keys_disabled()` context manager)
+- `src/hive/merge.py` (+14 lines/-9 lines, refactored to use transaction helpers)
+- `src/hive/orchestrator/core.py` (+36 lines/-21 lines, refactored agent cleanup)
+- `src/hive/orchestrator/lifecycle.py` (+24 lines/-24 lines, refactored session update to use transaction)
+
+**Untracked files (1):**
+- `docs/PYTHON_REFACTOR_SUGGESTIONS.md`
+
+**Diff stats:**
+- 5 files changed, 52 insertions(+), 43 deletions(-)
+
+### 5. Stash List
+6 stashes present:
+- `stash@{0}`: WIP on main: cab6319 improve notes spec
+- `stash@{1}`: WIP on rename-claude-backend-and-add-stop
+- `stash@{2}`: WIP on feat/claude-ws-backend
+- `stash@{3}`: WIP on fix/session-worktree-leaks
+- `stash@{4}`: WIP on chore/pre-commit-hooks
+- `stash@{5}`: WIP on fix/session-worktree-leaks
+
+### 6. Diff Summary (Uncommitted Changes)
+The changes show a refactoring pattern: centralizing transaction handling and foreign key management. Key refactor:
+- New `foreign_keys_disabled()` context manager in `DatabaseCore`
+- Use of `with self.db.transaction()` instead of manual `execute()` + `commit()` calls
+- Consolidation of agent cleanup patterns
+
+### 7. Top-Level Directory Contents
+Key directories: `.git`, `.venv`, `.claude`, `.hive`, `.entire`, `.worktrees`, `src`, `tests`, `docs`, `analysis-output`, `scripts`
+Key files: `pyproject.toml`, `uv.lock`, `pytest.ini`, `README.md`, `.pre-commit-config.yaml`, `.hive.toml`
+
+### 8. Entry Points
+**CLI Entry Point:** `src/hive/cli/parser.py` → `main()` function
+**Project script:** `hive = "hive.cli:main"` (in pyproject.toml)
+- No direct `__main__.py` found
+- No `main.py` in root
+- CLI structure: `src/hive/cli/` directory with `parser.py`, `core.py`, `typer_app.py`
+
+### 9. Lines of Code (LOC)
+**Total Python LOC in src:** ~9,860 lines
+**By module:**
+- 31 Python files in src/hive
+- 16 test files in tests/
+
+### 10. Test Framework & Location
+**Framework:** pytest (with plugins: pytest-asyncio, pytest-timeout, pytest-xdist)
+**Test location:** `/Users/tau/projects/hive/tests/` (16 test files)
+**Config file:** `pytest.ini` (lines: markers for integration tests, addopts: `-v -m "not integration" -n auto`)
+**Conftest:** `tests/conftest.py` (9,364 bytes)
+
+### 11. File Extensions in src/
+- `.py` files: 31
+- `.json` files: 1 (datasette_metadata.json)
+
+### Detailed Source File Structure
+
+**Root level modules:**
+- `src/hive/__init__.py`
+- `src/hive/config.py` (7,769 bytes - config layer: defaults → ~/.hive/config.toml → .hive.toml → env)
+- `src/hive/daemon.py` (11,200 bytes - daemon management)
+- `src/hive/diag.py` (9,760 bytes - diagnostics)
+- `src/hive/git.py` (6,858 bytes - git operations)
+- `src/hive/merge.py` (27,663 bytes - merge processor)
+- `src/hive/prompts.py` (11,531 bytes - prompt templates)
+- `src/hive/status.py` (1,611 bytes)
+- `src/hive/utils.py` (5,666 bytes)
+
+**Database module (`src/hive/db/`):**
+- `core.py` (transaction management, database lifecycle)
+- `issues.py` (issue queries)
+- `metrics.py` (metrics tracking)
+- `notes.py` (notes management)
+
+**Backends module (`src/hive/backends/`):**
+- `base.py` (abstract backend interface)
+- `backend_claude.py` (Claude WebSocket backend)
+- `backend_codex.py` (Codex JSON-RPC backend)
+
+**CLI module (`src/hive/cli/`):**
+- `core.py` (33,914 bytes - main CLI logic)
+- `typer_app.py` (19,071 bytes - Typer app setup)
+- `parser.py` (entry point with `main()`)
+- `queen.py` (11,586 bytes - queen session management)
+- `global_status.py` (5,254 bytes)
+- `rich_views.py` (22,559 bytes - Rich rendering)
+- `formatters.py` (output formatters)
+- `runtime.py` (4,663 bytes - runtime setup)
+
+**Orchestrator module (`src/hive/orchestrator/`):**
+- `core.py` (orchestrator main logic)
+- `lifecycle.py` (agent/session lifecycle)
+- `completion.py` (completion handling)
+
+**Documentation:**
+- `IMPLEMENTATION_NOTES.md` (Living status doc, last updated 2026-03-15)
+- `TECHNICAL_DESIGN_DOC.md` (Design overview)
+- `ORCHESTRATOR_LOC_REDUCTION_PLAN.md` (Refactor roadmap)
+- `PYTHON_REFACTOR_SUGGESTIONS.md` (New - Python idiom suggestions)
+- `NOTES_SPEC.md` (Notes RAG design)
+- `SMART_ROUTING_SPEC.md` (Routing specification)
+- `ABBR.md` (Abbreviation guidance)</result>
+<usage><total_tokens>25322</total_tokens><tool_uses>30</tool_uses><duration_ms>40983</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/3c6244a4-9e09-46fd-a21e-a3663f21637f/tasks/a421762ccaacd98a6.output
