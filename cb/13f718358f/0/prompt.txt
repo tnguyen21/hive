@@ -1,0 +1,147 @@
+Implement the following plan:
+
+# Plan: Add Mutation Testing to Hive
+
+## Context
+
+Hive has a solid test suite (19 files, pytest + xdist parallel, async support) but no way to measure test *quality*. Mutation testing systematically introduces small code changes (mutants) and checks whether tests catch them. Surviving mutants reveal weak assertions, missing edge cases, and undertested branches. The recent refactoring pass has stabilized the codebase — good time to add this before new feature work.
+
+## Tool: mutmut
+
+**Why mutmut over alternatives:**
+- Native `pyproject.toml` config (`[tool.mutmut]`)
+- Built-in `--parallel` for running multiple mutations concurrently
+- Simplest setup of the three options (cosmic-ray needs Celery, mutatest is immature)
+- Works fine with async Python — mutations are syntactic, not runtime
+
+**Key constraint:** xdist (`-n auto`) must be disabled for mutation runs. xdist's per-run process spawn overhead (~0.5s) dominates when each run is short due to `-x` fail-fast. mutmut's `--parallel` handles concurrency at the mutation level instead.
+
+## Scope
+
+**In scope (9 modules, ~2100 lines):**
+
+| Module | Lines | Why |
+|--------|-------|-----|
+| `src/hive/status.py` | 72 | Pure enums/groupings, zero dedicated tests, wrong membership silently breaks deps |
+| `src/hive/config.py` | 220 | Type coercion, layered resolution — bool edge cases untested |
+| `src/hive/utils.py` | 200 | ID generation, project detection, URL parsing |
+| `src/hive/git.py` | 185 | Retry logic, conflict detection string matching |
+| `src/hive/db/core.py` | 824 | Migrations, dedup logic, event query builder |
+| `src/hive/db/issues.py` | 287 | Dependency resolution, ready queue, CAS claims |
+| `src/hive/db/metrics.py` | 410 | Token/cost calculations, aggregation builders |
+| `src/hive/db/notes.py` | 75 | Note storage, `must_read` flag path |
+| `src/hive/orchestrator/completion.py` | 395 | Failure routing, retry/escalate state machine |
+
+**Excluded** (I/O-heavy, low mutation ROI): `merge.py`, `orchestrator/lifecycle.py`, `daemon.py`, `diag.py`, `prompts.py`, all of `backends/`, all of `cli/`.
+
+**Estimated run:** 150-300 mutations, ~10-15 min full run, ~1-3 min per module.
+
+## Changes
+
+### 1. Add mutmut dependency and config
+
+**`pyproject.toml`** — add `"mutmut>=3.0"` to both dep groups, add config section:
+
+```toml
+[tool.mutmut]
+paths_to_mutate = [
+    "src/hive/status.py",
+    "src/hive/config.py",
+    "src/hive/utils.py",
+    "src/hive/git.py",
+    "src/hive/db/core.py",
+    "src/hive/db/issues.py",
+    "src/hive/db/metrics.py",
+    "src/hive/db/notes.py",
+    "src/hive/orchestrator/completion.py",
+]
+tests_dir = "tests/"
+runner = "python -m pytest -x -n 0 --timeout=10 -q -m 'not integration'"
+```
+
+Runner flags:
+- `-x`: fail-fast (biggest perf win — stop on first killed test)
+- `-n 0`: disable xdist per-mutation
+- `--timeout=10`: kill infinite-loop mutants
+- `-m 'not integration'`: skip slow integration tests
+
+### 2. Add `.mutmut-cache/` to `.gitignore`
+
+mutmut stores results in a local SQLite cache.
+
+### 3. Create `scripts/mutate.sh`
+
+Convenience wrapper (the `scripts/` directory doesn't exist yet — create it):
+
+```bash
+#!/usr/bin/env bash
+# Usage:
+#   ./scripts/mutate.sh              # Full run
+#   ./scripts/mutate.sh status.py    # Single module (matches path suffix)
+#   ./scripts/mutate.sh --results    # Show surviving mutants
+```
+
+- Accepts a module shorthand, resolves to full path under `src/hive/`
+- Runs `uv run mutmut run --parallel`
+- Prints surviving mutant count at the end
+
+### 4. Fill critical test gaps (pre-mutation)
+
+Without these, the first mutation run would be overwhelmed by survivors from untested code.
+
+**`tests/test_status.py`** (new) — tests for:
+- `parse_backend_session_status_type`: valid enum, valid string, invalid string, non-string, None
+- `session_status_payload`: correct dict structure
+- `UNBLOCKING_ISSUE_STATUSES` / `CLOSED_ISSUE_STATUSES` membership (regression guards)
+- `ISSUE_STATUS_ORDER` completeness
+
+**`tests/test_config.py`** (additions) — `_coerce()` edge cases:
+- `_coerce(None, int)` -> `None`
+- `_coerce("false", bool)` -> `False`
+- `_coerce("0", bool)` -> `False`
+- `_coerce("yes", bool)` -> `True`
+- `_coerce(True, bool)` -> `True` (isinstance path)
+
+**`tests/test_metrics.py`** (additions):
+- `get_model_performance` direct tests (currently zero)
+
+### 5. Run baseline, iterate
+
+After setup:
+1. `uv sync --dev` to install mutmut
+2. `./scripts/mutate.sh status.py` — smallest module first
+3. Review survivors: `uv run mutmut results`, `uv run mutmut show <id>`
+4. Strengthen tests for survivors
+5. Work through remaining modules
+
+## Files to create/modify
+
+| File | Action |
+|------|--------|
+| `pyproject.toml` | Add mutmut dep + `[tool.mutmut]` config |
+| `.gitignore` | Add `.mutmut-cache/` |
+| `scripts/mutate.sh` | Create — convenience wrapper |
+| `tests/test_status.py` | Create — dedicated status module tests |
+| `tests/test_config.py` | Edit — add `_coerce()` edge case tests |
+| `tests/test_metrics.py` | Edit — add `get_model_performance` tests |
+
+## Verification
+
+1. `uv sync --dev` — mutmut installs without errors
+2. `python -m pytest -v --timeout=30` — existing tests still pass
+3. `./scripts/mutate.sh status.py` — runs mutations, produces results
+4. `uv run mutmut results` — shows killed/survived breakdown
+5. `uv run mutmut show 1` — can inspect individual mutants
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/67c4c25f-4b90-4360-89c0-4c8770f468da.jsonl
+
+If this plan can be broken down into multiple independent tasks, consider using the TeamCreate tool to create a team and parallelize the work.
+
+---
+
+update the README with how to run mutation tests
+
+---
+
+sweet; let's merge this into main
