@@ -247,6 +247,12 @@ def test_cli_show_format_json_matches_global_json_flag(temp_db, tmp_path, capsys
     assert "recent_events" in data
 
 
+def _strip_ansi(s: str) -> str:
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+
+
 def test_main_no_args_prints_help_without_raising(capsys):
     """Running the CLI with no args should show help and exit cleanly."""
     from hive.cli import main
@@ -254,9 +260,10 @@ def test_main_no_args_prints_help_without_raising(capsys):
     main([])
 
     captured = capsys.readouterr()
-    assert "Usage: hive" in captured.out
-    assert "Hive multi-agent orchestrator." in captured.out
-    assert "NoArgsIsHelpError" not in captured.out
+    out = _strip_ansi(captured.out)
+    assert "Usage: hive" in out
+    assert "Hive multi-agent orchestrator." in out
+    assert "NoArgsIsHelpError" not in out
     assert captured.err == ""
 
 
