@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..config import Config
+from ..status import ISSUE_STATUS_ORDER, IssueStatus
 
 
 def _kv_panel(title: str, rows: list[tuple[str, str]], *, border_style: str = "blue"):
@@ -199,7 +200,10 @@ def render_status(result: dict):
     issues = result.get("issues", {})
     if issues:
         issues_table = _simple_table(("Status", {"style": "magenta"}), ("Count", {"justify": "right"}))
-        for status in ["open", "in_progress", "done", "finalized", "escalated", "blocked", "canceled"]:
+        ordered_statuses = [status.value for status in ISSUE_STATUS_ORDER]
+        if "blocked" in issues:
+            ordered_statuses.append("blocked")
+        for status in ordered_statuses:
             count = issues.get(status, 0)
             if count > 0:
                 issues_table.add_row(status, str(count))
@@ -452,13 +456,22 @@ def render_global_status(result: dict):
         ("  ", ""),
         (f"{t.get('workers', 0)} workers", "bold" if t.get("workers", 0) else "dim"),
         ("  ", ""),
-        (f"{t.get('open', 0)} open", "bold" if t.get("open", 0) else "dim"),
+        (
+            f"{t.get(IssueStatus.OPEN.value, 0)} {IssueStatus.OPEN.value}",
+            "bold" if t.get(IssueStatus.OPEN.value, 0) else "dim",
+        ),
         ("  ", ""),
-        (f"{t.get('in_progress', 0)} active", "bold green" if t.get("in_progress", 0) else "dim"),
+        (
+            f"{t.get(IssueStatus.IN_PROGRESS.value, 0)} active",
+            "bold green" if t.get(IssueStatus.IN_PROGRESS.value, 0) else "dim",
+        ),
         ("  ", ""),
-        (f"{t.get('done', 0)} done", "dim"),
+        (f"{t.get(IssueStatus.DONE.value, 0)} {IssueStatus.DONE.value}", "dim"),
         ("  ", ""),
-        (f"{t.get('escalated', 0)} escalated", "bold yellow" if t.get("escalated", 0) else "dim"),
+        (
+            f"{t.get(IssueStatus.ESCALATED.value, 0)} {IssueStatus.ESCALATED.value}",
+            "bold yellow" if t.get(IssueStatus.ESCALATED.value, 0) else "dim",
+        ),
     )
 
     if not projects:
@@ -484,10 +497,10 @@ def render_global_status(result: dict):
             continue
 
         issues = proj.get("issues", {})
-        n_open = issues.get("open", 0)
-        n_wip = issues.get("in_progress", 0)
-        n_done = issues.get("done", 0) + issues.get("finalized", 0)
-        n_esc = issues.get("escalated", 0)
+        n_open = issues.get(IssueStatus.OPEN.value, 0)
+        n_wip = issues.get(IssueStatus.IN_PROGRESS.value, 0)
+        n_done = issues.get(IssueStatus.DONE.value, 0) + issues.get(IssueStatus.FINALIZED.value, 0)
+        n_esc = issues.get(IssueStatus.ESCALATED.value, 0)
         n_workers = proj.get("active_agents", 0)
 
         # Refinery cell

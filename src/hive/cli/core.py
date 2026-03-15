@@ -13,6 +13,7 @@ from rich.console import Console
 from ..daemon import HiveDaemon
 from ..db import Database, validate_tags
 from ..git import GitWorktreeError, get_worktree_dirty_status
+from ..status import IssueStatus, UNBLOCKING_ISSUE_STATUSES
 from .formatters import (
     _fmt_add_note,
     _fmt_create,
@@ -187,13 +188,13 @@ class HiveCLI(QueenMixin):
             "issue_id": issue_id,  # compat alias
             "title": title,
             "priority": priority,
-            "status": "open",
+            "status": IssueStatus.OPEN.value,
             "tags": tag_list or [],
             "depends_on": depends_on or [],
             "message": f"Created issue {issue_id}: {title}",
         }
 
-    _DONE_STATUSES = ("done", "finalized", "canceled")
+    _DONE_STATUSES = UNBLOCKING_ISSUE_STATUSES
 
     @cli_command(formatter=_fmt_list_issues)
     def list_issues(
@@ -317,7 +318,7 @@ class HiveCLI(QueenMixin):
             params.append(status)
             # When re-opening an issue, clear the assignee so it
             # re-enters the ready queue and can be claimed by a new agent.
-            if status == "open":
+            if status == IssueStatus.OPEN:
                 updates.append("assignee = NULL")
         if model is not None:
             updates.append("model = ?")
@@ -360,12 +361,12 @@ class HiveCLI(QueenMixin):
         """Cancel an issue."""
         self._require_issue(issue_id)
 
-        self.db.update_issue_status(issue_id, "canceled")
+        self.db.update_issue_status(issue_id, IssueStatus.CANCELED)
         self.db.log_event(issue_id, None, "canceled", {"reason": reason})
 
         return {
             "issue_id": issue_id,
-            "status": "canceled",
+            "status": IssueStatus.CANCELED.value,
             "reason": reason,
             "message": f"Canceled issue {issue_id}",
         }
@@ -375,7 +376,7 @@ class HiveCLI(QueenMixin):
         """Finalize/close an issue."""
         self._require_issue(issue_id)
 
-        self.db.update_issue_status(issue_id, "finalized")
+        self.db.update_issue_status(issue_id, IssueStatus.FINALIZED)
         # If this issue was sitting in the merge queue (manual review mode),
         # mark those entries complete so they don't get processed later.
         self.db.conn.execute(
@@ -391,7 +392,7 @@ class HiveCLI(QueenMixin):
 
         return {
             "issue_id": issue_id,
-            "status": "finalized",
+            "status": IssueStatus.FINALIZED.value,
             "resolution": resolution,
             "message": f"Finalized issue {issue_id}",
         }
@@ -450,11 +451,11 @@ class HiveCLI(QueenMixin):
                         ORDER BY mq2.id DESC
                         LIMIT 1
                     )
-                WHERE i.project = ? AND i.status = 'done'
+                WHERE i.project = ? AND i.status = ?
                 ORDER BY i.updated_at DESC
                 LIMIT ?
                 """,
-                (self.project_name, limit),
+                (self.project_name, IssueStatus.DONE, limit),
             )
 
         rows = []
@@ -494,10 +495,10 @@ class HiveCLI(QueenMixin):
         self.db.conn.execute(
             """
             UPDATE issues
-            SET status = 'open', assignee = NULL, updated_at = datetime('now')
+            SET status = ?, assignee = NULL, updated_at = datetime('now')
             WHERE id = ?
             """,
-            (issue_id,),
+            (IssueStatus.OPEN, issue_id),
         )
         self.db.conn.commit()
 
@@ -506,13 +507,13 @@ class HiveCLI(QueenMixin):
 
         self.db.log_event(issue_id, None, "manual_retry", {"notes": notes})
 
-        msg = f"Reset issue {issue_id} to 'open' for retry"
+        msg = f"Reset issue {issue_id} to '{IssueStatus.OPEN.value}' for retry"
         if reset:
             msg += " (counters reset)"
 
         return {
             "issue_id": issue_id,
-            "status": "open",
+            "status": IssueStatus.OPEN.value,
             "notes": notes,
             "reset": reset,
             "message": msg,
@@ -668,8 +669,8 @@ class HiveCLI(QueenMixin):
 
         # Surface issues needing human attention
         attention_cursor = self.db.conn.execute(
-            "SELECT id, title, status FROM issues WHERE project = ? AND status = 'escalated' ORDER BY updated_at DESC",
-            (self.project_name,),
+            "SELECT id, title, status FROM issues WHERE project = ? AND status = ? ORDER BY updated_at DESC",
+            (self.project_name, IssueStatus.ESCALATED),
         )
         attention_issues = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in attention_cursor.fetchall()]
 

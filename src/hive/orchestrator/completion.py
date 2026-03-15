@@ -2,9 +2,10 @@
 
 import logging
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Dict, Optional
 
+from ..status import IssueStatus
 from ..utils import AgentIdentity, CompletionResult
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def _exc_detail(e: BaseException) -> str:
     return f"{name}: {msg}"
 
 
-class CompletionTransition(str, Enum):
+class CompletionTransition(StrEnum):
     """Transition outcomes for completion handling."""
 
     SKIP = "skip"
@@ -32,7 +33,7 @@ class CompletionTransition(str, Enum):
     SUCCESS = "success"
 
 
-class EscalationDecision(str, Enum):
+class EscalationDecision(StrEnum):
     """Escalation routing decision after a failure."""
 
     RETRY = "retry"
@@ -68,7 +69,7 @@ class CompletionMixin:
         has_diff_from_main_async = _mod.has_diff_from_main_async
 
         terminal_issue = self.db.get_issue(agent.issue_id)
-        if terminal_issue and terminal_issue.get("status") in ("canceled", "finalized"):
+        if terminal_issue and terminal_issue.get("status") in (IssueStatus.CANCELED, IssueStatus.FINALIZED):
             return CompletionDecision(
                 transition=CompletionTransition.SKIP,
                 skip_reason=f"issue already {terminal_issue['status']}, cleaning up session",
@@ -193,14 +194,14 @@ class CompletionMixin:
 
         transitioned = self.db.try_transition_issue_status(
             agent.issue_id,
-            from_status="in_progress",
-            to_status="done",
+            from_status=IssueStatus.IN_PROGRESS,
+            to_status=IssueStatus.DONE,
             expected_assignee=agent.agent_id,
         )
         if not transitioned:
             current_issue = self.db.get_issue(agent.issue_id)
             current_status = current_issue.get("status") if current_issue else None
-            if current_status != "done":
+            if current_status != IssueStatus.DONE:
                 self._log_completion_skip(
                     agent,
                     f"success result but issue is {current_status or 'missing'}, skipping merge enqueue",
@@ -333,7 +334,7 @@ class CompletionMixin:
             return self._try_escalate_issue(
                 issue_id,
                 agent.agent_id,
-                to_status="escalated",
+                to_status=IssueStatus.ESCALATED,
                 event_type="escalated",
                 detail={
                     "reason": "Anomaly detection: rapid repeated failures",
@@ -349,7 +350,7 @@ class CompletionMixin:
             if not self._try_escalate_issue(
                 issue_id,
                 agent.agent_id,
-                to_status="open",
+                to_status=IssueStatus.OPEN,
                 event_type="retry",
                 detail={"retry_count": retry_count + 1, "reason": reason, "previous_agent": agent.name},
                 skip_event_type="retry_skipped",
@@ -364,7 +365,7 @@ class CompletionMixin:
             if not self._try_escalate_issue(
                 issue_id,
                 agent.agent_id,
-                to_status="open",
+                to_status=IssueStatus.OPEN,
                 event_type="agent_switch",
                 detail={"switch_count": agent_switch_count + 1, "reason": reason, "previous_agent": agent.name, "model": model},
                 skip_event_type="agent_switch_skipped",
@@ -379,7 +380,7 @@ class CompletionMixin:
         if self._try_escalate_issue(
             issue_id,
             agent.agent_id,
-            to_status="escalated",
+            to_status=IssueStatus.ESCALATED,
             event_type="escalated",
             detail={
                 "reason": "Exhausted all retry and agent switch attempts",

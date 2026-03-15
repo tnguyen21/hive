@@ -5,6 +5,7 @@ import logging
 
 from typing import Any, Dict, List, Optional
 
+from ..status import CLOSED_ISSUE_STATUSES, IssueStatus, UNBLOCKING_ISSUE_STATUSES
 from ..utils import generate_id
 from .core import validate_tags
 
@@ -12,7 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class IssuesMixin:
-    def try_transition_issue_status(self, issue_id: str, *, from_status: str, to_status: str, expected_assignee: Optional[str] = None) -> bool:
+    def try_transition_issue_status(
+        self,
+        issue_id: str,
+        *,
+        from_status: IssueStatus | str,
+        to_status: IssueStatus | str,
+        expected_assignee: Optional[str] = None,
+    ) -> bool:
         """CAS-style issue status transition.
 
         For transitions to 'open', clears assignee (INV-2).
@@ -20,14 +28,17 @@ class IssuesMixin:
         Returns:
             True if updated, False otherwise.
         """
+        from_status_value = str(from_status)
+        to_status_value = str(to_status)
+        closed_status_placeholders = ", ".join("?" for _ in CLOSED_ISSUE_STATUSES)
         with self.transaction() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE issues
                 SET status = ?,
-                    assignee = CASE WHEN ? = 'open' THEN NULL ELSE assignee END,
+                    assignee = CASE WHEN ? = ? THEN NULL ELSE assignee END,
                     updated_at = datetime('now'),
-                    closed_at = CASE WHEN ? IN ('done', 'finalized', 'canceled', 'escalated')
+                    closed_at = CASE WHEN ? IN ({closed_status_placeholders})
                                      THEN datetime('now')
                                      ELSE closed_at END
                 WHERE id = ?
@@ -35,11 +46,13 @@ class IssuesMixin:
                   AND (? IS NULL OR assignee = ?)
                 """,
                 (
-                    to_status,
-                    to_status,
-                    to_status,
+                    to_status_value,
+                    to_status_value,
+                    IssueStatus.OPEN,
+                    to_status_value,
+                    *CLOSED_ISSUE_STATUSES,
                     issue_id,
-                    from_status,
+                    from_status_value,
                     expected_assignee,
                     expected_assignee,
                 ),
@@ -52,8 +65,8 @@ class IssuesMixin:
             self.log_event(
                 issue_id,
                 None,
-                f"status_{to_status}",
-                {"status": to_status, "from": from_status, "to": to_status},
+                f"status_{to_status_value}",
+                {"status": to_status_value, "from": from_status_value, "to": to_status_value},
                 commit=False,
             )
             return True
@@ -150,21 +163,22 @@ class IssuesMixin:
         Returns:
             List of issue dicts, ordered by priority then creation time
         """
-        query = """
+        unblocking_placeholders = ", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)
+        query = f"""
             SELECT i.*
             FROM issues i
-            WHERE i.status = 'open'
+            WHERE i.status = ?
               AND i.assignee IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM dependencies d
                 JOIN issues blocker ON d.depends_on = blocker.id
                 WHERE d.issue_id = i.id
                   AND d.type = 'blocks'
-                  AND blocker.status NOT IN ('done', 'finalized', 'canceled')
+                  AND blocker.status NOT IN ({unblocking_placeholders})
               )
         """
 
-        params = []
+        params: List[Any] = [IssueStatus.OPEN, *UNBLOCKING_ISSUE_STATUSES]
         if project is not None:
             query += " AND i.project = ?"
             params.append(project)
@@ -194,10 +208,10 @@ class IssuesMixin:
         """
         with self.transaction() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE issues
                 SET assignee = ?,
-                    status = 'in_progress',
+                    status = ?,
                     updated_at = datetime('now')
                 WHERE id = ?
                   AND assignee IS NULL
@@ -206,10 +220,16 @@ class IssuesMixin:
                     JOIN issues blocker ON d.depends_on = blocker.id
                     WHERE d.issue_id = ?
                       AND d.type = 'blocks'
-                      AND blocker.status NOT IN ('done', 'finalized', 'canceled')
+                      AND blocker.status NOT IN ({", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)})
                   )
                 """,
-                (agent_id, issue_id, issue_id),
+                (
+                    agent_id,
+                    IssueStatus.IN_PROGRESS,
+                    issue_id,
+                    issue_id,
+                    *UNBLOCKING_ISSUE_STATUSES,
+                ),
             )
 
             success = cursor.rowcount == 1
@@ -236,23 +256,25 @@ class IssuesMixin:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def update_issue_status(self, issue_id: str, status: str):
+    def update_issue_status(self, issue_id: str, status: IssueStatus | str):
         """Update issue status. Clears assignee when setting to 'open' (INV-2)."""
+        status_value = str(status)
+        closed_status_placeholders = ", ".join("?" for _ in CLOSED_ISSUE_STATUSES)
         with self.transaction() as conn:
             conn.execute(
-                """
+                f"""
                 UPDATE issues
                 SET status = ?,
-                    assignee = CASE WHEN ? = 'open' THEN NULL ELSE assignee END,
+                    assignee = CASE WHEN ? = ? THEN NULL ELSE assignee END,
                     updated_at = datetime('now'),
-                    closed_at = CASE WHEN ? IN ('done', 'finalized', 'canceled', 'escalated')
+                    closed_at = CASE WHEN ? IN ({closed_status_placeholders})
                                      THEN datetime('now')
                                      ELSE closed_at END
                 WHERE id = ?
                 """,
-                (status, status, status, issue_id),
+                (status_value, status_value, IssueStatus.OPEN, status_value, *CLOSED_ISSUE_STATUSES, issue_id),
             )
-            self.log_event(issue_id, None, f"status_{status}", {"status": status}, commit=False)
+            self.log_event(issue_id, None, f"status_{status_value}", {"status": status_value}, commit=False)
 
     def add_dependency(self, issue_id: str, depends_on: str, dep_type: str = "blocks"):
         """Add a dependency between issues."""

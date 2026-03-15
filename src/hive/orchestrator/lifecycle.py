@@ -4,33 +4,34 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import WORKER_PERMISSIONS
 from ..prompts import build_retry_context, build_system_prompt, build_worker_prompt, get_prompt_version
+from ..status import IssueStatus
 from ..utils import AgentIdentity, CompletionResult, generate_id
 from .completion import _exc_detail
 
 logger = logging.getLogger(__name__)
 
 
-class StalledTransition(str, Enum):
+class StalledTransition(StrEnum):
     """Transition outcomes for stalled-agent handling."""
 
     FAIL_STALLED_IN_PROGRESS = "fail_stalled_in_progress"
     FAIL_STALLED_TERMINAL = "fail_stalled_terminal"
 
 
-class StalledSessionCheckResult(str, Enum):
+class StalledSessionCheckResult(StrEnum):
     """Outcome for lease-expiry session verification."""
 
     CONTINUE_MONITORING = "continue_monitoring"
     STOP_MONITORING = "stop_monitoring"
 
 
-class MonitorSignal(str, Enum):
+class MonitorSignal(StrEnum):
     """Normalized monitor loop outcomes."""
 
     FILE_RESULT = "file_result"
@@ -40,7 +41,7 @@ class MonitorSignal(str, Enum):
     STOP_MONITORING = "stop_monitoring"
 
 
-class AgentLivenessState(str, Enum):
+class AgentLivenessState(StrEnum):
     """Observed liveness state for one agent/session probe."""
 
     FILE_RESULT = "file_result"
@@ -253,8 +254,8 @@ class LifecycleMixin:
             )
             self.db.try_transition_issue_status(
                 ctx.issue_id,
-                from_status="in_progress",
-                to_status="escalated",
+                from_status=IssueStatus.IN_PROGRESS,
+                to_status=IssueStatus.ESCALATED,
                 expected_assignee=resources.agent_id,
             )
             self.db.log_event(ctx.issue_id, resources.agent_id, "escalated", {"reason": "Spawn failure"})
@@ -281,7 +282,7 @@ class LifecycleMixin:
         """Check if an issue has been canceled in the database."""
         try:
             issue = self.db.get_issue(issue_id)
-            return issue is not None and issue.get("status") == "canceled"
+            return issue is not None and issue.get("status") == IssueStatus.CANCELED
         except Exception:
             return False
 
@@ -674,7 +675,7 @@ class LifecycleMixin:
             # instead of unconditionally resetting to open, which caused an
             # infinite spawn loop for issues whose workers always stall.
             current_issue = self.db.get_issue(agent.issue_id)
-            if current_issue and current_issue.get("status") == "in_progress":
+            if current_issue and current_issue.get("status") == IssueStatus.IN_PROGRESS:
                 stalled_transition = StalledTransition.FAIL_STALLED_IN_PROGRESS
                 stall_result = CompletionResult(
                     success=False,
