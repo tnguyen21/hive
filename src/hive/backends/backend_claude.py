@@ -39,7 +39,7 @@ import aiohttp.web
 from ..config import Config
 from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
 from ..utils import generate_id
-from .base import HiveBackend
+from .base import HiveBackend, _first_text
 
 logger = logging.getLogger(__name__)
 
@@ -195,12 +195,7 @@ class ClaudeWSBackend(HiveBackend):
         if not session.initialized and system:
             await self._send_initialize(session_id, system)
 
-        # Extract text from parts
-        text = ""
-        for part in parts:
-            if part.get("type") == "text":
-                text = part.get("text", "")
-                break
+        text = _first_text(parts)
 
         # Send user message — the CLI responds with system/init after the
         # first user message, so we send first, then wait for init.

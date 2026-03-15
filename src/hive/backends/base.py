@@ -88,17 +88,23 @@ class HiveBackend(ABC):
         """Emit an event to registered handlers."""
         handler = self._handlers.get(event_type)
         if handler:
-            if inspect.iscoroutinefunction(handler):
-                await handler(properties)
-            else:
-                handler(properties)
+            result = handler(properties)
+            if inspect.isawaitable(result):
+                await result
 
         all_handler = self._handlers.get("*")
         if all_handler:
-            if inspect.iscoroutinefunction(all_handler):
-                await all_handler(event_type, properties)
-            else:
-                all_handler(event_type, properties)
+            result = all_handler(event_type, properties)
+            if inspect.isawaitable(result):
+                await result
+
+
+def _first_text(parts: List[Dict[str, Any]]) -> str:
+    """Return the first text part from a backend message payload."""
+    for part in parts:
+        if part.get("type") == "text":
+            return str(part.get("text", ""))
+    return ""
 
     @abstractmethod
     async def connect_with_reconnect(self, max_retries: int = -1, retry_delay: int = 5):

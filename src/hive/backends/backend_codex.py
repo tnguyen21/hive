@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional
 
 from ..config import Config
 from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
-from .base import HiveBackend
+from .base import HiveBackend, _first_text
 
 logger = logging.getLogger(__name__)
 
@@ -249,11 +249,7 @@ class CodexAppServerBackend(HiveBackend):
         if not state:
             raise ValueError(f"Session {session_id} not found")
 
-        text = ""
-        for part in parts:
-            if part.get("type") == "text":
-                text = part.get("text", "")
-                break
+        text = _first_text(parts)
 
         model_id = model or state.model or Config.WORKER_MODEL or Config.DEFAULT_MODEL
 

@@ -24,12 +24,11 @@ def _run_git(*args: str, cwd: str, check: bool = True) -> str:
 
 
 def _async_wrapper(fn):
-    """Turn a sync git function into an async one via run_in_executor."""
+    """Turn a sync git function into an async one via asyncio.to_thread."""
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
+        return await asyncio.to_thread(fn, *args, **kwargs)
 
     return wrapper
 
@@ -172,7 +171,7 @@ def has_diff_from_main(worktree_path: str, main_branch: str = "main") -> bool:
     return bool(output)
 
 
-# --- Async versions (run_in_executor wrappers) ---
+# --- Async versions (to_thread wrappers) ---
 
 create_worktree_async = _async_wrapper(create_worktree)
 remove_worktree_async = _async_wrapper(remove_worktree)

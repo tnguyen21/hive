@@ -275,6 +275,23 @@ async def test_sync_handler(backend):
     assert len(received) == 1
 
 
+@pytest.mark.asyncio
+async def test_sync_handler_returning_awaitable_is_awaited(backend):
+    """Handlers that return an awaitable are awaited by the base backend."""
+    received = []
+
+    def handler(props):
+        async def inner():
+            received.append(props)
+
+        return inner()
+
+    backend.on("session.status", handler)
+    await backend._emit("session.status", {"sync": "awaited"})
+
+    assert received == [{"sync": "awaited"}]
+
+
 # ── Session lifecycle tests ──────────────────────────────────────────
 
 
