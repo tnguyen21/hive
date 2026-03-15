@@ -37,6 +37,7 @@ import aiohttp
 import aiohttp.web
 
 from ..config import Config
+from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
 from ..utils import generate_id
 from .base import HiveBackend
 
@@ -53,7 +54,7 @@ class SessionState:
     process: Optional[asyncio.subprocess.Process] = None
     ws: Optional[aiohttp.web.WebSocketResponse] = None
     cli_session_id: Optional[str] = None
-    status: str = "idle"  # "idle" | "busy" | "error"
+    status: BackendSessionState = BackendSessionState.IDLE
     messages: list = field(default_factory=list)
     result: Optional[dict] = None
     total_usage: dict = field(default_factory=dict)
@@ -213,7 +214,7 @@ class ClaudeWSBackend(HiveBackend):
                 "session_id": session.cli_session_id or "",
             },
         )
-        session.status = "busy"
+        session.status = BackendSessionState.BUSY
         logger.info(
             f"Session {session_id} status transition {prev_status} -> busy "
             f"(message_sent={message_sent}, ws_connected={session.ws_connected.is_set()}, "
@@ -238,12 +239,12 @@ class ClaudeWSBackend(HiveBackend):
         session = self.sessions.get(session_id)
         if not session:
             logger.warning(f"Session status requested for unknown session {session_id}")
-            return {"type": "not_found"}
+            return {"type": BackendSessionStatusType.NOT_FOUND}
 
         # Check if process has died
         if session.process and session.process.returncode is not None:
             logger.warning(f"Session status requested for dead process {session_id} (returncode={session.process.returncode})")
-            return {"type": "error"}
+            return {"type": BackendSessionStatusType.ERROR}
 
         return {"type": session.status}
 
@@ -379,20 +380,20 @@ class ClaudeWSBackend(HiveBackend):
 
             case {"type": "assistant"}:
                 prev_status = session.status
-                session.status = "busy"
+                session.status = BackendSessionState.BUSY
                 session.messages.append(msg)
-                if prev_status != "busy":
+                if prev_status != BackendSessionState.BUSY:
                     logger.info(f"Session {session_id} status transition {prev_status} -> busy (source=assistant)")
                 # Emit activity event for lease renewal
                 try:
-                    await self._emit("session.status", {"sessionID": session_id, "status": {"type": "busy"}})
+                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, session.status))
                 except Exception as e:
                     logger.exception(f"Failed to emit busy session.status for session {session_id}: {e}")
                     raise
 
             case {"type": "result"}:
                 prev_status = session.status
-                session.status = "idle"
+                session.status = BackendSessionState.IDLE
                 session.result = msg
                 session.messages.append(msg)
                 session.total_usage = msg.get("usage", {})
@@ -401,7 +402,7 @@ class ClaudeWSBackend(HiveBackend):
                 )
                 # Emit SSE-compatible idle event
                 try:
-                    await self._emit("session.status", {"sessionID": session_id, "status": {"type": "idle"}})
+                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, session.status))
                 except Exception as e:
                     logger.exception(f"Failed to emit idle session.status for session {session_id}: {e}")
                     raise

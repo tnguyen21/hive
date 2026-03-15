@@ -60,7 +60,7 @@ class HiveBackend(ABC):
 
     @abstractmethod
     async def get_session_status(self, session_id: str, directory: Optional[str] = None) -> Dict[str, Any]:
-        """Get session status. Returns dict with {"type": "idle"|"busy"|"error"}."""
+        """Get session status. Returns dict with {"type": "idle"|"busy"|"error"|"not_found"}."""
 
     @abstractmethod
     async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:

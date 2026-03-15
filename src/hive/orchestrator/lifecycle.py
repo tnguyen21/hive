@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from ..config import WORKER_PERMISSIONS
 from ..prompts import build_retry_context, build_system_prompt, build_worker_prompt, get_prompt_version
-from ..status import IssueStatus
+from ..status import BackendSessionState, BackendSessionStatusType, IssueStatus, parse_backend_session_status_type
 from ..utils import AgentIdentity, CompletionResult, generate_id
 from .completion import _exc_detail
 
@@ -481,20 +481,21 @@ class LifecycleMixin:
                 error=str(e),
             )
 
-        status_type = status.get("type") if isinstance(status, dict) else None
-        if status_type == "idle":
+        raw_status_type = status.get("type") if isinstance(status, dict) else None
+        status_type = parse_backend_session_status_type(raw_status_type)
+        if status_type == BackendSessionStatusType.IDLE:
             return AgentLivenessProbe(
                 state=AgentLivenessState.SESSION_IDLE,
-                session_status="idle",
+                session_status=BackendSessionStatusType.IDLE.value,
             )
-        if status_type == "busy":
+        if status_type == BackendSessionStatusType.BUSY:
             return AgentLivenessProbe(
                 state=AgentLivenessState.SESSION_BUSY,
-                session_status="busy",
+                session_status=BackendSessionStatusType.BUSY.value,
             )
         return AgentLivenessProbe(
             state=AgentLivenessState.SESSION_UNAVAILABLE,
-            session_status=status_type,
+            session_status=raw_status_type,
         )
 
     async def _wait_for_monitor_signal(
@@ -588,7 +589,7 @@ class LifecycleMixin:
                 agent.issue_id,
                 agent.agent_id,
                 "heartbeat_refreshed",
-                {"session_status": "busy"},
+                {"session_status": BackendSessionState.BUSY.value},
             )
             return MonitorStep(signal=MonitorSignal.CONTINUE_MONITORING)
 
@@ -762,7 +763,7 @@ class LifecycleMixin:
                 agent.issue_id,
                 agent.agent_id,
                 "missed_completion",
-                {"source": "heartbeat_expiry", "session_status": "idle"},
+                {"source": "heartbeat_expiry", "session_status": BackendSessionStatusType.IDLE.value},
             )
             await self.handle_agent_complete(agent)
             return StalledSessionCheckResult.STOP_MONITORING
@@ -775,7 +776,7 @@ class LifecycleMixin:
                 agent.issue_id,
                 agent.agent_id,
                 "heartbeat_refreshed",
-                {"session_status": "busy"},
+                {"session_status": BackendSessionState.BUSY.value},
             )
             return StalledSessionCheckResult.CONTINUE_MONITORING
 

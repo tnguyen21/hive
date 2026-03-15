@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Dict, List, Optional
 
+from ..status import BackendSessionStatusType, SESSION_STATUS_EVENT, parse_backend_session_status_type
 from ..db import Database
 from ..merge import MergeProcessorPool
 from ..utils import AgentIdentity
@@ -86,7 +87,7 @@ class OrchestratorCore:
         async def handle_session_status(properties):
             session_id = properties.get("sessionID")
             status = properties.get("status", {})
-            status_type = status.get("type")
+            status_type = parse_backend_session_status_type(status.get("type"))
 
             if not session_id:
                 logger.warning(f"session.status event missing sessionID: {properties}")
@@ -96,7 +97,7 @@ class OrchestratorCore:
             self._record_heartbeat_for_session(session_id)
 
             # If session becomes idle, signal completion
-            if status_type == "idle":
+            if status_type == BackendSessionStatusType.IDLE:
                 event = self.session_status_events.get(session_id)
                 logger.info(
                     f"Received idle session.status for session {session_id} "
@@ -110,7 +111,7 @@ class OrchestratorCore:
                         f"(mapped_agent={self._session_to_agent.get(session_id)})"
                     )
 
-        self.backend.on("session.status", handle_session_status)
+        self.backend.on(SESSION_STATUS_EVENT, handle_session_status)
 
         async def handle_session_error(properties):
             session_id = properties.get("sessionID")

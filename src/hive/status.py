@@ -1,6 +1,7 @@
 """Shared domain status enums and status groupings."""
 
 from enum import StrEnum
+from typing import Any
 
 
 class IssueStatus(StrEnum):
@@ -45,3 +46,26 @@ class BackendSessionStatusType(StrEnum):
     BUSY = "busy"
     ERROR = "error"
     NOT_FOUND = "not_found"
+
+
+SESSION_STATUS_EVENT = "session.status"
+
+
+def parse_backend_session_status_type(value: Any) -> BackendSessionStatusType | None:
+    """Best-effort coercion for backend status payload values."""
+    if isinstance(value, BackendSessionStatusType):
+        return value
+    if isinstance(value, str):
+        try:
+            return BackendSessionStatusType(value)
+        except ValueError:
+            return None
+    return None
+
+
+def session_status_payload(
+    session_id: str,
+    status_type: BackendSessionState | BackendSessionStatusType,
+) -> dict[str, object]:
+    """Build the normalized session.status event payload."""
+    return {"sessionID": session_id, "status": {"type": str(status_type)}}

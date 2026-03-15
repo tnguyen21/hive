@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import Config
+from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
 from .base import HiveBackend
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 class ThreadState:
     directory: Optional[str] = None
     title: Optional[str] = None
-    status: str = "idle"  # "idle" | "busy"
+    status: BackendSessionState = BackendSessionState.IDLE
     model: Optional[str] = None
     approval_policy: Optional[str] = None
     sandbox_mode: Optional[str] = None
@@ -224,7 +225,7 @@ class CodexAppServerBackend(HiveBackend):
         self.sessions[str(thread_id)] = ThreadState(
             directory=directory,
             title=title,
-            status="idle",
+            status=BackendSessionState.IDLE,
             model=res.get("model"),
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
@@ -295,8 +296,8 @@ class CodexAppServerBackend(HiveBackend):
 
         # Emit a busy status immediately so the orchestrator renews leases even
         # if Codex takes time before sending turn/started.
-        state.status = "busy"
-        await self._emit("session.status", {"sessionID": session_id, "status": {"type": "busy"}})
+        state.status = BackendSessionState.BUSY
+        await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, state.status))
         self._start_heartbeat(session_id)
 
         # Fire-and-forget semantics: this returns after Codex accepts the turn,
@@ -336,8 +337,9 @@ class CodexAppServerBackend(HiveBackend):
     async def get_session_status(self, session_id: str, directory: Optional[str] = None) -> Dict[str, Any]:
         state = self.sessions.get(session_id)
         if not state:
-            return {"type": "not_found"}
-        return {"type": "idle" if state.status != "busy" else "busy"}
+            return {"type": BackendSessionStatusType.NOT_FOUND}
+        status_type = BackendSessionStatusType.BUSY if state.status == BackendSessionState.BUSY else BackendSessionStatusType.IDLE
+        return {"type": status_type}
 
     async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         state = self.sessions.get(session_id)
@@ -562,9 +564,9 @@ class CodexAppServerBackend(HiveBackend):
             if thread_id:
                 state = self.sessions.get(str(thread_id))
                 if state:
-                    state.status = "busy"
+                    state.status = BackendSessionState.BUSY
                     state.active_turn_id = (params.get("turn") or {}).get("id")
-                    await self._emit("session.status", {"sessionID": str(thread_id), "status": {"type": "busy"}})
+                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(str(thread_id), state.status))
                     self._start_heartbeat(str(thread_id))
             return
 
@@ -575,7 +577,7 @@ class CodexAppServerBackend(HiveBackend):
                 if state:
                     turn = params.get("turn") or {}
                     turn_id = turn.get("id")
-                    state.status = "idle"
+                    state.status = BackendSessionState.IDLE
                     state.active_turn_id = None
                     self._stop_heartbeat(str(thread_id))
 
@@ -594,7 +596,7 @@ class CodexAppServerBackend(HiveBackend):
                         }
                     )
 
-                    await self._emit("session.status", {"sessionID": str(thread_id), "status": {"type": "idle"}})
+                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(str(thread_id), state.status))
             return
 
         if method == "thread/tokenUsage/updated":
@@ -665,12 +667,12 @@ class CodexAppServerBackend(HiveBackend):
         interval = int(getattr(Config, "CODEX_HEARTBEAT_INTERVAL", 60))
 
         async def _beat():
-            while self.running and state.status == "busy":
+            while self.running and state.status == BackendSessionState.BUSY:
                 await asyncio.sleep(interval)
-                if not self.running or state.status != "busy":
+                if not self.running or state.status != BackendSessionState.BUSY:
                     break
                 try:
-                    await self._emit("session.status", {"sessionID": session_id, "status": {"type": "busy"}})
+                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, BackendSessionState.BUSY))
                 except Exception:
                     # Heartbeat is best-effort.
                     pass
