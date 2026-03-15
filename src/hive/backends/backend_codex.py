@@ -479,26 +479,27 @@ class CodexAppServerBackend(HiveBackend):
                 except Exception:
                     pass
 
-    async def _stdout_reader(self):
-        assert self._proc and self._proc.stdout
+    async def _read_stream_lines(self, stream: asyncio.StreamReader, *, errors: str = "strict"):
         while True:
-            line = await self._proc.stdout.readline()
+            line = await stream.readline()
             if not line:
                 break
+            yield line.decode("utf-8", errors=errors)
+
+    async def _stdout_reader(self):
+        assert self._proc and self._proc.stdout
+        async for line in self._read_stream_lines(self._proc.stdout):
             try:
-                msg = json.loads(line.decode("utf-8"))
+                msg = json.loads(line)
             except Exception:
                 continue
             await self._route_incoming(msg)
 
     async def _stderr_reader(self):
         assert self._proc and self._proc.stderr
-        while True:
-            line = await self._proc.stderr.readline()
-            if not line:
-                break
+        async for line in self._read_stream_lines(self._proc.stderr, errors="replace"):
             # Keep this at debug to avoid noisy daemon logs in normal operation.
-            text = line.decode("utf-8", errors="replace").rstrip()
+            text = line.rstrip()
             self._stderr_tail.append(text)
             if len(self._stderr_tail) > 200:
                 self._stderr_tail = self._stderr_tail[-200:]
