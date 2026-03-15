@@ -261,4 +261,13 @@ uv run pytest
 # lint + format
 uvx ruff check src/ tests/
 uvx ruff format --line-length 144 src/ tests/
+
+# mutation testing (requires dev deps: uv sync --dev)
+./scripts/mutate.sh              # full run across all target modules
+./scripts/mutate.sh status.py    # single module
+./scripts/mutate.sh db/core.py   # subpackage module
+./scripts/mutate.sh --results    # show surviving mutants
+uv run mutmut show <mutant-id>   # inspect a specific mutant
 ```
+
+Target modules are configured in `pyproject.toml` under `[tool.mutmut]`.
