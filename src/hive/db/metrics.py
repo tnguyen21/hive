@@ -188,7 +188,7 @@ class MetricsMixin:
         query += f" GROUP BY model, {group_alias} ORDER BY issue_count DESC"
 
         cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._all(cursor)
 
     def get_metrics(
         self,
@@ -319,7 +319,7 @@ class MetricsMixin:
             """,
             (issue_id,),
         )
-        return cursor.fetchone()[0]
+        return self._scalar(cursor, 0)
 
     def count_events_by_type(self, issue_id: str, event_type: str) -> int:
         """
@@ -336,7 +336,7 @@ class MetricsMixin:
             "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ?",
             (issue_id, event_type),
         )
-        return cursor.fetchone()[0]
+        return self._scalar(cursor, 0)
 
     def count_events_by_type_since_reset(self, issue_id: str, event_type: str) -> int:
         """Count events of a specific type for an issue since the last retry_reset.
@@ -363,7 +363,7 @@ class MetricsMixin:
             """,
             (issue_id, event_type, issue_id),
         )
-        return cursor.fetchone()[0]
+        return self._scalar(cursor, 0)
 
     def count_events_in_window_after_reset(self, issue_id: str, event_type: str, minutes: int) -> int:
         """Count events within the last N minutes, but only after the most recent retry_reset.
@@ -389,7 +389,7 @@ class MetricsMixin:
             """,
             (issue_id, event_type, f"-{minutes} minutes", issue_id),
         )
-        return cursor.fetchone()[0]
+        return self._scalar(cursor, 0)
 
     def count_events_since_minutes(self, issue_id: str, event_type: str, minutes: int) -> int:
         """Count events of a given type for an issue within the last N minutes.
@@ -406,4 +406,4 @@ class MetricsMixin:
             "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ? AND created_at >= datetime('now', ?)",
             (issue_id, event_type, f"-{minutes} minutes"),
         )
-        return cursor.fetchone()[0]
+        return self._scalar(cursor, 0)

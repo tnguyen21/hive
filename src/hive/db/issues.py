@@ -137,11 +137,10 @@ class IssuesMixin:
             # Wire deps in the same transaction — the issue is never visible
             # to get_ready_queue without its blocking dependencies.
             if depends_on:
-                for dep_id in depends_on:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO dependencies (issue_id, depends_on, type) VALUES (?, ?, 'blocks')",
-                        (issue_id, dep_id),
-                    )
+                conn.executemany(
+                    "INSERT OR IGNORE INTO dependencies (issue_id, depends_on, type) VALUES (?, ?, 'blocks')",
+                    [(issue_id, dep_id) for dep_id in depends_on],
+                )
 
             self.log_event(issue_id, None, "created", {"title": title}, commit=False)
 
@@ -189,7 +188,7 @@ class IssuesMixin:
             query += f" LIMIT {limit}"
 
         cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._all(cursor)
 
     def claim_issue(self, issue_id: str, agent_id: str) -> bool:
         """
@@ -253,8 +252,7 @@ class IssuesMixin:
     def get_issue(self, issue_id: str) -> Optional[Dict[str, Any]]:
         """Get issue by ID."""
         cursor = self.conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        return self._one(cursor)
 
     def update_issue_status(self, issue_id: str, status: IssueStatus | str):
         """Update issue status. Clears assignee when setting to 'open' (INV-2)."""

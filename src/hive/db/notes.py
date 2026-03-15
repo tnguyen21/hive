@@ -72,5 +72,4 @@ class NotesMixin:
             params.append(project)
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
-        rows = self.conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return self._all(self.conn.execute(query, params))

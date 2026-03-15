@@ -6,6 +6,7 @@ import sqlite3
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partialmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -366,6 +367,23 @@ class DatabaseCore:
             self.conn.rollback()
             raise
 
+    @staticmethod
+    def _one(cursor: sqlite3.Cursor) -> dict[str, Any] | None:
+        """Materialize one row from *cursor* as a dict, or None."""
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _all(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
+        """Materialize all remaining rows from *cursor* as dicts."""
+        return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _scalar(cursor: sqlite3.Cursor, default: Any = None) -> Any:
+        """Return the first column of the next row from *cursor*."""
+        row = cursor.fetchone()
+        return row[0] if row else default
+
     def _ensure_column(self, table: str, column: str, col_type: str):
         """Add column to table if it does not exist. Idempotent."""
         cursor = self.conn.execute(f"PRAGMA table_info({table})")
@@ -555,6 +573,8 @@ class DatabaseCore:
         if commit:
             self.conn.commit()
 
+    log_system_event = partialmethod(log_event, None, None)
+
     def create_agent(
         self,
         name: str,
@@ -591,8 +611,7 @@ class DatabaseCore:
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get agent by ID."""
         cursor = self.conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        return self._one(cursor)
 
     def try_transition_agent_status(self, agent_id: str, *, from_status: str, to_status: str) -> bool:
         """CAS-style agent status transition."""
@@ -643,7 +662,7 @@ class DatabaseCore:
         query += " ORDER BY created_at ASC"
 
         cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._all(cursor)
 
     # --- Merge Queue Methods ---
 
@@ -675,7 +694,7 @@ class DatabaseCore:
         params.append(limit)
 
         cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._all(cursor)
 
     def get_merge_queue_stats(self, project: Optional[str] = None) -> Dict[str, int]:
         """
@@ -698,29 +717,6 @@ class DatabaseCore:
         for row in cursor.fetchall():
             stats[row["status"]] = row["count"]
         return stats
-
-    def log_system_event(self, event_type: str, detail: Optional[Dict[str, Any]] = None, commit: bool = True):
-        """
-        Log a system-level event to the audit trail.
-
-        Args:
-            event_type: Type of system event (e.g., 'daemon_started')
-            detail: Additional event details dict
-        """
-        detail_json = json.dumps(detail) if detail else None
-
-        if not self.conn:
-            raise RuntimeError("Database not connected")
-
-        self.conn.execute(
-            """
-            INSERT INTO events (issue_id, agent_id, event_type, detail)
-            VALUES (NULL, NULL, ?, ?)
-            """,
-            (event_type, detail_json),
-        )
-        if commit:
-            self.conn.commit()
 
     def _query_events(
         self,
@@ -753,7 +749,7 @@ class DatabaseCore:
             query += " LIMIT ?"
             params.append(limit)
         cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._all(cursor)
 
     def get_events(
         self,
@@ -778,7 +774,7 @@ class DatabaseCore:
     def get_max_event_id(self) -> int:
         """Return the current maximum event id, or 0 if no events."""
         cursor = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM events")
-        return cursor.fetchone()[0]
+        return self._scalar(cursor, 0)
 
     def get_recent_events(
         self,
@@ -812,8 +808,8 @@ class DatabaseCore:
 
     def list_projects(self) -> list[dict]:
         """Return all registered projects as [{name, path, registered_at}]."""
-        rows = self.conn.execute("SELECT name, path, registered_at FROM projects ORDER BY name").fetchall()
-        return [dict(r) for r in rows]
+        cursor = self.conn.execute("SELECT name, path, registered_at FROM projects ORDER BY name")
+        return self._all(cursor)
 
     def unregister_project(self, name: str) -> bool:
         """Remove a project from the registry. Returns True if a row was deleted."""
@@ -823,5 +819,5 @@ class DatabaseCore:
 
     def get_project_path(self, name: str) -> Optional[str]:
         """Return the disk path for a project by name, or None if not found."""
-        row = self.conn.execute("SELECT path FROM projects WHERE name = ?", (name,)).fetchone()
+        row = self._one(self.conn.execute("SELECT path FROM projects WHERE name = ?", (name,)))
         return row["path"] if row else None
