@@ -47,7 +47,7 @@ from .base import HiveBackend
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class ThreadState:
     directory: Optional[str] = None
     title: Optional[str] = None

@@ -92,7 +92,7 @@ class CompletionResult:
         return self.artifacts.get("git_commit")
 
 
-@dataclass
+@dataclass(slots=True)
 class AgentIdentity:
     """Agent identity and context."""
 
