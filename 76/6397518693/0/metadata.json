@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "766397518693",
+  "session_id": "2494acbe-9133-4978-89e0-f5e6e94eaa7e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-15T06:42:00.248649Z",
+  "branch": "add-mutation-testing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".gitignore",
+    "pyproject.toml",
+    "scripts/mutate.sh",
+    "tests/test_config.py",
+    "tests/test_metrics.py",
+    "tests/test_status.py",
+    "uv.lock"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1427fc2b969e",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 42012,
+    "cache_read_tokens": 1071136,
+    "output_tokens": 8203,
+    "api_call_count": 24
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-15T06:42:00.138266Z",
+    "agent_lines": 579,
+    "human_added": 5,
+    "human_modified": 11,
+    "human_removed": 0,
+    "total_committed": 595,
+    "agent_percentage": 97.3109243697479
+  }
+}
