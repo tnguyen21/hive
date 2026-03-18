@@ -3,7 +3,7 @@
   "checkpoint_id": "8da465017003",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "src/hive/cli/core.py",
     "src/hive/db/__init__.py",
@@ -32,13 +32,20 @@
       "context": "/8d/a465017003/2/context.md",
       "content_hash": "/8d/a465017003/2/content_hash.txt",
       "prompt": "/8d/a465017003/2/prompt.txt"
+    },
+    {
+      "metadata": "/8d/a465017003/3/metadata.json",
+      "transcript": "/8d/a465017003/3/full.jsonl",
+      "context": "/8d/a465017003/3/context.md",
+      "content_hash": "/8d/a465017003/3/content_hash.txt",
+      "prompt": "/8d/a465017003/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 22,
+    "cache_creation_tokens": 26940,
+    "cache_read_tokens": 469394,
+    "output_tokens": 4522,
+    "api_call_count": 18
   }
 }
