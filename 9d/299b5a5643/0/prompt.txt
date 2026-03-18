@@ -1,0 +1,26 @@
+Bad news — all 5 completed Hive tasks reported "already done" incorrectly. They're
+  reading irradiate's CI file instead of each target project's. Evidence: they reference
+  irradiate's commit c81814e and line numbers matching irradiate's ci.yml, not the target
+  repos.
+
+  The --project flag isn't isolating the queen to the target repo's context. Still waiting
+  on the 2 pycfg-rs tasks — likely same issue.
+
+  Want me to just do this directly? It's a straightforward CI edit across 4 repos — I can
+  branch, edit, commit, and push PRs for all 4 in parallel.
+
+so we have a bug where if we're in a project with `hive` configured in it, it'll override the headless `--project` flag. at least that's what it seems like.
+
+spin up subagents to look at the repo, get acclimated, and then figure out the root of this issue
+
+---
+
+[Request interrupted by user]
+
+---
+
+use uv
+
+---
+
+commit and push ty

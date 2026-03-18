@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "9d299b5a5643",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/hive/cli/queen.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9d/299b5a5643/0/metadata.json",
+      "transcript": "/9d/299b5a5643/0/full.jsonl",
+      "context": "/9d/299b5a5643/0/context.md",
+      "content_hash": "/9d/299b5a5643/0/content_hash.txt",
+      "prompt": "/9d/299b5a5643/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 37956,
+    "cache_read_tokens": 275445,
+    "output_tokens": 5497,
+    "api_call_count": 8
+  }
+}
