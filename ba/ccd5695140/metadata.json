@@ -3,7 +3,7 @@
   "checkpoint_id": "baccd5695140",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "src/hive/cli/queen.py"
   ],
@@ -28,13 +28,20 @@
       "context": "/ba/ccd5695140/2/context.md",
       "content_hash": "/ba/ccd5695140/2/content_hash.txt",
       "prompt": "/ba/ccd5695140/2/prompt.txt"
+    },
+    {
+      "metadata": "/ba/ccd5695140/3/metadata.json",
+      "transcript": "/ba/ccd5695140/3/full.jsonl",
+      "context": "/ba/ccd5695140/3/context.md",
+      "content_hash": "/ba/ccd5695140/3/content_hash.txt",
+      "prompt": "/ba/ccd5695140/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 20,
+    "cache_creation_tokens": 15621,
+    "cache_read_tokens": 277125,
+    "output_tokens": 2071,
+    "api_call_count": 14
   }
 }
