@@ -81,7 +81,7 @@ class QueenMixin:
                 prompt=prompt,
             )
 
-    _HIVE_GITIGNORE = "# Ephemeral queen session files (regenerated each session)\nqueen-state.md\nqueen-instructions.md\nqueen-context.md\n"
+    _HIVE_GITIGNORE = "# Ephemeral queen session files (regenerated each session)\nqueen-state.md\nqueen-instructions.md\n"
 
     def _queen_write_identity_files(self) -> Path:
         """Write queen identity files and return the instructions path."""
@@ -109,7 +109,7 @@ class QueenMixin:
             gitignore_path.write_text(self._HIVE_GITIGNORE)
         else:
             existing = gitignore_path.read_text()
-            if "queen-state.md" not in existing or "queen-context.md" not in existing:
+            if "queen-state.md" not in existing:
                 gitignore_path.write_text(existing.rstrip("\n") + "\n" + self._HIVE_GITIGNORE)
 
         # Clean up legacy sentinel block from CLAUDE.md if present
