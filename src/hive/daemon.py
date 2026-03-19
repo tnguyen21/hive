@@ -8,6 +8,7 @@ in "foreground" mode with stdout/stderr redirected to a log file. The parent
 process (the CLI) survives and can report status back to the user.
 """
 
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Optional
 
 from .config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class HiveDaemon:
@@ -41,9 +44,12 @@ class HiveDaemon:
         self.pid_dir = Path.home() / ".hive" / "pids"
         self.pid_file = self.pid_dir / "daemon.pid"
 
-        # Global log file: ~/.hive/logs/orchestrator.log
+        # Log directory and files
         self.log_dir = Path.home() / ".hive" / "logs"
-        self.log_file = self.log_dir / "orchestrator.log"
+        # Primary log: rotating hive.log (managed by RotatingFileHandler)
+        self.log_file = self.log_dir / "hive.log"
+        # Crash log: small stderr sink, truncated per daemon start
+        self._crash_log = self.log_dir / "daemon-crash.log"
 
     def _ensure_dirs(self):
         """Ensure PID and log directories exist."""
@@ -176,16 +182,20 @@ class HiveDaemon:
 
         # Strip CLAUDECODE so the daemon (and its workers) don't think they're nested
         spawn_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        log_fd = open(self.log_file, "a")  # noqa: SIM115
+
+        # Structured logging goes to rotating hive.log via RotatingFileHandler
+        # (configured in utils.configure_logging). Redirect stdout to /dev/null
+        # and stderr to a small crash log truncated per start for forensics.
+        crash_fd = open(self._crash_log, "w")  # noqa: SIM115
         proc = subprocess.Popen(
             cmd,
-            stdout=log_fd,
-            stderr=log_fd,
+            stdout=subprocess.DEVNULL,
+            stderr=crash_fd,
             stdin=subprocess.DEVNULL,
             start_new_session=True,  # detach from parent's session
             env=spawn_env,
         )
-        log_fd.close()
+        crash_fd.close()
 
         # Write child PID
         self._write_pid(proc.pid)
@@ -283,11 +293,14 @@ class HiveDaemon:
         except KeyboardInterrupt:
             pass
         except Exception:
-            # Fallback: read file directly
+            # Fallback: read tail directly without slurping entire file
             try:
-                content = self.log_file.read_text()
-                log_lines = content.split("\n")
-                print("\n".join(log_lines[-lines:]))
+                chunk_size = lines * 4096
+                file_size = self.log_file.stat().st_size
+                with open(self.log_file, "rb") as f:
+                    f.seek(max(0, file_size - chunk_size))
+                    tail = f.read().decode(errors="replace").splitlines()
+                print("\n".join(tail[-lines:]))
             except Exception as e2:
                 print(f"Failed to read logs: {e2}")
 
@@ -304,7 +317,7 @@ def run_daemon_foreground(db):
         stop_event = asyncio.Event()
 
         def _signal_handler():
-            print("\nShutting down...", flush=True)
+            logger.info("Received shutdown signal")
             stop_event.set()
             # Restore default handlers so a second Ctrl+C kills the
             # process immediately at the OS level — no event loop needed.
@@ -354,4 +367,4 @@ def run_daemon_foreground(db):
     except KeyboardInterrupt:
         pass  # Already handled by signal handler
     finally:
-        print("\nShutting down...")
+        logger.info("Daemon process exiting")

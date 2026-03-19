@@ -123,7 +123,7 @@ def _gather_recent_events(db: Database, limit: int = 50) -> list[dict]:
 
 
 def _gather_daemon_log_tail(lines: int = 50) -> list[str]:
-    log_file = HIVE_DIR / "logs" / "orchestrator.log"
+    log_file = HIVE_DIR / "logs" / "hive.log"
     if not log_file.exists():
         return [f"(no log file: {log_file})"]
     try:
