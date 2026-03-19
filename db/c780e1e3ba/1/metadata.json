@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "dbc780e1e3ba",
+  "session_id": "699f76df-fed8-424d-9579-5d3611086ece",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-19T04:35:04.215033Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/hive/daemon.py",
+    "src/hive/diag.py",
+    "src/hive/merge.py",
+    "src/hive/orchestrator/lifecycle.py",
+    "tests/test_orchestrator.py",
+    "src/hive/orchestrator/completion.py",
+    "src/hive/orchestrator/core.py",
+    "tests/conftest.py",
+    "src/hive/backends/__init__.py",
+    "src/hive/backends/pool.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d644186c4cdb",
+  "checkpoint_transcript_start": 7,
+  "transcript_lines_at_start": 7,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-19T04:35:04.21098Z",
+    "agent_lines": 288,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 1,
+    "total_committed": 289,
+    "agent_percentage": 99.65397923875432
+  }
+}
