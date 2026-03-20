@@ -98,14 +98,6 @@ class HiveBackend(ABC):
             if inspect.isawaitable(result):
                 await result
 
-
-def _first_text(parts: List[Dict[str, Any]]) -> str:
-    """Return the first text part from a backend message payload."""
-    for part in parts:
-        if part.get("type") == "text":
-            return str(part.get("text", ""))
-    return ""
-
     @abstractmethod
     async def connect_with_reconnect(self, max_retries: int = -1, retry_delay: int = 5):
         """Start consuming events (blocks until stopped)."""
@@ -121,3 +113,11 @@ def _first_text(parts: List[Dict[str, Any]]) -> str:
 
     @abstractmethod
     async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None: ...
+
+
+def _first_text(parts: List[Dict[str, Any]]) -> str:
+    """Return the first text part from a backend message payload."""
+    for part in parts:
+        if part.get("type") == "text":
+            return str(part.get("text", ""))
+    return ""
