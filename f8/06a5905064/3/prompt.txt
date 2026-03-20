@@ -1,0 +1,902 @@
+Base directory for this skill: /Users/tau/.claude/skills/sitrep
+
+# Repo Sitrep
+
+Produce a concise situational report on the repository rooted at the current working directory. The goal is to orient a developer who is context-switching into this project — or to prime an agent with the context it needs before starting work.
+
+You have a token budget but no time pressure. Be thorough in your research, concise in your output.
+
+## Phase 1: Gather (parallel where possible)
+
+Run all of the following in parallel using subagents or parallel tool calls. Do not skip any category — missing data is itself a signal.
+
+### 1a. Identity and purpose
+- Read README.md (or README.rst, README.txt) if it exists
+- Read CLAUDE.md / .claude/CLAUDE.md if it exists
+- Read pyproject.toml, package.json, Cargo.toml, or equivalent project manifest
+- Read any ARCHITECTURE.md, CONTRIBUTING.md, or docs/index.md
+- Identify: project name, one-line description, language/stack, intended audience
+
+### 1b. Structure
+- List top-level directory contents
+- Glob for source entry points (main.py, src/lib.rs, src/index.ts, etc.)
+- Count files and rough LOC by language (use `tokei` if available, otherwise `find | wc -l`)
+- Identify test locations and test framework
+- Note any monorepo structure (workspaces, packages/)
+
+### 1c. Git state
+- `git log --oneline -20` — recent commit history
+- `git log --oneline --since="2 weeks ago"` — velocity/recency
+- `git branch -a` — all branches, identify which look active vs stale
+- `git status` — uncommitted changes (staged and unstaged)
+- `git stash list` — any stashed work
+- `git diff --stat` — what's dirty right now
+- If there are uncommitted changes, `git diff` to understand what's in flight
+
+### 1d. CI / GitHub state
+- Check for .github/workflows/ — what CI exists?
+- If `gh` CLI is available and repo has a remote:
+  - `gh pr list` — open PRs
+  - `gh issue list` — open issues
+  - `gh run list -L 5` — recent CI runs and their status
+
+### 1e. Dependencies and health
+- Check for lockfiles (uv.lock, Cargo.lock, bun.lockb, package-lock.json, etc.)
+- If Rust: `cargo outdated` or check Cargo.toml versions
+- If Python/uv: `uv pip list --outdated` or similar
+- If JS/TS: check for outdated deps
+- Look for TODO/FIXME/HACK/XXX comments: `rg -c "TODO|FIXME|HACK|XXX"` (just counts per file)
+
+### 1f. Documentation and specs
+- Glob for any spec files, design docs, or ADRs (docs/, specs/, decisions/, *.spec.md)
+- Check for CHANGELOG.md or HISTORY.md
+- Look for any .md files in the repo root beyond README
+
+## Phase 2: Synthesize
+
+From the gathered data, produce a structured report. Do NOT just dump raw tool output. Interpret and synthesize.
+
+### Output format
+
+```
+# Sitrep: {project name}
+
+## What this is
+{One paragraph. What the project does, who it's for, what stack it uses.
+Mention the repo's maturity: greenfield, active development, mature/stable, stale.}
+
+## Current state
+- **Last commit**: {date, relative} — "{message}"
+- **Branch**: {current branch} ({N total branches})
+- **Dirty**: {yes/no — if yes, summarize what's uncommitted}
+- **CI**: {passing/failing/none}
+- **Open PRs**: {count, with titles if few}
+- **Open issues**: {count, with titles if few}
+
+## What's in flight
+{Based on recent commits, branch names, uncommitted changes, and open PRs,
+deduce what work is currently happening. What was the developer working on
+when they last touched this? What branches look like active feature work?}
+
+## Architecture snapshot
+{Brief description of how the code is organized. Entry points, main modules,
+key abstractions. Not a full architecture doc — just enough to orient.}
+
+## Health signals
+- **Dependencies**: {clean / N outdated — list names if <10}
+- **TODOs**: {count across codebase, hotspot files if clustered}
+- **Test coverage**: {exists/doesn't exist, framework, rough extent}
+- **Stale branches**: {list any that look mergeable or deletable}
+
+## Likely next moves
+{Based on everything above, what are the 2-4 most natural next actions?
+Be specific and opinionated. Examples:
+- "Finish the feature on branch X and merge"
+- "The uncommitted changes look like a half-done refactor of Y — decide whether to commit or discard"
+- "Bump the 3 outdated deps and run tests"
+- "This has no CI — adding a basic GitHub Actions workflow would be high-value"
+Don't suggest things that aren't grounded in what you found.}
+```
+
+## Guidelines
+
+- If a section has no data (e.g., no CI, no issues), say so in one line and move on. Don't pad.
+- "Likely next moves" is the most valuable section. Spend your reasoning budget there.
+- If you find CLAUDE.md or PM memory files, use them to inform your interpretation — they contain the developer's own context about the project.
+- Be dense, not verbose. No padding, no filler — but don't truncate meaningful findings to hit an arbitrary word count. Let the complexity of the repo dictate the length.
+- Do not use emoji.
+- Write in second person ("you were working on..." not "the developer was working on...").
+
+---
+
+<task-notification>
+<task-id>aeb2c91787c604195</task-id>
+<tool-use-id>toolu_01RGPVVqzDs5oEtJ57uu9RYt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/aeb2c91787c604195.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather git state" completed</summary>
+<result>## Git Command Output Summary
+
+### 1. git log --oneline -20
+```
+61526c6 Route daemon logging through RotatingFileHandler, drop orchestrator.log
+f8ab89a Add BackendPool for per-project backend selection
+e9535ad Keep queen-context.md tracked in git (revert gitignore addition)
+484711b gitignore queen context
+174e0a8 Remove ALLOWED_TAGS whitelist, make issue tags free-form
+12b6e8a Fix queen subprocess ignoring --project flag
+6f428cc refinery merge ui update
+897e356 Fix CLI test: strip ANSI escape codes before asserting
+538c6bb Fix CI: set NO_COLOR=1 to disable Rich/Typer ANSI codes
+9349f3d Add GitHub Actions CI with mutation testing
+2a1a5bc rename github refs from tnguyen21 to nwyin
+8f6f782 Add mutation testing section to README
+7dfed23 Add mutation testing with mutmut
+90e8354 docs
+7244ec5 Use smaller Python idioms in git and backends
+0ae4f25 Standardize best-effort failure handling
+7063dfd Bind orchestrator dependencies explicitly
+7736f39 Standardize repeated DB idioms
+2d5c946 Make config and migrations declarative
+b3dca43 Remove legacy agent foreign-key compatibility
+```
+
+### 2. git log --oneline --since="2 weeks ago"
+All 20 commits shown above (the entire log is within the last 2 weeks)
+
+### 3. git branch -a
+```
+  entire/538c6bb-e3b0c4
+  entire/7dfed23-e3b0c4
+  entire/checkpoints/v1
+* main
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/entire/checkpoints/v1
+  remotes/origin/main
+```
+
+### 4. git status
+```
+On branch main
+Your branch is up to date with 'origin/main'.
+
+nothing to commit, working tree clean
+```
+
+### 5. git stash list
+```
+stash@{0}: WIP on rename-claude-backend-and-add-stop: 50f257e Rename claude-ws backend to claude, add top-level start/stop commands
+stash@{1}: WIP on feat/claude-ws-backend: c9c67b7 Speed up test suite: add pytest-xdist and mock slow sleeps
+stash@{2}: WIP on fix/session-worktree-leaks: 7c8c423 Fix session and agent record leaks in orchestrator
+stash@{3}: WIP on chore/pre-commit-hooks: 0b1d813 Add prompt versioning for tracking template changes
+stash@{4}: WIP on fix/session-worktree-leaks: 7c8c423 Fix session and agent record leaks in orchestrator
+```
+
+### 6. git diff --stat
+```
+(No output - working tree is clean, no uncommitted changes)
+```</result>
+<usage><total_tokens>15721</total_tokens><tool_uses>6</tool_uses><duration_ms>11506</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/aeb2c91787c604195.output
+
+---
+
+<task-notification>
+<task-id>aeb2c91787c604195</task-id>
+<tool-use-id>toolu_014kSnaekEoadugpx2eojVhs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/aeb2c91787c604195.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather git state" completed</summary>
+<result>Yes, I'm done. Here are all the findings from the git commands:
+
+## Complete Git Status Report
+
+**Current Branch:** main (up to date with origin/main)
+
+**Working Tree:** Clean (no uncommitted changes)
+
+**Recent Commits (Last 20):**
+The most recent work includes logging improvements (RotatingFileHandler), backend pooling for per-project selection, queen context file management, tag system changes, and various refactoring efforts around orchestrator, config, and CLI standardization.
+
+**Branches:**
+- Local: main, entire/538c6bb-e3b0c4, entire/7dfed23-e3b0c4, entire/checkpoints/v1
+- Remote: origin/main, origin/entire/checkpoints/v1, origin/HEAD pointing to origin/main
+
+**Stashes:** 5 stashes present from previous work on:
+- rename-claude-backend-and-add-stop
+- feat/claude-ws-backend
+- fix/session-worktree-leaks (appears twice)
+- chore/pre-commit-hooks
+
+**Uncommitted Changes:** None
+
+The repository is in a clean state with no pending changes or conflicts.</result>
+<usage><total_tokens>16423</total_tokens><tool_uses>0</tool_uses><duration_ms>3389</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/aeb2c91787c604195.output
+
+---
+
+<task-notification>
+<task-id>acef1a5d18e705e41</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/acef1a5d18e705e41.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather CI and GitHub state" completed</summary>
+<result>Excellent. Now let me compile and return all the findings:
+
+## Summary Report: Hive Project Status
+
+### 1. CI/CD Workflows
+
+**File**: `/Users/tau/projects/hive/.github/workflows/ci.yml`
+
+The CI workflow runs on:
+- **Triggers**: Push to `main` and pull requests against `main`
+- **Jobs**:
+  - **test**: Runs on Ubuntu, uses `uv` for setup, checks code with `ruff`, and runs pytest with 30-second timeouts
+  - **mutate**: Runs only on main branch (after test passes), executes mutation testing with `mutmut` to verify test coverage quality
+
+### 2. Open PRs and Issues
+
+- **Open PRs**: None
+- **Open Issues**: None
+
+### 3. Recent CI Runs (last 5)
+
+All recent runs completed successfully:
+1. Route daemon logging through RotatingFileHandler, drop orchestrator.log — 27m14s (2026-03-19)
+2. Keep queen-context.md tracked in git (revert gitignore addition) — 28m1s (2026-03-18)
+3. Remove ALLOWED_TAGS whitelist, make issue tags free-form — 27m16s (2026-03-18)
+4. Fix queen subprocess ignoring --project flag — 27m45s (2026-03-18)
+5. refinery merge ui update — 27m56s (2026-03-17)
+
+### 4. Code Quality: TODO/FIXME/HACK/XXX Comments
+
+**Count**: 0 total occurrences across Python files
+(The codebase has no lingering technical debt markers in comments.)
+
+### 5. Dependency/Lock Files
+
+- **Present**: `/Users/tau/projects/hive/uv.lock`
+- **Not found**: requirements.txt (project uses `uv` for dependency management)
+
+### 6. Documentation Files
+
+Located in `/Users/tau/projects/hive/docs/`:
+
+| File | Purpose |
+|------|---------|
+| **TECHNICAL_DESIGN_DOC.md** | Implementation-synced design doc covering architecture, database, orchestrator loop, merge pipeline, session lifecycle. Last verified 2026-02-16. |
+| **IMPLEMENTATION_NOTES.md** | Living status doc tracking phases 1-8 completion, feature delivery, post-mortems, and open questions. Last updated 2026-03-14. |
+| **NOTES_SPEC.md** | Specification for notes messaging system (no categories, orchestrator-enforced delivery, addressed routing). |
+| **SMART_ROUTING_SPEC.md** | Specification for capability-based routing of issues to workers. |
+| **NOTES_RAG_DESIGN.md** | Design for notes retrieval-augmented generation. |
+| **ABBR.md** | Abbreviations/terminology guide. |
+
+Additional documentation:
+- `/Users/tau/projects/hive/README.md` — User-facing guide covering when to use Hive, how it works, monitoring, and examples
+- `/Users/tau/projects/hive/.hive/project-context.md` — Project-specific context
+- `/Users/tau/projects/hive/.hive/queen-context.md` — Queen bee context
+
+### 7. Project Structure Summary
+
+**Hive** is a multi-agent coding orchestrator (Alpha) that:
+- Coordinates parallel Claude Code workers against a shared SQLite issue queue
+- Uses git worktrees for isolated execution sandboxes
+- Implements a "Queen" coordinator (Claude Code session) for planning and task decomposition
+- Features a daemon mode with SSE/WebSocket backend support
+- Includes merge validation pipeline (rebase, tests, optional Refinery LLM review)
+- Has 250 passing unit tests across 15 modules + 3 prompt templates
+
+All recent CI runs pass successfully with no open issues or PRs.</result>
+<usage><total_tokens>18456</total_tokens><tool_uses>18</tool_uses><duration_ms>22528</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/acef1a5d18e705e41.output
+
+---
+
+<task-notification>
+<task-id>ae6160d4236cae495</task-id>
+<tool-use-id>toolu_011q6kwrWbfoMe4ssokLiumd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/ae6160d4236cae495.output</output-file>
+<status>completed</status>
+<summary>Agent "Gather repo identity/docs" completed</summary>
+<result>Perfect! I have gathered comprehensive information about the Hive project. Let me provide a complete summary:
+
+---
+
+## Hive Project Summary
+
+### Overview
+**Hive** is a lightweight multi-agent orchestrator that coordinates parallel Claude/Codex LLM workers against a shared SQLite issue queue, with git worktrees as isolated execution sandboxes and an LLM-powered refinery for merge validation. It's designed for complex coding tasks that naturally decompose into subtasks.
+
+### Project Metadata
+- **Name**: hive
+- **Version**: 0.1.0
+- **Python**: >=3.12 (uses `uv` for environment management)
+- **License**: Not specified in pyproject.toml
+- **Entry point**: `hive = "hive.cli:main"` (in `src/hive/cli/parser.py`)
+- **Database location**: `~/.hive/hive.db` (NOT in project root; shared across all projects)
+- **Config location**: Layered system with defaults → `~/.hive/config.toml` → `.hive.toml` → env vars
+
+### Top-Level Directory Structure
+```
+/Users/tau/projects/hive/
+├── README.md (13,141 bytes) — main documentation
+├── pyproject.toml — Python package metadata and tool config
+├── .hive.toml — project-specific config
+├── pytest.ini — pytest configuration
+├── uv.lock — dependency lockfile
+├── src/hive/ — main source code
+├── tests/ — 250+ passing unit tests
+├── docs/ — architectural documentation
+├── scripts/ — utility scripts (mutation testing, etc.)
+├── analysis-output/ — diagnostic output directory
+├── .claude/ — Claude Code project settings
+├── .hive/ — persistent project context (project-context.md, queen-context.md)
+├── .github/ — GitHub Actions CI configuration
+└── .venv/, .pytest_cache/, .ruff_cache/ — development artifacts
+```
+
+### Key Documentation Files
+
+#### 1. **README.md** (274 lines)
+- Quick start guide, feature overview, command reference
+- Explains when to use Hive vs Claude Code
+- Covers architecture (Issues, Workers, Queen), setup, monitoring, review/finalize workflow
+- Configuration table with key settings and models
+- Headless Queen mode for non-interactive dispatch
+- Codex backend sandbox/approval flags
+- Cost and performance guidance
+
+#### 2. **docs/TECHNICAL_DESIGN_DOC.md** (last verified Feb 16, 2026)
+- Architecture overview: single-process orchestrator with async event loop
+- SQLite schema: `issues`, `dependencies`, `agents`, `events`, `notes`, `merge_queue`, plus `agent_runs` view
+- Issue statuses: `open`, `in_progress`, `done`, `finalized`, `failed`, `escalated`, `canceled`
+- Ready queue logic and atomic claiming mechanism
+- Worker spawn process, completion detection, retry/escalation policy
+- Merge pipeline: rebase → test → refinery review → ff-merge
+- Stall handling, degraded mode, reconciliation on startup
+
+#### 3. **.hive/project-context.md** (77 lines)
+- Architecture breakdown of key components (Orchestrator, Backends, Merge/Refinery, Database, CLI)
+- Detailed file map with line counts and responsibilities
+- Build & test commands, conventions (flat CLI, mixins, CAS, JSONL communication)
+- Dependencies: aiohttp, typer, rich, pyyaml, SQLite, Claude CLI, git
+- Known gotchas (DB location, config loading, WS handshake, macOS provenance, worktree concurrency, FK pragmas)
+
+#### 4. **docs/ABBR.md** (320 lines)
+- Coding style guide for abbreviations
+- Core principle: keep domain words explicit, abbreviate infrastructure/locals
+- Allowed: `cfg`, `ctx`, `msg`, `res`, `err`, `exc`, `evt`, etc.
+- Disallowed: `wt`, `iss`, `agt`, `sess`, `proj`, `orch` (as abbreviations, not locals)
+- Function names in plain English, DB/CLI surfaces fully spelled out
+
+#### 5. **docs/IMPLEMENTATION_NOTES.md** (50+ lines)
+- Status: Phases 1-8 complete, fully functional multi-agent orchestrator
+- 250+ passing unit tests, 15 modules, 3 prompt templates
+- Latest work: complexity audit, ToolExecutor removal, completion detection simplification
+
+### Source Code Structure (2,604 Python files counted)
+
+```
+src/hive/
+├── __init__.py — module initialization, logging config
+├── cli/
+│   ├── __init__.py — exports HiveCLI, main, _do_setup
+│   ├── parser.py — CLI entry point (main function)
+│   ├── typer_app.py — Typer app with all commands
+│   ├── core.py — HiveCLI class implementation
+│   ├── runtime.py — command implementations (create, list, start, stop, etc.)
+│   ├── queen.py — Queen decomposition/approval interface
+│   ├── formatters.py — output formatting helpers
+│   ├── rich_views.py — rich terminal UI components
+│   └── global_status.py — status dashboard
+├── db/
+│   ├── __init__.py
+│   ├── core.py — DatabaseCore: schema, connection, event logging, project registration
+│   ├── issues.py — IssuesMixin: CRUD, CAS status transitions, ready queue, epic support
+│   ├── notes.py — NotesMixin: inter-worker knowledge transfer
+│   └── metrics.py — MetricsMixin: token tracking, cost estimation
+├── orchestrator/
+│   ├── __init__.py
+│   ├── core.py — OrchestratorCore: main loop, event handlers, reconciliation, permission policy
+│   ├── lifecycle.py — LifecycleMixin: worker spawn, stall detection, lease renewal
+│   ├── completion.py — CompletionMixin: result assessment, retry/escalate routing
+│   └── deps.py — dependency resolution utilities
+├── backends/
+│   ├── __init__.py
+│   ├── base.py — HiveBackend ABC: session management + event streaming interface
+│   ├── backend_claude.py — ClaudeWSBackend: WebSocket to Claude CLI (primary)
+│   ├── backend_codex.py — CodexAppServerBackend: JSON-RPC to Codex app-server
+│   └── pool.py — BackendPool: per-project backend selection
+├── prompts/
+│   ├── system.md — system prompt template
+│   ├── worker.md — worker prompt template
+│   ├── refinery.md — refinery/merge-reviewer prompt template
+│   ├── queen.md — Queen session prompt
+│   └── init.md — initialization prompt
+├── config.py — Config class, layered configuration loading
+├── prompts.py — prompt builders, .hive-result.jsonl and .hive-notes.jsonl I/O
+├── merge.py — MergeProcessor and MergeProcessorPool: refinery session, merge pipeline
+├── git.py — git worktree operations (create, remove, rebase, merge, branch ops)
+├── daemon.py — daemon lifecycle: PID management, orphan detection, foreground runner
+├── status.py — global status aggregation
+├── utils.py — ID generation, logging config, utilities
+├── diag.py — diagnostic bundle generation (`hive debug`)
+└── datasette_metadata.json — optional datasette UI metadata
+```
+
+### CLI Commands (Flat Structure, No Subcommand Groups)
+
+**Core Commands**:
+- `hive queen` — Launch Queen (main interactive interface)
+- `hive queen --headless -p "..."` — Non-interactive dispatch with auto-create issues
+- `hive setup` — One-time project config
+- `hive create` — Create issue manually
+- `hive start` / `hive stop` — Daemon lifecycle
+- `hive status` — System overview
+- `hive list` — List issues
+- `hive show <id>` — Issue details
+- `hive review` — Review completed work
+- `hive finalize <id>` — Merge and finalize
+- `hive retry <id>` — Retry failed issue
+- `hive note` — Add persistent context
+- `hive doctor` — Health checks
+- `hive debug` — Diagnostic dump
+- `hive agents`, `hive metrics`, `hive merges`, `hive logs`, `hive epic`, `hive dep`, `hive mail`
+
+### Configuration (Layered)
+**Sources** (later overrides earlier):
+1. Built-in defaults
+2. `~/.hive/config.toml`
+3. `.hive.toml` (project-specific)
+4. Environment variables (`HIVE_*`)
+
+**Key Settings**:
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `HIVE_BACKEND` | `claude` | Backend: `claude` or `codex` |
+| `HIVE_MAX_AGENTS` | `10` | Max concurrent workers |
+| `HIVE_WORKER_MODEL` | `claude-sonnet-4-5-20250929` | Worker model |
+| `HIVE_REFINERY_MODEL` | `claude-opus-4-6` | Merge reviewer model |
+| `HIVE_MAX_TOKENS_PER_ISSUE` | `200000` | Per-issue token budget |
+| `HIVE_MAX_TOKENS_PER_RUN` | `2000000` | Per-run token budget |
+
+### Project Dependencies
+**Core**:
+- `aiohttp>=3.9.0` — HTTP client (Claude WebSocket backend)
+- `typer>=0.16.0` — CLI framework
+- `rich>=13.9.0` — Terminal formatting
+- `pyyaml>=6.0` — YAML parsing
+
+**Optional**:
+- `datasette>=0.65` — Web UI for database
+
+**Dev**:
+- `pytest>=9.0.2`, `pytest-asyncio`, `pytest-timeout`, `pytest-xdist` — Testing
+- `mutmut>=3.0` — Mutation testing
+- `ty>=0.0.23` — Type checking
+
+### Testing
+- **Command**: `python -m pytest tests/ -v --timeout=30` (runs unit tests with `-n auto` parallelism)
+- **Integration**: `python -m pytest tests/ -v -m integration --timeout=30`
+- **Lint**: `uvx ruff check`
+- **Format**: `uvx ruff format --line-length 144`
+- **Type check**: `uvx ty check`
+
+### File Statistics
+- **Python files**: 2,604 (includes `.venv/` and cache)
+- **Markdown files**: 47 (project docs + venv/cache)
+- **Config files**: `pyproject.toml`, `.hive.toml`, `.pre-commit-config.yaml`, `.github/workflows/ci.yml`
+
+### Architecture Highlights
+
+**Data Flow**:
+1. User creates issues via CLI → daemon polls DB for open issues
+2. Daemon spawns worker in git worktree → worker implements with Claude CLI session
+3. Worker writes `.hive-result.jsonl` completion → orchestrator reads result
+4. Issue routes to merge queue → refinery reviews/tests/merges → issue finalized
+
+**Key Design**:
+- **Ephemeral agents**: Created per task, deleted after merge (not persistent identity)
+- **CAS semantics**: All status transitions use compare-and-swap (`try_transition_issue_status`)
+- **Mixin composition**: Database = IssuesMixin + NotesMixin + MetricsMixin + DatabaseCore; Orchestrator = CompletionMixin + LifecycleMixin + OrchestratorCore
+- **Backend abstraction**: Two implementations (Claude WebSocket, Codex JSON-RPC) via `HiveBackend` ABC
+- **Merge pipeline**: Mechanical fast-path (rebase + test) with LLM refinery fallback for conflicts
+- **Inter-worker coordination**: Notes system for knowledge transfer across parallel workers on same epic
+
+### Configuration Files
+- **pyproject.toml**: Package metadata, tool configs (ruff line-length=144, ty rules, mutmut paths)
+- **.hive.toml**: Project-specific overrides (e.g., `max_tokens_per_issue = 500000`)
+- **.pre-commit-config.yaml**: Git hooks (if configured)
+- **.github/workflows/ci.yml**: CI/CD pipeline
+
+### Documentation in Repo Root
+- **README.md** — Primary user-facing documentation
+- **docs/TECHNICAL_DESIGN_DOC.md** — Architecture and implementation details
+- **docs/ABBR.md** — Coding style guide for abbreviations
+- **docs/IMPLEMENTATION_NOTES.md** — Status, delivered features, post-mortems
+- **docs/NOTES_RAG_DESIGN.md**, **NOTES_SPEC.md**, **SMART_ROUTING_SPEC.md** — Feature-specific design docs
+- **.hive/project-context.md** — Project knowledge for Claude AI integration
+- **.hive/queen-context.md** — Persistent learnings from Queen sessions
+
+### Entry Points
+- **CLI**: `hive.cli:main` (in `src/hive/cli/parser.py`)
+- **Library**: `from hive.cli import HiveCLI, cli_command`
+
+### Recent Git Commits (from initial status)
+1. `61526c6` — Route daemon logging through RotatingFileHandler
+2. `f8ab89a` — Add BackendPool for per-project backend selection
+3. `e9535ad` — Keep queen-context.md tracked in git
+4. `484711b` — gitignore queen context
+5. `174e0a8` — Remove ALLOWED_TAGS whitelist
+
+---
+
+This is a mature, well-documented project with clear separation of concerns, comprehensive testing, and thoughtful design documentation. The codebase follows flat CLI semantics, explicit domain naming, and mixin-based composition for maintainability.</result>
+<usage><total_tokens>36006</total_tokens><tool_uses>32</tool_uses><duration_ms>54973</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/ae6160d4236cae495.output
+
+---
+
+noticing an issue where agent worktrees aren't cleaned up after being completed and merged; can we figure out what's going on here?
+
+---
+
+<task-notification>
+<task-id>b4jj83mlf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/b4jj83mlf.output</output-file>
+<status>killed</status>
+<summary>Background command "TODO/FIXME counts in Python files" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122/tasks/b4jj83mlf.output
+
+---
+
+[Request interrupted by user]
+
+---
+
+are these the right fixes? we don't do anything like re-use worktrees for retries or anything like that right?
+
+---
+
+okay go ahead and implement these fixes then
+
+---
+
+sweet merge into main
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - User first requested a `/sitrep` (situational report) on the Hive repository to orient on current project state.
+   - User then reported a bug: "noticing an issue where agent worktrees aren't cleaned up after being completed and merged" and asked to investigate.
+   - After analysis, user asked to confirm the fixes were correct and that worktrees aren't reused for retries.
+   - User then asked to implement the fixes.
+   - User asked to merge the fix branch into main.
+
+2. Key Technical Concepts:
+   - **Hive**: Multi-agent coding orchestrator coordinating parallel Claude Code workers against a shared SQLite issue queue
+   - **Agent worktrees**: Isolated git worktrees created per worker agent at `.worktrees/{agent_name}`, each gets branch `agent/{agent_name}`
+   - **Worktree lifecycle**: create_worktree → worker runs → completion → merge pipeline → cleanup via `_cleanup_merge_resources()`
+   - **`_cleanup_agent()` default**: `remove_worktree=False` because the success path intentionally preserves worktrees for the merge pipeline
+   - **CAS (Compare-And-Swap)**: All status transitions use atomic CAS semantics
+   - **Mixin composition**: Orchestrator = OrchestratorCore + CompletionMixin + LifecycleMixin
+   - **Ephemeral agents**: Created per task, deleted after merge — no worktree reuse across retries
+   - **Merge pipeline**: Worker completes → enqueue_merge → refinery review → ff-merge → `_cleanup_merge_resources()` removes worktree
+
+3. Files and Code Sections:
+
+   - **`src/hive/orchestrator/lifecycle.py`**
+     - Contains `monitor_agent()` which monitors worker sessions. The except block at line 426-435 was the first bug site.
+     - **Change**: Added `remove_worktree=True` to `_cleanup_agent()` call on monitor exception:
+     ```python
+     except Exception as e:
+         logger.exception(f"Monitor error for session {my_session_id} (agent={agent.agent_id}, issue={agent.issue_id}): {e}")
+         self.db.log_event(
+             agent.issue_id,
+             agent.agent_id,
+             "monitor_error",
+             {"error": str(e)},
+         )
+         # Tear down the agent so it doesn't leak in active_agents.
+         # remove_worktree=True: no other path will clean it up since
+         # the agent is about to be unregistered and marked failed.
+         await self._cleanup_agent(agent, remove_worktree=True)
+     ```
+
+   - **`src/hive/orchestrator/completion.py`**
+     - Contains `handle_agent_complete()` (line 226) which processes agent completion. The except block at lines 268-275 was the second bug site. `remove_worktree_on_teardown` initialized to `False` at line 240, only set to `True` on SKIP/FAIL transitions. On SUCCESS, `_handle_completion_success()` returns `False` (line 224) because merge pipeline needs the worktree.
+     - **Change**: Added merge queue check in except block:
+     ```python
+     except Exception as e:
+         transition = decision.transition.value if decision else "error_completion_handler"
+         self.db.log_event(
+             agent.issue_id,
+             agent.agent_id,
+             "completion_error",
+             {"error": str(e), "transition": transition},
+         )
+         # If the merge was never enqueued, nothing else will clean up
+         # the worktree — force removal on teardown.
+         if not remove_worktree_on_teardown:
+             if not self.db.has_pending_merge(agent.issue_id):
+                 remove_worktree_on_teardown = True
+     finally:
+         await self._cleanup_agent(agent, remove_worktree=remove_worktree_on_teardown)
+     ```
+
+   - **`src/hive/db/core.py`**
+     - Contains DatabaseCore with merge queue operations. Added `has_pending_merge()` helper using same query pattern as startup reconciliation in `core.py:307-308`.
+     - **Change**: Added new method after `get_queued_merges()`:
+     ```python
+     def has_pending_merge(self, issue_id: str) -> bool:
+         """Check whether an issue has an active (queued or running) merge queue entry."""
+         row = self.conn.execute(
+             "SELECT 1 FROM merge_queue WHERE issue_id = ? AND status IN ('queued', 'running')",
+             (issue_id,),
+         ).fetchone()
+         return row is not None
+     ```
+
+   - **`src/hive/orchestrator/core.py`** (read, not modified)
+     - `_cleanup_agent()` at line 652 defaults `remove_worktree=False` — this is the root cause pattern
+     - `_reconcile_stale_agents()` at line 259 handles startup cleanup but only for agents still marked `working` in DB
+
+   - **`src/hive/merge.py`** (read, not modified)
+     - `_cleanup_merge_resources()` at line 522 handles worktree/branch/agent cleanup after merge
+     - `_finalize_issue()` at line 493 calls `_teardown_after_finalize()` which calls `_cleanup_merge_resources()`
+     - All merge error paths (rejected, escalated, exception) call `_cleanup_merge_resources()`
+
+   - **`src/hive/git.py`** (read, not modified)
+     - `create_worktree()` at line 36 creates `.worktrees/{agent_name}` with retry logic
+     - `remove_worktree()` at line 68 with fallback to shutil.rmtree + prune
+
+4. Errors and fixes:
+   - **Non-existent method reference**: Initially wrote `self.db.get_merge_queue_entry_for_issue(agent.issue_id)` in completion.py. Discovered via grep that this method didn't exist. Fixed by creating `has_pending_merge()` in db/core.py and updating the call in completion.py to `self.db.has_pending_merge(agent.issue_id)`.
+   - **Pyright diagnostics**: Pre-existing mixin pattern issues where Pyright can't resolve `self.db`, `self.conn` etc. on mixin classes. These are not new and were ignored.
+   - **`python` not found**: Had to use `.venv/bin/python` to run pytest since `python` wasn't on PATH.
+
+5. Problem Solving:
+   - **Root cause analysis**: Traced the entire worktree lifecycle across 6+ files to identify two specific code paths where `_cleanup_agent()` was called without `remove_worktree=True`, causing orphaned worktrees.
+   - **Worktree reuse verification**: Confirmed retries/agent-switches transition issues back to `open` status and spawn creates fresh worktrees — no reuse, so removing worktrees on error paths is always safe.
+   - **Checked disk state**: Verified no orphaned worktrees currently exist (`.worktrees/` empty, no `agent/*` branches), confirming the bug is intermittent and depends on exceptions occurring in these paths.
+
+6. All user messages:
+   - `/sitrep` (triggered the sitrep skill)
+   - "noticing an issue where agent worktrees aren't cleaned up after being completed and merged; can we figure out what's going on here?"
+   - "are these the right fixes? we don't do anything like re-use worktrees for retries or anything like that right?"
+   - "okay go ahead and implement these fixes then"
+   - "sweet merge into main"
+
+7. Pending Tasks:
+   - None. All requested tasks have been completed.
+
+8. Current Work:
+   The fix has been fully implemented, committed, and merged into main. The branch `fix/worktree-cleanup-leak` was merged as commit `0b72acd` with a fast-forward merge. The commit message is: "Fix worktree leak on monitor exception and completion error paths". All 463 tests pass, linting clean, all pre-commit hooks pass.
+
+9. Optional Next Step:
+   No pending next steps. The user's last request ("sweet merge into main") has been completed. The fix branch could optionally be deleted (`git branch -d fix/worktree-cleanup-leak`) and pushed to origin, but the user hasn't requested either.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122.jsonl
+
+---
+
+pycg summary src * --stats --format text
+
+can you use this and help figure out where we have these thin, utility wrappers used in only a handful of places that we can inline
+
+---
+
+definitely inline the strong candidates; all those seem pretty reasonable to inline
+
+and then doublecheck if cleanup_idle is idle; looks like it may be
+
+---
+
+commit
+
+---
+
+sick. merge into main, looks good
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   - User asked to run `pycg summary src * --stats --format text` to generate a call graph analysis of the Hive codebase.
+   - User then asked to use the output to "help figure out where we have these thin, utility wrappers used in only a handful of places that we can inline."
+   - After analysis was presented, user approved inlining the strong candidates and asked to verify `cleanup_idle` was dead.
+   - User requested commit, then merge into main.
+
+2. Key Technical Concepts:
+   - **pycg**: Python call graph analysis tool that produces per-symbol caller/callee counts
+   - **Thin wrapper identification**: Functions with callers:1-2 and callees:0-1, with ≤3 lines of actual logic, that just delegate to another call
+   - **Dead code detection**: Cross-referencing pycg caller counts with actual grep results to find functions with no production callers
+   - **Mixin pattern**: Orchestrator uses mixin composition (OrchestratorCore + CompletionMixin + LifecycleMixin), which causes Pyright false positives on `self.db`, `self.active_agents` etc. — these are pre-existing and not caused by changes
+   - **Hive architecture**: Multi-agent coding orchestrator with SQLite issue queue, git worktrees per worker, merge pipeline with refinery LLM
+
+3. Files and Code Sections:
+
+   - **src/hive/utils.py**
+     - Inlined `_is_cli_context()` (3 lines: two env var checks) into `configure_logging()`
+     - Before: `if not _is_cli_context():`
+     - After: `is_cli = os.environ.get("HIVE_ENABLE_FILE_LOGGING") != "1" and os.environ.get("HIVE_CLI_CONTEXT") == "1"` then `if not is_cli:`
+     - Removed the `_is_cli_context` function definition
+
+   - **src/hive/daemon.py**
+     - Inlined `_ensure_dirs()` (2 mkdir calls) into `start()`: replaced `self._ensure_dirs()` with the two `mkdir` calls directly
+     - Inlined `_write_pid()` (1 line) into `start()`: replaced `self._write_pid(proc.pid)` with `self.pid_file.write_text(str(proc.pid))`
+     - Removed both method definitions
+
+   - **src/hive/orchestrator/core.py**
+     - Inlined `_delete_agent_row()` into `_cleanup_spawn_orphan()`: replaced `self._delete_agent_row(agent_id)` with inline `with self.db.transaction() as conn: conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))`
+     - Removed the `_delete_agent_row` method definition
+
+   - **src/hive/orchestrator/deps.py**
+     - Inlined `_module()` static method into `__getattr__`: replaced `return getattr(self._module(), name)` with `return getattr(import_module("hive.orchestrator"), name)`
+     - Removed `_module` method and unused `from types import ModuleType` import
+
+   - **src/hive/orchestrator/lifecycle.py**
+     - Inlined `_monitor_lease_expired()` (3-line timestamp comparison) into `_handle_monitor_timeout()`: replaced `if not self._monitor_lease_expired(session_id, lease_duration):` with inline `last_activity = ...`, `elapsed = ...`, `if elapsed <= lease_duration:`
+     - Removed the `_monitor_lease_expired` method definition
+
+   - **src/hive/orchestrator/completion.py**
+     - Inlined `_log_completion_skip()` at both call sites (line ~252 in `handle_agent_complete` SKIP case, and line ~192 in `_handle_completion_success`): replaced with direct `self.db.log_event(agent.issue_id, agent.agent_id, "agent_complete_skipped", {"reason": ...})`
+     - Removed the `_log_completion_skip` method definition
+
+   - **src/hive/merge.py**
+     - Removed dead code: `MergeProcessorPool.cleanup_idle()` method (8 lines, no production callers — only called from test)
+
+   - **tests/test_merge.py**
+     - Removed `test_cleanup_idle_removes_inactive_processors` test (test for dead code)
+
+4. Errors and fixes:
+   - **Pre-commit ruff-format failure**: First commit attempt failed because 3 files (merge.py, utils.py, test_merge.py) had formatting issues (trailing blank lines from removed code). Fixed by running `uvx ruff format` on those files and recommitting.
+   - **Pyright diagnostics**: All reported diagnostics were pre-existing mixin pattern issues (e.g., `Cannot access attribute "db" for class "CompletionMixin*"`). These are inherent to the mixin architecture and were not introduced by the changes.
+
+5. Problem Solving:
+   - Used pycg call graph to systematically identify inlining candidates by filtering on caller count (1-2) and callee count (0-1)
+   - Cross-referenced pycg output with actual source to verify function body sizes and determine true inlining suitability
+   - Distinguished between thin wrappers (suitable for inlining) and code-organization helpers (not suitable despite single caller) — e.g., `_gather_notes_for_worker` (6 lines, dedup logic) was rejected
+   - Confirmed `cleanup_idle` was dead by grepping both `src/` and `tests/` — found it defined in merge.py, called only from test_merge.py, never from orchestrator code
+   - All 462 tests pass after changes (1 fewer than the previous 463, due to removed dead test)
+
+6. All user messages:
+   - `pycg summary src * --stats --format text` followed by `can you use this and help figure out where we have these thin, utility wrappers used in only a handful of places that we can inline`
+   - `definitely inline the strong candidates; all those seem pretty reasonable to inline` and `and then doublecheck if cleanup_idle is idle; looks like it may be`
+   - `commit`
+   - `sick. merge into main, looks good`
+
+7. Pending Tasks:
+   - None. All requested tasks completed.
+
+8. Current Work:
+   The refactoring is fully complete. Branch `refactor/inline-thin-wrappers` was merged into main as commit `75e4c02` via fast-forward. The commit message is "Inline thin single-caller wrappers, remove dead cleanup_idle". 8 files changed, 23 insertions, 75 deletions (net -52 lines). All 462 tests pass, all pre-commit hooks pass.
+
+9. Optional Next Step:
+   No pending next steps. The user's last request ("sick. merge into main, looks good") has been completed. The feature branch could optionally be deleted (`git branch -d refactor/inline-thin-wrappers`), but the user hasn't requested it.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122.jsonl
+
+---
+
+okay are there any ways we can cut LOC to <9k; (8k if we ignore commetns and blank space)
+
+i'm in a code golfing mood and want to try and use it as a forcing function to reduce complexity
+
+---
+
+read @.hive/queen-context.md -- think we can do research and draft issues for 1-3 to delegate to the hive
+
+---
+
+let's see how these 3 land; can we fix the ABC bug for backends tho
+
+---
+
+keep watch on the hive and alert me when everything is merged back in
+
+---
+
+# /loop — schedule a recurring prompt
+
+Parse the input below into `[interval] <prompt…>` and schedule it with CronCreate.
+
+## Parsing (in priority order)
+
+1. **Leading token**: if the first whitespace-delimited token matches `^\d+[smhd]$` (e.g. `5m`, `2h`), that's the interval; the rest is the prompt.
+2. **Trailing "every" clause**: otherwise, if the input ends with `every <N><unit>` or `every <N> <unit-word>` (e.g. `every 20m`, `every 5 minutes`, `every 2 hours`), extract that as the interval and strip it from the prompt. Only match when what follows "every" is a time expression — `check every PR` has no interval.
+3. **Default**: otherwise, interval is `10m` and the entire input is the prompt.
+
+If the resulting prompt is empty, show usage `/loop [interval] <prompt>` and stop — do not call CronCreate.
+
+Examples:
+- `5m /babysit-prs` → interval `5m`, prompt `/babysit-prs` (rule 1)
+- `check the deploy every 20m` → interval `20m`, prompt `check the deploy` (rule 2)
+- `run tests every 5 minutes` → interval `5m`, prompt `run tests` (rule 2)
+- `check the deploy` → interval `10m`, prompt `check the deploy` (rule 3)
+- `check every PR` → interval `10m`, prompt `check every PR` (rule 3 — "every" not followed by time)
+- `5m` → empty prompt → show usage
+
+## Interval → cron
+
+Supported suffixes: `s` (seconds, rounded up to nearest minute, min 1), `m` (minutes), `h` (hours), `d` (days). Convert:
+
+| Interval pattern      | Cron expression     | Notes                                    |
+|-----------------------|---------------------|------------------------------------------|
+| `Nm` where N ≤ 59   | `*/N * * * *`     | every N minutes                          |
+| `Nm` where N ≥ 60   | `0 */H * * *`     | round to hours (H = N/60, must divide 24)|
+| `Nh` where N ≤ 23   | `0 */N * * *`     | every N hours                            |
+| `Nd`                | `0 0 */N * *`     | every N days at midnight local           |
+| `Ns`                | treat as `ceil(N/60)m` | cron minimum granularity is 1 minute  |
+
+**If the interval doesn't cleanly divide its unit** (e.g. `7m` → `*/7 * * * *` gives uneven gaps at :56→:00; `90m` → 1.5h which cron can't express), pick the nearest clean interval and tell the user what you rounded to before scheduling.
+
+## Action
+
+1. Call CronCreate with:
+   - `cron`: the expression from the table above
+   - `prompt`: the parsed prompt from above, verbatim (slash commands are passed through unchanged)
+   - `recurring`: `true`
+2. Briefly confirm: what's scheduled, the cron expression, the human-readable cadence, that recurring tasks auto-expire after 7 days, and that they can cancel sooner with CronDelete (include the job ID).
+3. **Then immediately execute the parsed prompt now** — don't wait for the first cron fire. If it's a slash command, invoke it via the Skill tool; otherwise act on it directly.
+
+## Input
+
+2m check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+check on hive issues w-36e6114fd931 and w-4cc9deac8fc9 — run `hive --json show <id>` for each, check status. If both are finalized/done/merged, alert the user with a summary of what changed and the new LOC count (find src/hive -name '*.py' | xargs wc -l | tail -1). Otherwise just silently continue watching.
+
+---
+
+okay yeah i think we have a better way to write and maintain the sql in this codebase anyway rather than have it inline in python, think we can spend some time thinking about how we can make that bit better?
+
+---
+
+[Request interrupted by user for tool use]

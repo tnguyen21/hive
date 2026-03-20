@@ -3,7 +3,7 @@
   "checkpoint_id": "f806a5905064",
   "strategy": "manual-commit",
   "branch": "centralize-sql-into-db-layer",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "src/hive/db/core.py",
     "src/hive/db/issues.py"
@@ -29,13 +29,20 @@
       "context": "/f8/06a5905064/2/context.md",
       "content_hash": "/f8/06a5905064/2/content_hash.txt",
       "prompt": "/f8/06a5905064/2/prompt.txt"
+    },
+    {
+      "metadata": "/f8/06a5905064/3/metadata.json",
+      "transcript": "/f8/06a5905064/3/full.jsonl",
+      "context": "/f8/06a5905064/3/context.md",
+      "content_hash": "/f8/06a5905064/3/content_hash.txt",
+      "prompt": "/f8/06a5905064/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 5984,
-    "cache_creation_tokens": 64043,
-    "cache_read_tokens": 2703587,
-    "output_tokens": 13084,
-    "api_call_count": 42
+    "input_tokens": 6177,
+    "cache_creation_tokens": 358530,
+    "cache_read_tokens": 11304065,
+    "output_tokens": 55944,
+    "api_call_count": 172
   }
 }
