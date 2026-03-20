@@ -49,10 +49,7 @@ class BackendPool:
         return self.get(self.default)
 
     def for_project(self, project_name: str, project_root: Path | None = None) -> HiveBackend:
-        """Resolve the backend for a project based on its per-project config.
-
-        Falls back to default if the project's configured backend is not registered.
-        """
+        """Resolve the backend for a project from its per-project config. Falls back to default."""
         from ..config import Config
 
         cfg = Config.get(project_name, project_root)
@@ -62,10 +59,7 @@ class BackendPool:
         return self.get(backend_name)
 
     def for_session(self, session_id: str) -> HiveBackend:
-        """Resolve the backend that owns a session.
-
-        Falls back to default if the session is not tracked.
-        """
+        """Resolve the backend that owns a session. Falls back to default if session is not tracked."""
         name = self._session_backend.get(session_id)
         if name is None:
             return self.default_backend

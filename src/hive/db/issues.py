@@ -21,13 +21,7 @@ class IssuesMixin:
         to_status: IssueStatus | str,
         expected_assignee: Optional[str] = None,
     ) -> bool:
-        """CAS-style issue status transition.
-
-        For transitions to 'open', clears assignee (INV-2).
-
-        Returns:
-            True if updated, False otherwise.
-        """
+        """CAS-style issue status transition. For transitions to 'open', clears assignee (INV-2)."""
         from_status_value = str(from_status)
         to_status_value = str(to_status)
         closed_status_placeholders = ", ".join("?" for _ in CLOSED_ISSUE_STATUSES)
@@ -84,27 +78,7 @@ class IssuesMixin:
         metadata: Optional[Dict[str, Any]] = None,
         depends_on: Optional[list[str]] = None,
     ) -> str:
-        """
-        Create a new issue.
-
-        Dependencies are wired in the same transaction as the INSERT so
-        the issue is never visible to get_ready_queue without its deps.
-
-        Args:
-            title: Issue title
-            description: Issue description
-            priority: Priority (0=critical, 4=low)
-            issue_type: Type (task, bug, feature, step, epic)
-            project: Project/repo name
-            parent_id: Parent issue ID (for epics)
-            model: Model to use for this issue (overrides global WORKER_MODEL)
-            tags: List of free-form tags for the issue
-            metadata: Additional metadata dict
-            depends_on: List of issue IDs this issue depends on (blocks type)
-
-        Returns:
-            Generated issue ID
-        """
+        """Create a new issue. Dependencies are wired in the same transaction so the issue is never visible to get_ready_queue without its deps."""
         issue_id = generate_id("w")
         metadata_json = json.dumps(metadata) if metadata else None
 
@@ -146,21 +120,7 @@ class IssuesMixin:
         return issue_id
 
     def get_ready_queue(self, project: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        Query for ready work items.
-
-        Returns issues that are:
-        - status = 'open'
-        - assignee IS NULL
-        - All blocking dependencies are resolved (done/finalized/canceled)
-
-        Args:
-            project: Filter by project (optional)
-            limit: Maximum number of items to return
-
-        Returns:
-            List of issue dicts, ordered by priority then creation time
-        """
+        """Return open, unassigned issues with all blocking deps resolved, ordered by priority then creation time."""
         unblocking_placeholders = ", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)
         query = f"""
             SELECT i.*
@@ -190,20 +150,7 @@ class IssuesMixin:
         return self._all(cursor)
 
     def claim_issue(self, issue_id: str, agent_id: str) -> bool:
-        """
-        Atomically claim an issue using CAS (Compare-And-Set).
-
-        Only succeeds if the issue is unclaimed AND all blocking dependencies
-        are resolved. This prevents a race where the orchestrator grabs an issue
-        from the ready queue before its dependencies have been wired.
-
-        Args:
-            issue_id: ID of issue to claim
-            agent_id: ID of agent claiming the issue
-
-        Returns:
-            True if claim successful, False if already claimed or blocked
-        """
+        """CAS claim: succeeds only if unclaimed and all blocking deps are resolved. Prevents race with get_ready_queue."""
         with self.transaction() as conn:
             cursor = conn.execute(
                 f"""

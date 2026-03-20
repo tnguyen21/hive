@@ -218,15 +218,7 @@ class CompletionMixin:
         return False
 
     async def handle_agent_complete(self, agent: AgentIdentity, file_result: Optional[Dict[str, Any]] = None):
-        """
-        Handle agent completion.
-
-        Args:
-            agent: Agent identity
-            file_result: Optional parsed result from .hive-result.jsonl file.
-                If provided, used directly for completion assessment (skips
-                message parsing heuristics).
-        """
+        """Handle agent completion. If file_result is provided it is used directly, bypassing message parsing."""
         if not self._try_claim_agent_for_handling(agent, handler_name="completion handling"):
             return
 

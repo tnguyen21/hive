@@ -32,12 +32,7 @@ class HiveDaemon:
     """
 
     def __init__(self, db_path: str = ""):
-        """
-        Initialize daemon manager.
-
-        Args:
-            db_path: Path to the SQLite database file (for spawn command)
-        """
+        """Initialize daemon manager."""
         self.db_path = db_path
 
         # Global PID file: ~/.hive/pids/daemon.pid (not per-project)
@@ -133,16 +128,7 @@ class HiveDaemon:
         return killed
 
     def start(self) -> bool:
-        """
-        Start the global daemon if not already running.
-
-        Spawns a detached subprocess that runs the orchestrator in
-        "foreground" mode with stdout/stderr redirected to the log file.
-        The parent process returns immediately so the CLI can report status.
-
-        Returns:
-            True if started successfully, False if already running.
-        """
+        """Start the global daemon if not already running. Spawns a detached subprocess. Returns False if already running."""
         self.pid_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,12 +191,7 @@ class HiveDaemon:
         return True
 
     def stop(self) -> bool:
-        """
-        Stop the running daemon and any orphaned instances.
-
-        Returns:
-            True if stopped successfully, False if not running
-        """
+        """Stop the running daemon and any orphaned instances. Returns False if not running."""
         pid = self._read_pid()
         stopped_any = False
 
@@ -244,12 +225,7 @@ class HiveDaemon:
         return stopped_any
 
     def status(self) -> dict:
-        """
-        Get daemon status.
-
-        Returns:
-            Dict with status information
-        """
+        """Get daemon status as a dict."""
         pid = self._read_pid()
 
         base = {"log_file": str(self.log_file)}
@@ -264,13 +240,7 @@ class HiveDaemon:
         return {**base, "running": True, "pid": pid, "message": f"Daemon running (PID {pid})"}
 
     def logs(self, lines: int = 50, follow: bool = False):
-        """
-        Show daemon logs.
-
-        Args:
-            lines: Number of lines to show (default: 50)
-            follow: If True, follow log output like tail -f
-        """
+        """Show daemon logs (tail -f when follow=True)."""
         if not self.log_file.exists():
             print(f"No log file found: {self.log_file}")
             return

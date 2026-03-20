@@ -33,14 +33,7 @@ class OrchestratorCore:
     """Core orchestration engine for Hive."""
 
     def __init__(self, db: Database, backend: HiveBackend | None = None, backend_pool: BackendPool | None = None):
-        """
-        Initialize orchestrator.
-
-        Args:
-            db: Database instance
-            backend: Single backend (convenience — wrapped in a pool internally)
-            backend_pool: Pool of backends keyed by type name (for multi-backend)
-        """
+        """Initialize orchestrator. Pass either backend (wrapped in a pool) or backend_pool directly."""
         self.db = db
 
         if backend_pool is not None:
@@ -78,17 +71,7 @@ class OrchestratorCore:
         self._spawning_issues: set[str] = set()
 
     def _resolve_project_path(self, project_name: str) -> Path:
-        """Resolve the filesystem path for a registered project.
-
-        Args:
-            project_name: Registered project name
-
-        Returns:
-            Resolved Path object for the project
-
-        Raises:
-            ValueError: If the project is not registered in the DB
-        """
+        """Resolve the filesystem path for a registered project. Raises ValueError if not registered."""
         path = self.db.get_project_path(project_name)
         if path is None:
             raise ValueError(f"Unknown project: {project_name}")
@@ -214,11 +197,7 @@ class OrchestratorCore:
             )
 
     def _record_heartbeat_for_session(self, session_id: str):
-        """Record worker heartbeat for the agent associated with a session.
-
-        Called on any SSE activity from the session, proving the worker
-        is still alive and making progress.
-        """
+        """Record worker heartbeat for the agent associated with a session (any SSE activity counts)."""
         now = datetime.now()
         self._session_last_activity[session_id] = now
 
@@ -229,11 +208,7 @@ class OrchestratorCore:
                 self.db.try_touch_agent_heartbeat(agent_id)
 
     async def _reconcile_fetch_live_sessions(self) -> Optional[Dict[str, HiveBackend]]:
-        """Phase 0: fetch live session IDs from all backends.
-
-        Returns a mapping of session_id -> backend that owns it,
-        or None if backends are unreachable.
-        """
+        """Phase 0: fetch live session IDs from all backends. Returns {session_id: backend} or None if all backends are unreachable."""
         try:
             session_backends: Dict[str, HiveBackend] = {}
             failures = 0
@@ -375,11 +350,7 @@ class OrchestratorCore:
         self._issue_to_agent[agent.issue_id] = agent.agent_id
 
     def _unregister_agent(self, agent_id: str):
-        """Remove an agent from active_agents and clean up reverse lookup maps.
-
-        Args:
-            agent_id: The agent ID to remove
-        """
+        """Remove an agent from active_agents and clean up reverse lookup maps."""
         agent = self.active_agents.get(agent_id)
         if agent:
             self._session_to_agent.pop(agent.session_id, None)
@@ -425,13 +396,7 @@ class OrchestratorCore:
         logger.info("All sessions shut down")
 
     def _log_token_usage(self, agent: AgentIdentity, msgs: List[Dict[str, Any]]):
-        """
-        Extract token usage from messages and log as 'tokens_used' event.
-
-        Args:
-            agent: Agent identity
-            msgs: List of session messages from the backend
-        """
+        """Extract token usage from messages and log as a 'tokens_used' event."""
         total_input_tokens = 0
         total_output_tokens = 0
         model = None
@@ -556,12 +521,7 @@ class OrchestratorCore:
                 new_task.add_done_callback(self._on_merge_task_done)
 
     async def merge_processor_loop(self):
-        """
-        Background loop to process the merge queue.
-
-        Runs on MERGE_POLL_INTERVAL, processes one merge at a time.
-        Includes periodic health checks for the refinery session.
-        """
+        """Process the merge queue on MERGE_POLL_INTERVAL; includes periodic refinery health checks."""
         health_check_counter = 0
 
         while self.running:

@@ -17,20 +17,7 @@ class NotesMixin:
         project: Optional[str] = None,
         must_read: bool = False,
     ) -> int:
-        """
-        Insert a note and return its ID.
-
-        Args:
-            issue_id: Which issue the note was discovered during. None = project-wide note.
-            agent_id: Which agent wrote it. None = Queen-authored or system note.
-            content: The note text. Short — typically 1-3 sentences.
-            category: One of 'discovery', 'gotcha', 'dependency', 'pattern', 'context'.
-            project: Project identifier. If None and issue_id provided, backfilled via migration.
-            must_read: If True, recipients must acknowledge this note before proceeding.
-
-        Returns:
-            The ID of the inserted note
-        """
+        """Insert a note and return its row ID."""
         if not self.conn:
             raise RuntimeError("Database not connected")
 
@@ -44,18 +31,7 @@ class NotesMixin:
     def get_notes(
         self, issue_id: Optional[str] = None, category: Optional[str] = None, project: Optional[str] = None, limit: int = 20
     ) -> List[Dict]:
-        """
-        Retrieve notes with optional filtering. Returns newest first.
-
-        Args:
-            issue_id: Filter by specific issue ID (optional)
-            category: Filter by specific category (optional)
-            project: Filter by project (optional). NULL-project notes match any query for backward compat.
-            limit: Maximum number of notes to return
-
-        Returns:
-            List of note dicts, ordered by newest first
-        """
+        """Retrieve notes newest-first. NULL-project notes match any project query (backward compat)."""
         if not self.conn:
             raise RuntimeError("Database not connected")
 

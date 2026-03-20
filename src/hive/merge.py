@@ -64,11 +64,7 @@ class MergeProcessor:
             self.refinery_session_id = None
 
     async def _force_reset_refinery_session(self, reason: str):
-        """Force reset the refinery session after a failure.
-
-        Args:
-            reason: Description of why the session is being reset
-        """
+        """Force reset the refinery session after a failure."""
         if not self.refinery_session_id:
             return
 
@@ -107,11 +103,7 @@ class MergeProcessor:
             await self._ensure_refinery_session()
 
     async def health_check(self) -> bool:
-        """Check if the refinery session is alive, recreate if needed.
-
-        Returns:
-            True if healthy (or successfully recreated), False if failed to recreate
-        """
+        """Check if the refinery session is alive; recreate if needed. Returns False if recreation fails."""
         if not self.refinery_session_id:
             # No session exists, try to create one
             try:
@@ -203,16 +195,7 @@ class MergeProcessor:
             await self._cleanup_merge_resources(entry)
 
     async def _send_to_refinery(self, entry: Dict[str, Any]):
-        """
-        Hand a merge to the Refinery LLM for processing.
-
-        If the refinery session dies mid-review (RefinerySessionDied), this
-        method resets the session and retries once. A second death escalates
-        to needs_human.
-
-        Args:
-            entry: Merge queue entry dict
-        """
+        """Hand a merge to the Refinery LLM. Retries once on RefinerySessionDied; a second death escalates to needs_human."""
         queue_id = entry["id"]
         issue_id = entry["issue_id"]
         agent_id = entry.get("agent_id")
@@ -344,19 +327,7 @@ class MergeProcessor:
         await self._maybe_cycle_refinery_session()
 
     async def _send_to_refinery_inner(self, entry: Dict[str, Any], worktree_path: str) -> Dict[str, Any]:
-        """
-        Send a merge to the refinery and wait for a result. May raise RefinerySessionDied.
-
-        Args:
-            entry: Merge queue entry dict
-            worktree_path: Path to the worktree
-
-        Returns:
-            Parsed merge result dict
-
-        Raises:
-            RefinerySessionDied: If the refinery session dies during processing
-        """
+        """Send a merge to the refinery and wait for a parsed result. Raises RefinerySessionDied if session dies."""
         session_id = await self._ensure_refinery_session()
 
         # Record message count before sending (fence against stale results)
@@ -409,18 +380,7 @@ class MergeProcessor:
     async def _wait_for_refinery(
         self, session_id: str, worktree_path: str, timeout: Optional[int] = None, min_message_count: int = 0
     ) -> Dict[str, Any]:
-        """
-        Wait for the refinery session to become idle, then read result from file.
-
-        Args:
-            session_id: Backend session ID
-            worktree_path: Path to the worktree (where .hive-result.jsonl is written)
-            timeout: Timeout in seconds (defaults to LEASE_DURATION)
-            min_message_count: Minimum expected message count to avoid stale-result race
-
-        Returns:
-            Parsed merge result dict
-        """
+        """Wait for the refinery session to become idle, then read the result from the worktree file."""
         timeout_seconds = Config.LEASE_DURATION if timeout is None else timeout
 
         poll_interval = 5
@@ -491,12 +451,7 @@ class MergeProcessor:
             }
 
     async def _finalize_issue(self, entry: Dict[str, Any]):
-        """
-        Mark an issue as finalized and clean up.
-
-        Args:
-            entry: Merge queue entry dict
-        """
+        """Mark an issue as finalized and clean up merge resources."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Update merge queue
@@ -520,15 +475,7 @@ class MergeProcessor:
         await self._teardown_after_finalize(entry)
 
     async def _cleanup_merge_resources(self, entry: Dict[str, Any]):
-        """
-        Best-effort cleanup of worktree, branch, session, and agent row.
-
-        Called after both successful finalization and failed/rejected merges
-        to prevent resource leaks.
-
-        Args:
-            entry: Merge queue entry dict
-        """
+        """Best-effort cleanup of worktree, branch, session, and agent row after finalization or failure."""
 
         # Clean up the backend session if one exists for the agent
         agent_id = entry.get("agent_id")
@@ -598,12 +545,7 @@ class MergeProcessor:
             self._refinery_token_estimate = 0
 
     async def _ensure_refinery_session(self) -> str:
-        """
-        Ensure a refinery session exists. Create one if needed.
-
-        Returns:
-            Session ID for the refinery
-        """
+        """Ensure a refinery session exists, creating one if needed. Returns the session ID."""
         # Check if existing session is still alive
         if self.refinery_session_id:
             with suppress(Exception):

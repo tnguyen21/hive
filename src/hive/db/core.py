@@ -273,12 +273,7 @@ class DatabaseCore:
     """SQLite database wrapper for Hive orchestrator."""
 
     def __init__(self, db_path: str | None = None):
-        """
-        Initialize database connection.
-
-        Args:
-            db_path: Path to SQLite database file
-        """
+        """Initialize database connection."""
         from ..config import Config
 
         self.db_path = db_path or Config.DB_PATH
@@ -480,11 +475,7 @@ class DatabaseCore:
         branch_name: str,
         test_command: Optional[str] = None,
     ) -> bool:
-        """Enqueue an issue for merge processing.
-
-        Returns:
-            True if a new merge_queue row was inserted, False if it already existed.
-        """
+        """Enqueue an issue for merge processing. Returns True if inserted, False if already existed."""
         with self.transaction() as conn:
             cursor = conn.execute(
                 """
@@ -496,11 +487,7 @@ class DatabaseCore:
             return cursor.rowcount == 1
 
     def try_transition_merge_queue_status(self, queue_id: int, *, from_status: str, to_status: str, completed_at: Optional[str] = None) -> bool:
-        """CAS-style merge_queue status transition.
-
-        Returns:
-            True if updated, False if the entry was not in from_status.
-        """
+        """CAS-style merge_queue status transition. Returns True if updated."""
         with self.transaction() as conn:
             cursor = conn.execute(
                 """
@@ -520,15 +507,7 @@ class DatabaseCore:
         detail: Optional[Dict[str, Any]] = None,
         commit: bool = True,
     ):
-        """
-        Log an event to the audit trail.
-
-        Args:
-            issue_id: Related issue ID (optional)
-            agent_id: Related agent ID (optional)
-            event_type: Type of event (created, claimed, done, etc.)
-            detail: Additional event details dict
-        """
+        """Log an event to the audit trail."""
         detail_json = json.dumps(detail) if detail else None
 
         if not self.conn:
@@ -553,18 +532,7 @@ class DatabaseCore:
         metadata: Optional[Dict[str, Any]] = None,
         project: Optional[str] = None,
     ) -> str:
-        """
-        Create a new agent identity.
-
-        Args:
-            name: Human-readable agent name
-            model: Model identifier
-            metadata: Additional metadata dict
-            project: Project identifier (optional)
-
-        Returns:
-            Generated agent ID
-        """
+        """Create a new agent identity. Returns the generated agent ID."""
         agent_id = generate_id("agent")
         metadata_json = json.dumps(metadata) if metadata else None
 
@@ -614,15 +582,7 @@ class DatabaseCore:
             return cursor.rowcount == 1
 
     def get_active_agents(self, project: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Get all currently active agents.
-
-        Args:
-            project: Filter by project (optional)
-
-        Returns:
-            List of active agent dicts
-        """
+        """Get all currently active (working) agents, optionally filtered by project."""
         query = "SELECT * FROM agents WHERE status = 'working'"
         params = []
 
@@ -638,16 +598,7 @@ class DatabaseCore:
     # --- Merge Queue Methods ---
 
     def get_queued_merges(self, project: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Get queued merge queue entries, oldest first.
-
-        Args:
-            project: Filter by project (optional)
-            limit: Maximum entries to return
-
-        Returns:
-            List of merge queue entry dicts with joined issue/agent info
-        """
+        """Get queued merge entries oldest-first, joined with issue/agent info."""
         query = """
             SELECT mq.*, i.title as issue_title, a.name as agent_name
             FROM merge_queue mq
@@ -676,15 +627,7 @@ class DatabaseCore:
         return row is not None
 
     def get_merge_queue_stats(self, project: Optional[str] = None) -> Dict[str, int]:
-        """
-        Get merge queue statistics by status.
-
-        Args:
-            project: Filter by project (optional)
-
-        Returns:
-            Dict mapping status to count, e.g. {"queued": 3, "merged": 10, ...}
-        """
+        """Get merge queue counts by status, e.g. {"queued": 3, "merged": 10}."""
         if project:
             cursor = self.conn.execute(
                 "SELECT status, COUNT(*) as count FROM merge_queue WHERE project = ? GROUP BY status",

@@ -96,13 +96,7 @@ class LifecycleMixin:
     """Mixin providing worker spawn, monitor, and stall handling."""
 
     async def spawn_worker(self, issue: Dict[str, str]):
-        """
-        Spawn a worker to handle an issue.
-        Always creates a new agent.
-
-        Args:
-            issue: Issue dict from database
-        """
+        """Spawn a new worker agent to handle an issue."""
         issue_id = issue["id"]
         self._spawning_issues.add(issue_id)
         try:
@@ -260,11 +254,7 @@ class LifecycleMixin:
             return None
 
     def _gather_notes_for_worker(self, issue_id: str, project: str) -> Optional[List[Dict[str, Any]]]:
-        """Gather relevant notes to inject into a worker's prompt.
-
-        Returns recent project-wide notes, deduplicated by note ID.
-        Returns None if no notes are found (so build_worker_prompt skips the section).
-        """
+        """Gather project-wide notes for a worker prompt. Returns None if none found (so caller skips the section)."""
         seen_ids: set = set()
         notes: List[Dict[str, Any]] = []
 
@@ -341,21 +331,15 @@ class LifecycleMixin:
         )
 
     async def monitor_agent(self, agent: AgentIdentity):
-        """
-        Monitor an agent until completion.
+        """Monitor an agent until completion.
 
-        Uses dual detection strategy:
+        Uses dual detection:
         1. SSE events: `session.status` → `idle` sets an asyncio.Event immediately
-        2. Polling fallback: every check_interval, polls `get_session_status` directly
-           to catch idle transitions that were missed by SSE (reconnect gaps, etc.)
+        2. Polling fallback: polls `get_session_status` periodically to catch idle
+           transitions missed by SSE (reconnect gaps, etc.)
 
-        After idle is detected, reads the result file for structured completion data.
-
-        Also checks periodically if the issue was canceled, and if so,
-        aborts the session immediately.
-
-        Args:
-            agent: Agent identity
+        Reads the result file for structured completion data after idle is detected.
+        Cancels immediately if the issue is canceled while the agent is working.
         """
         # Snapshot the session_id we're monitoring and always clean up that key.
         # This keeps monitor cleanup stable even if the agent object is mutated.
@@ -603,14 +587,7 @@ class LifecycleMixin:
         return MonitorStep(signal=MonitorSignal.STOP_MONITORING)
 
     async def cancel_agent_for_issue(self, issue_id: str):
-        """Cancel the active agent working on an issue.
-
-        Aborts the backend session, cleans up the agent and worktree.
-        Called when an issue is canceled while an agent is working on it.
-
-        Args:
-            issue_id: The issue ID that was canceled
-        """
+        """Abort the backend session and clean up when an issue is canceled while an agent is working."""
         # Cancel transition table:
         # - CANCELLED_BY_USER -> wake monitor event, mark failed, log cancel, teardown+worktree cleanup
 
@@ -638,16 +615,7 @@ class LifecycleMixin:
         await self._cleanup_agent(agent, remove_worktree=True)
 
     async def handle_stalled_agent(self, agent: AgentIdentity):
-        """
-        Handle a stalled agent (lease expired).
-
-        Routes through the retry escalation chain so that repeatedly
-        stalling issues eventually get escalated instead of looping
-        forever.
-
-        Args:
-            agent: Agent identity
-        """
+        """Handle a stalled agent (lease expired). Routes through the retry escalation chain so repeatedly stalling issues eventually get escalated."""
         # Stalled transition table:
         # - FAIL_STALLED_IN_PROGRESS -> mark failed + escalate via _handle_agent_failure + teardown
         # - FAIL_STALLED_TERMINAL    -> mark failed + teardown (no escalation)
@@ -680,15 +648,7 @@ class LifecycleMixin:
             await self._cleanup_agent(agent, remove_worktree=True)
 
     async def check_stalled_agents(self):
-        """Check for stalled agents owned by THIS daemon and handle them.
-
-        Only checks agents in self.active_agents (in-memory). This prevents
-        a newly restarted daemon from interfering with stale DB rows left
-        by a previous daemon instance.
-
-        Now enhanced with session status inspection to avoid false positives
-        from missed SSE events.
-        """
+        """Check stalled agents owned by THIS daemon. Only checks self.active_agents (in-memory) to avoid interfering with stale DB rows from a previous daemon run."""
         if not self.active_agents:
             return
 

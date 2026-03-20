@@ -17,19 +17,7 @@ class MetricsMixin:
         extra_where: str = "",
         group_by: str = "",
     ) -> list:
-        """Execute a token aggregation query with common SELECT columns.
-
-        Args:
-            from_clause: The FROM ... clause (table + joins)
-            where_clause: The base WHERE conditions (joined with AND)
-            params: Query parameters for the base WHERE clause
-            select_extra: Optional extra SELECT expression (e.g. "e.issue_id")
-            extra_where: Optional extra AND condition appended to WHERE
-            group_by: Optional GROUP BY expression
-
-        Returns:
-            List of sqlite3.Row objects
-        """
+        """Execute a token aggregation query with common SELECT columns. Returns list of rows."""
         extra_select = f"{select_extra}, " if select_extra else ""
         extra_cond = f" AND {extra_where}" if extra_where else ""
         group = f"\n            GROUP BY {group_by}" if group_by else ""
@@ -44,17 +32,7 @@ class MetricsMixin:
         return cursor.fetchall()
 
     def get_token_usage(self, issue_id: Optional[str] = None, agent_id: Optional[str] = None, project: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get aggregated token usage from 'tokens_used' events.
-
-        Args:
-            issue_id: Filter by specific issue ID (optional)
-            agent_id: Filter by specific agent ID (optional)
-            project: Filter by project via JOIN to issues (optional)
-
-        Returns:
-            Dict with aggregated token counts and cost estimates
-        """
+        """Get aggregated token usage from 'tokens_used' events."""
         if not self.conn:
             raise RuntimeError("Database not connected")
 
@@ -140,15 +118,7 @@ class MetricsMixin:
         }
 
     def get_model_performance(self, model: Optional[str] = None, tag: Optional[str] = None, group_by: str = "tag") -> List[Dict[str, Any]]:
-        """Get model performance stats, optionally filtered by model or tag.
-
-        Args:
-            model: Filter to a specific model name.
-            tag: Filter to issues containing this tag.
-            group_by: "tag" (default) groups by model × tag, "type" groups by model × type.
-
-        Returns aggregated stats: model, group label, success/failure counts, retries, tokens, duration.
-        """
+        """Get model performance stats. group_by "tag" (default) groups by model×tag; "type" by model×type."""
         if group_by == "tag":
             group_col = "COALESCE(jt.value, 'untagged')"
             group_alias = "tag"
@@ -197,26 +167,7 @@ class MetricsMixin:
         issue_type: Optional[str] = None,
         project: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Get aggregated metrics from agent_runs view.
-
-        Args:
-            model: Filter to a specific model name.
-            tag: Filter to issues containing this tag.
-            issue_type: Filter to a specific issue type.
-            project: Filter to a specific project (optional).
-
-        Returns:
-            List of dicts with aggregated metrics per model:
-            - model: Model name
-            - runs: Total number of runs
-            - success_count: Number of successful runs
-            - incomplete_count: Number of incomplete runs
-            - escalated_count: Number of escalated runs
-            - success_rate: Success percentage
-            - avg_duration_s: Average duration in seconds
-            - avg_retries: Average retry count
-            - merge_health: Percentage of runs with clean merge (tests_passed / (tests_passed + test_failure + rebase_conflict))
-        """
+        """Get aggregated metrics from agent_runs view, grouped by model."""
         if not self.conn:
             raise RuntimeError("Database not connected")
 
@@ -322,16 +273,7 @@ class MetricsMixin:
         return self._scalar(cursor, 0)
 
     def count_events_by_type(self, issue_id: str, event_type: str) -> int:
-        """
-        Count events of a specific type for an issue.
-
-        Args:
-            issue_id: Issue ID to count events for
-            event_type: Type of event to count (e.g., 'retry', 'agent_switch')
-
-        Returns:
-            Number of events of the specified type for the issue
-        """
+        """Count events of a specific type for an issue."""
         cursor = self.conn.execute(
             "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ?",
             (issue_id, event_type),
@@ -339,18 +281,7 @@ class MetricsMixin:
         return self._scalar(cursor, 0)
 
     def count_events_by_type_since_reset(self, issue_id: str, event_type: str) -> int:
-        """Count events of a specific type for an issue since the last retry_reset.
-
-        If no retry_reset event exists, counts all events (same as count_events_by_type).
-        Uses event id (autoincrement) for ordering to avoid timestamp granularity issues.
-
-        Args:
-            issue_id: Issue ID to count events for
-            event_type: Type of event to count (e.g., 'retry', 'agent_switch')
-
-        Returns:
-            Number of events of the specified type since the last retry_reset
-        """
+        """Count events since the last retry_reset. Uses event id (not timestamp) to avoid granularity issues."""
         cursor = self.conn.execute(
             """
             SELECT COUNT(*) FROM events
@@ -366,16 +297,7 @@ class MetricsMixin:
         return self._scalar(cursor, 0)
 
     def count_events_in_window_after_reset(self, issue_id: str, event_type: str, minutes: int) -> int:
-        """Count events within the last N minutes, but only after the most recent retry_reset.
-
-        Combines the time-window filter with the reset watermark. If no retry_reset
-        exists, behaves identically to count_events_since_minutes.
-
-        Args:
-            issue_id: Issue ID to count events for
-            event_type: Type of event to count (e.g., 'incomplete')
-            minutes: Look back this many minutes from now
-        """
+        """Count events within the last N minutes and after the most recent retry_reset."""
         cursor = self.conn.execute(
             """
             SELECT COUNT(*) FROM events
@@ -392,16 +314,7 @@ class MetricsMixin:
         return self._scalar(cursor, 0)
 
     def count_events_since_minutes(self, issue_id: str, event_type: str, minutes: int) -> int:
-        """Count events of a given type for an issue within the last N minutes.
-
-        Uses SQLite's datetime('now') for comparison to avoid timezone mismatches
-        between Python's local time and SQLite's UTC-based created_at timestamps.
-
-        Args:
-            issue_id: Issue ID to count events for
-            event_type: Type of event to count (e.g., 'incomplete')
-            minutes: Look back this many minutes from now
-        """
+        """Count events within the last N minutes. Uses SQLite datetime('now') to avoid timezone mismatches."""
         cursor = self.conn.execute(
             "SELECT COUNT(*) FROM events WHERE issue_id = ? AND event_type = ? AND created_at >= datetime('now', ?)",
             (issue_id, event_type, f"-{minutes} minutes"),
