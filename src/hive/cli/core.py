@@ -208,38 +208,18 @@ class HiveCLI(QueenMixin):
         todo: bool = False,
     ):
         """List all issues."""
-        query = "SELECT * FROM issues WHERE project = ?"
-        params: list[Any] = [self.project_name]
-
-        if todo:
-            placeholders = ",".join("?" for _ in self._DONE_STATUSES)
-            query += f" AND status NOT IN ({placeholders})"
-            params.extend(self._DONE_STATUSES)
-        elif status:
-            query += " AND status = ?"
-            params.append(status)
-        if assignee:
-            query += " AND assignee = ?"
-            params.append(assignee)
-        if issue_type:
-            query += " AND type = ?"
-            params.append(issue_type)
-
-        # Resolve sort column (default to priority if unknown)
-        sort_col = self._SORT_COLUMNS.get(sort_by, "priority")
-        direction = "DESC" if reverse else "ASC"
-        query += f" ORDER BY {sort_col} {direction}"
-
-        query += " LIMIT ?"
-        params.append(limit)
-
-        cursor = self.db.conn.execute(query, params)
-        issues = []
-        for row in cursor.fetchall():
-            issue_dict = dict(row)
-            self._parse_tags(issue_dict)
-            issues.append(issue_dict)
-
+        exclude = self._DONE_STATUSES if todo else None
+        rows = self.db.list_issues(
+            project=self.project_name,
+            status=None if todo else status,
+            assignee=assignee,
+            issue_type=issue_type,
+            exclude_statuses=exclude,
+            sort=sort_by,
+            reverse=reverse,
+            limit=limit,
+        )
+        issues = [self._parse_tags(issue) for issue in rows]
         return {"count": len(issues), "issues": issues}
 
     @cli_command(formatter=_fmt_show)
@@ -247,34 +227,10 @@ class HiveCLI(QueenMixin):
         """Show issue details and events."""
         issue = self._require_issue(issue_id)
 
-        # Get dependencies
-        cursor = self.db.conn.execute(
-            """
-            SELECT i.id, i.title, i.status
-            FROM dependencies d
-            JOIN issues i ON d.depends_on = i.id
-            WHERE d.issue_id = ?
-            """,
-            (issue_id,),
-        )
-        dependencies = [dict(row) for row in cursor.fetchall()]
-
-        # Get dependents (issues blocked by this one)
-        cursor = self.db.conn.execute(
-            """
-            SELECT i.id, i.title, i.status
-            FROM dependencies d
-            JOIN issues i ON d.issue_id = i.id
-            WHERE d.depends_on = ?
-            """,
-            (issue_id,),
-        )
-        dependents = [dict(row) for row in cursor.fetchall()]
-
-        # Get recent events
+        dependencies = self.db.get_dependencies(issue_id)
+        dependents = self.db.get_dependents(issue_id)
         events = self.db.get_events(issue_id=issue_id, limit=10)
 
-        # Parse tags from JSON
         issue_dict = dict(issue)
         self._parse_tags(issue_dict)
 
@@ -331,8 +287,8 @@ class HiveCLI(QueenMixin):
         if updates:
             query = f"UPDATE issues SET {', '.join(updates)}, updated_at = datetime('now') WHERE id = ?"
             params.append(issue_id)
-            self.db.conn.execute(query, params)
-            self.db.conn.commit()
+            with self.db.transaction() as conn:
+                conn.execute(query, params)
 
             self.db.log_event(
                 issue_id,
@@ -379,15 +335,15 @@ class HiveCLI(QueenMixin):
         self.db.update_issue_status(issue_id, IssueStatus.FINALIZED)
         # If this issue was sitting in the merge queue (manual review mode),
         # mark those entries complete so they don't get processed later.
-        self.db.conn.execute(
-            """
-            UPDATE merge_queue
-            SET status = 'merged', completed_at = datetime('now')
-            WHERE issue_id = ? AND status IN ('queued', 'running')
-            """,
-            (issue_id,),
-        )
-        self.db.conn.commit()
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE merge_queue
+                SET status = 'merged', completed_at = datetime('now')
+                WHERE issue_id = ? AND status IN ('queued', 'running')
+                """,
+                (issue_id,),
+            )
         self.db.log_event(issue_id, None, "finalized", {"resolution": resolution})
 
         return {
@@ -403,65 +359,11 @@ class HiveCLI(QueenMixin):
 
         If issue_id is given, show review info for that specific issue regardless of status.
         """
-        if issue_id:
-            cursor = self.db.conn.execute(
-                """
-                SELECT
-                    i.id,
-                    i.title,
-                    i.status,
-                    i.description,
-                    i.updated_at,
-                    i.assignee,
-                    mq.status AS merge_status,
-                    mq.branch_name,
-                    mq.worktree,
-                    mq.enqueued_at
-                FROM issues i
-                LEFT JOIN merge_queue mq
-                    ON mq.id = (
-                        SELECT mq2.id
-                        FROM merge_queue mq2
-                        WHERE mq2.issue_id = i.id
-                        ORDER BY mq2.id DESC
-                        LIMIT 1
-                    )
-                WHERE i.project = ? AND i.id = ?
-                """,
-                (self.project_name, issue_id),
-            )
-        else:
-            cursor = self.db.conn.execute(
-                """
-                SELECT
-                    i.id,
-                    i.title,
-                    i.updated_at,
-                    i.assignee,
-                    mq.status AS merge_status,
-                    mq.branch_name,
-                    mq.worktree,
-                    mq.enqueued_at
-                FROM issues i
-                LEFT JOIN merge_queue mq
-                    ON mq.id = (
-                        SELECT mq2.id
-                        FROM merge_queue mq2
-                        WHERE mq2.issue_id = i.id
-                        ORDER BY mq2.id DESC
-                        LIMIT 1
-                    )
-                WHERE i.project = ? AND i.status = ?
-                ORDER BY i.updated_at DESC
-                LIMIT ?
-                """,
-                (self.project_name, IssueStatus.DONE, limit),
-            )
+        raw_rows = self.db.get_review_queue(project=self.project_name, issue_id=issue_id, limit=limit)
 
         rows = []
         project_q = shlex.quote(str(self.project_path))
-        for row in cursor.fetchall():
-            item = dict(row)
+        for item in raw_rows:
             branch = item.get("branch_name")
             worktree = item.get("worktree")
             iid = item["id"]
@@ -492,15 +394,7 @@ class HiveCLI(QueenMixin):
         self._require_issue(issue_id)
 
         # Reset to open and unassign
-        self.db.conn.execute(
-            """
-            UPDATE issues
-            SET status = ?, assignee = NULL, updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (IssueStatus.OPEN, issue_id),
-        )
-        self.db.conn.commit()
+        self.db.update_issue_status(issue_id, IssueStatus.OPEN)
 
         if reset:
             self.db.log_event(issue_id, None, "retry_reset", {"notes": notes})
@@ -540,11 +434,11 @@ class HiveCLI(QueenMixin):
     @cli_command(formatter=_fmt_message)
     def dep_remove(self, issue_id: str, depends_on: str):
         """Remove a dependency between issues."""
-        self.db.conn.execute(
-            "DELETE FROM dependencies WHERE issue_id = ? AND depends_on = ?",
-            (issue_id, depends_on),
-        )
-        self.db.conn.commit()
+        with self.db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM dependencies WHERE issue_id = ? AND depends_on = ?",
+                (issue_id, depends_on),
+            )
 
         return {
             "issue_id": issue_id,
@@ -555,15 +449,7 @@ class HiveCLI(QueenMixin):
     @cli_command(formatter=_fmt_merges)
     def merges(self, status: str | None = None):
         """List merge queue entries."""
-        query = "SELECT mq.*, i.title as issue_title, a.name as agent_name FROM merge_queue mq JOIN issues i ON mq.issue_id = i.id LEFT JOIN agents a ON mq.agent_id = a.id WHERE i.project = ?"
-        params = [self.project_name]
-        if status:
-            query += " AND mq.status = ?"
-            params.append(status)
-        query += " ORDER BY mq.enqueued_at DESC LIMIT 50"
-
-        cursor = self.db.conn.execute(query, params)
-        entries = [dict(row) for row in cursor.fetchall()]
+        entries = self.db.list_merge_entries(project=self.project_name, status=status, limit=50)
 
         # Compute per-status counts from the result set
         status_counts: dict[str, int] = {}
@@ -576,17 +462,7 @@ class HiveCLI(QueenMixin):
     @cli_command(formatter=_fmt_status)
     def status(self):
         """Show orchestrator status."""
-        # Count issues by status
-        cursor = self.db.conn.execute(
-            """
-            SELECT status, COUNT(*) as count
-            FROM issues
-            WHERE project = ?
-            GROUP BY status
-            """,
-            (self.project_name,),
-        )
-        status_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        status_counts = self.db.get_issue_status_counts(project=self.project_name)
 
         # Get active agents with issue titles
         active_agents = self.db.get_active_agents(project=self.project_name)
@@ -607,17 +483,7 @@ class HiveCLI(QueenMixin):
 
         # Get running merge entry (refinery status proxy)
         try:
-            cursor = self.db.conn.execute(
-                """
-                SELECT mq.issue_id, i.title as issue_title
-                FROM merge_queue mq
-                LEFT JOIN issues i ON mq.issue_id = i.id
-                WHERE mq.status = 'running' AND mq.project = ?
-                LIMIT 1
-                """,
-                (self.project_name,),
-            )
-            running_merge = cursor.fetchone()
+            running_merge = self.db.get_running_merge(project=self.project_name)
             refinery_info = {
                 "active": running_merge is not None,
                 "issue_id": running_merge["issue_id"] if running_merge else None,
@@ -669,11 +535,7 @@ class HiveCLI(QueenMixin):
         daemon_status = daemon.status()
 
         # Surface issues needing human attention
-        attention_cursor = self.db.conn.execute(
-            "SELECT id, title, status FROM issues WHERE project = ? AND status = ? ORDER BY updated_at DESC",
-            (self.project_name, IssueStatus.ESCALATED),
-        )
-        attention_issues = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in attention_cursor.fetchall()]
+        attention_issues = self.db.get_escalated_issues(project=self.project_name)
 
         return {
             "project": self.project_name,
@@ -700,12 +562,9 @@ class HiveCLI(QueenMixin):
         """List agents, or show details for a specific agent if agent_id is provided."""
         # If agent_id is provided, show that agent's details
         if agent_id:
-            cursor = self.db.conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
-            row = cursor.fetchone()
-            if not row:
+            agent = self.db.get_agent(agent_id)
+            if not agent:
                 raise ValueError(f"Agent not found: {agent_id}")
-
-            agent = dict(row)
 
             # Get current issue details
             if agent.get("current_issue"):
@@ -718,17 +577,7 @@ class HiveCLI(QueenMixin):
             return agent
 
         # Otherwise, list all agents
-        query = "SELECT * FROM agents WHERE project = ?"
-        params = [self.project_name]
-
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-
-        query += " ORDER BY created_at DESC"
-
-        cursor = self.db.conn.execute(query, params)
-        agents = [dict(row) for row in cursor.fetchall()]
+        agents = self.db.list_agents(project=self.project_name, status=status)
 
         # Enrich with current issue info
         for agent in agents:

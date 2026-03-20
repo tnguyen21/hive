@@ -37,11 +37,7 @@ def get_global_status(db: Database) -> dict:
             continue
 
         # Issue counts
-        cursor = db.conn.execute(
-            "SELECT status, COUNT(*) as count FROM issues WHERE project = ? GROUP BY status",
-            (name,),
-        )
-        issue_counts = {row["status"]: row["count"] for row in cursor.fetchall()}
+        issue_counts = db.get_issue_status_counts(project=name)
         entry["issues"] = issue_counts
         entry["total_issues"] = sum(issue_counts.values())
 
@@ -66,17 +62,7 @@ def get_global_status(db: Database) -> dict:
 
         # Refinery status
         try:
-            cursor = db.conn.execute(
-                """
-                SELECT mq.issue_id, i.title as issue_title
-                FROM merge_queue mq
-                LEFT JOIN issues i ON mq.issue_id = i.id
-                WHERE mq.status = 'running' AND mq.project = ?
-                LIMIT 1
-                """,
-                (name,),
-            )
-            running_merge = cursor.fetchone()
+            running_merge = db.get_running_merge(project=name)
             entry["refinery"] = {
                 "active": running_merge is not None,
                 "issue_id": running_merge["issue_id"] if running_merge else None,
@@ -115,11 +101,7 @@ def get_global_status(db: Database) -> dict:
         entry["merge_blockers"] = merge_blockers
 
         # Escalated issues
-        attn_cursor = db.conn.execute(
-            "SELECT id, title FROM issues WHERE project = ? AND status = 'escalated' ORDER BY updated_at DESC",
-            (name,),
-        )
-        entry["attention_issues"] = [{"id": r["id"], "title": r["title"]} for r in attn_cursor.fetchall()]
+        entry["attention_issues"] = db.get_escalated_issues(project=name)
 
         projects.append(entry)
 

@@ -110,8 +110,7 @@ def _gather_db_stats(db: Database) -> dict:
 
     # Issue status breakdown
     try:
-        cursor = db.conn.execute("SELECT status, COUNT(*) FROM issues GROUP BY status")
-        stats["issue_status_breakdown"] = {row[0]: row[1] for row in cursor.fetchall()}
+        stats["issue_status_breakdown"] = db.get_issue_status_counts()
     except Exception:
         stats["issue_status_breakdown"] = {}
 
