@@ -743,3 +743,67 @@ class DatabaseCore:
         """Return the disk path for a project by name, or None if not found."""
         row = self._one(self.conn.execute("SELECT path FROM projects WHERE name = ?", (name,)))
         return row["path"] if row else None
+
+    # ── Query helpers used by CLI / diagnostics ───────────────────────
+
+    def get_issue_status_counts(self, project: str | None = None) -> dict[str, int]:
+        """Return issue counts grouped by status, e.g. {"open": 5, "done": 3}."""
+        if project:
+            cursor = self.conn.execute(
+                "SELECT status, COUNT(*) as count FROM issues WHERE project = ? GROUP BY status",
+                (project,),
+            )
+        else:
+            cursor = self.conn.execute("SELECT status, COUNT(*) as count FROM issues GROUP BY status")
+        return {row["status"]: row["count"] for row in cursor.fetchall()}
+
+    def get_running_merge(self, project: str) -> dict[str, Any] | None:
+        """Return the currently running merge entry for a project, or None."""
+        cursor = self.conn.execute(
+            """
+            SELECT mq.issue_id, i.title as issue_title
+            FROM merge_queue mq
+            LEFT JOIN issues i ON mq.issue_id = i.id
+            WHERE mq.status = 'running' AND mq.project = ?
+            LIMIT 1
+            """,
+            (project,),
+        )
+        return self._one(cursor)
+
+    def get_escalated_issues(self, project: str) -> list[dict[str, Any]]:
+        """Return escalated issues for a project, newest first."""
+        cursor = self.conn.execute(
+            "SELECT id, title, status FROM issues WHERE project = ? AND status = 'escalated' ORDER BY updated_at DESC",
+            (project,),
+        )
+        return self._all(cursor)
+
+    def list_merge_entries(self, project: str, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """Return merge queue entries joined with issue/agent info for display."""
+        query = """
+            SELECT mq.*, i.title as issue_title, a.name as agent_name
+            FROM merge_queue mq
+            JOIN issues i ON mq.issue_id = i.id
+            LEFT JOIN agents a ON mq.agent_id = a.id
+            WHERE i.project = ?
+        """
+        params: list[Any] = [project]
+        if status:
+            query += " AND mq.status = ?"
+            params.append(status)
+        query += " ORDER BY mq.enqueued_at DESC LIMIT ?"
+        params.append(limit)
+        cursor = self.conn.execute(query, params)
+        return self._all(cursor)
+
+    def list_agents(self, project: str, status: str | None = None) -> list[dict[str, Any]]:
+        """Return agents for a project, optionally filtered by status."""
+        query = "SELECT * FROM agents WHERE project = ?"
+        params: list[Any] = [project]
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY created_at DESC"
+        cursor = self.conn.execute(query, params)
+        return self._all(cursor)

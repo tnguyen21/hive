@@ -11,6 +11,18 @@ from .core import normalize_tags
 
 logger = logging.getLogger(__name__)
 
+# SQL fragment: "all blocking deps are resolved" — used by get_ready_queue and claim_issue.
+_UNBLOCKING_PLACEHOLDERS = ", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)
+_DEPS_UNBLOCKED_SQL = f"""
+    NOT EXISTS (
+        SELECT 1 FROM dependencies d
+        JOIN issues blocker ON d.depends_on = blocker.id
+        WHERE d.issue_id = {{issue_ref}}
+          AND d.type = 'blocks'
+          AND blocker.status NOT IN ({_UNBLOCKING_PLACEHOLDERS})
+    )
+"""
+
 
 class IssuesMixin:
     def try_transition_issue_status(
@@ -121,19 +133,13 @@ class IssuesMixin:
 
     def get_ready_queue(self, project: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         """Return open, unassigned issues with all blocking deps resolved, ordered by priority then creation time."""
-        unblocking_placeholders = ", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)
+        deps_check = _DEPS_UNBLOCKED_SQL.format(issue_ref="i.id")
         query = f"""
             SELECT i.*
             FROM issues i
             WHERE i.status = ?
               AND i.assignee IS NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM dependencies d
-                JOIN issues blocker ON d.depends_on = blocker.id
-                WHERE d.issue_id = i.id
-                  AND d.type = 'blocks'
-                  AND blocker.status NOT IN ({unblocking_placeholders})
-              )
+              AND {deps_check}
         """
 
         params: list[Any] = [IssueStatus.OPEN, *UNBLOCKING_ISSUE_STATUSES]
@@ -151,6 +157,7 @@ class IssuesMixin:
 
     def claim_issue(self, issue_id: str, agent_id: str) -> bool:
         """CAS claim: succeeds only if unclaimed and all blocking deps are resolved. Prevents race with get_ready_queue."""
+        deps_check = _DEPS_UNBLOCKED_SQL.format(issue_ref="?")
         with self.transaction() as conn:
             cursor = conn.execute(
                 f"""
@@ -160,13 +167,7 @@ class IssuesMixin:
                     updated_at = datetime('now')
                 WHERE id = ?
                   AND assignee IS NULL
-                  AND NOT EXISTS (
-                    SELECT 1 FROM dependencies d
-                    JOIN issues blocker ON d.depends_on = blocker.id
-                    WHERE d.issue_id = ?
-                      AND d.type = 'blocks'
-                      AND blocker.status NOT IN ({", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)})
-                  )
+                  AND {deps_check}
                 """,
                 (
                     agent_id,
@@ -219,6 +220,109 @@ class IssuesMixin:
                 (status_value, status_value, IssueStatus.OPEN, status_value, *CLOSED_ISSUE_STATUSES, issue_id),
             )
             self.log_event(issue_id, None, f"status_{status_value}", {"status": status_value}, commit=False)
+
+    def list_issues(
+        self,
+        project: str,
+        status: str | None = None,
+        assignee: str | None = None,
+        issue_type: str | None = None,
+        exclude_statuses: tuple[str, ...] | None = None,
+        sort: str = "priority",
+        reverse: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return issues for a project with optional filtering and sorting."""
+        _SORT_COLUMNS = {
+            "priority": "priority",
+            "created": "created_at",
+            "updated": "updated_at",
+            "status": "status",
+            "title": "title",
+        }
+        query = "SELECT * FROM issues WHERE project = ?"
+        params: list[Any] = [project]
+
+        if exclude_statuses:
+            placeholders = ",".join("?" for _ in exclude_statuses)
+            query += f" AND status NOT IN ({placeholders})"
+            params.extend(exclude_statuses)
+        elif status:
+            query += " AND status = ?"
+            params.append(status)
+        if assignee:
+            query += " AND assignee = ?"
+            params.append(assignee)
+        if issue_type:
+            query += " AND type = ?"
+            params.append(issue_type)
+
+        sort_col = _SORT_COLUMNS.get(sort, "priority")
+        direction = "DESC" if reverse else "ASC"
+        query += f" ORDER BY {sort_col} {direction} LIMIT ?"
+        params.append(limit)
+
+        cursor = self.conn.execute(query, params)
+        return self._all(cursor)
+
+    def get_review_queue(self, project: str, issue_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """Return issues with their latest merge queue entry for review.
+
+        If *issue_id* is given, returns that single issue (any status) with
+        extra columns (description, status).  Otherwise returns done issues.
+        """
+        if issue_id:
+            cursor = self.conn.execute(
+                """
+                SELECT
+                    i.id, i.title, i.status, i.description, i.updated_at, i.assignee,
+                    mq.status AS merge_status, mq.branch_name, mq.worktree, mq.enqueued_at
+                FROM issues i
+                LEFT JOIN merge_queue mq
+                    ON mq.id = (SELECT mq2.id FROM merge_queue mq2 WHERE mq2.issue_id = i.id ORDER BY mq2.id DESC LIMIT 1)
+                WHERE i.project = ? AND i.id = ?
+                """,
+                (project, issue_id),
+            )
+        else:
+            cursor = self.conn.execute(
+                """
+                SELECT
+                    i.id, i.title, i.updated_at, i.assignee,
+                    mq.status AS merge_status, mq.branch_name, mq.worktree, mq.enqueued_at
+                FROM issues i
+                LEFT JOIN merge_queue mq
+                    ON mq.id = (SELECT mq2.id FROM merge_queue mq2 WHERE mq2.issue_id = i.id ORDER BY mq2.id DESC LIMIT 1)
+                WHERE i.project = ? AND i.status = ?
+                ORDER BY i.updated_at DESC LIMIT ?
+                """,
+                (project, IssueStatus.DONE, limit),
+            )
+        return self._all(cursor)
+
+    def get_dependencies(self, issue_id: str) -> list[dict[str, Any]]:
+        """Return issues that *issue_id* depends on (its blockers)."""
+        cursor = self.conn.execute(
+            """
+            SELECT i.id, i.title, i.status
+            FROM dependencies d JOIN issues i ON d.depends_on = i.id
+            WHERE d.issue_id = ?
+            """,
+            (issue_id,),
+        )
+        return self._all(cursor)
+
+    def get_dependents(self, issue_id: str) -> list[dict[str, Any]]:
+        """Return issues that are blocked by *issue_id*."""
+        cursor = self.conn.execute(
+            """
+            SELECT i.id, i.title, i.status
+            FROM dependencies d JOIN issues i ON d.issue_id = i.id
+            WHERE d.depends_on = ?
+            """,
+            (issue_id,),
+        )
+        return self._all(cursor)
 
     def add_dependency(self, issue_id: str, depends_on: str, dep_type: str = "blocks"):
         """Add a dependency between issues."""
