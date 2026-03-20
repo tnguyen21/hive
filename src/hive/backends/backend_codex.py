@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
+from ..status import BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
 from .base import HiveBackend, _first_text
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 class ThreadState:
     directory: str | None = None
     title: str | None = None
-    status: BackendSessionState = BackendSessionState.IDLE
+    status: BackendSessionStatusType = BackendSessionStatusType.IDLE
     model: str | None = None
     approval_policy: str | None = None
     sandbox_mode: str | None = None
@@ -224,7 +224,7 @@ class CodexAppServerBackend(HiveBackend):
         self.sessions[str(thread_id)] = ThreadState(
             directory=directory,
             title=title,
-            status=BackendSessionState.IDLE,
+            status=BackendSessionStatusType.IDLE,
             model=res.get("model"),
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
@@ -291,7 +291,7 @@ class CodexAppServerBackend(HiveBackend):
 
         # Emit a busy status immediately so the orchestrator renews leases even
         # if Codex takes time before sending turn/started.
-        state.status = BackendSessionState.BUSY
+        state.status = BackendSessionStatusType.BUSY
         await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, state.status))
         self._start_heartbeat(session_id)
 
@@ -329,7 +329,7 @@ class CodexAppServerBackend(HiveBackend):
         state = self.sessions.get(session_id)
         if not state:
             return {"type": BackendSessionStatusType.NOT_FOUND}
-        status_type = BackendSessionStatusType.BUSY if state.status == BackendSessionState.BUSY else BackendSessionStatusType.IDLE
+        status_type = BackendSessionStatusType.BUSY if state.status == BackendSessionStatusType.BUSY else BackendSessionStatusType.IDLE
         return {"type": status_type}
 
     async def get_messages(self, session_id: str, directory: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
@@ -551,7 +551,7 @@ class CodexAppServerBackend(HiveBackend):
             if thread_id:
                 state = self.sessions.get(str(thread_id))
                 if state:
-                    state.status = BackendSessionState.BUSY
+                    state.status = BackendSessionStatusType.BUSY
                     state.active_turn_id = (params.get("turn") or {}).get("id")
                     await self._emit(SESSION_STATUS_EVENT, session_status_payload(str(thread_id), state.status))
                     self._start_heartbeat(str(thread_id))
@@ -564,7 +564,7 @@ class CodexAppServerBackend(HiveBackend):
                 if state:
                     turn = params.get("turn") or {}
                     turn_id = turn.get("id")
-                    state.status = BackendSessionState.IDLE
+                    state.status = BackendSessionStatusType.IDLE
                     state.active_turn_id = None
                     self._stop_heartbeat(str(thread_id))
 
@@ -654,12 +654,12 @@ class CodexAppServerBackend(HiveBackend):
         interval = int(getattr(Config, "CODEX_HEARTBEAT_INTERVAL", 60))
 
         async def _beat():
-            while self.running and state.status == BackendSessionState.BUSY:
+            while self.running and state.status == BackendSessionStatusType.BUSY:
                 await asyncio.sleep(interval)
-                if not self.running or state.status != BackendSessionState.BUSY:
+                if not self.running or state.status != BackendSessionStatusType.BUSY:
                     break
                 with suppress(Exception):
-                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, BackendSessionState.BUSY))
+                    await self._emit(SESSION_STATUS_EVENT, session_status_payload(session_id, BackendSessionStatusType.BUSY))
 
         state.heartbeat_task = asyncio.create_task(_beat())
 

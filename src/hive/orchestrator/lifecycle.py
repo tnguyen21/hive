@@ -11,7 +11,7 @@ from typing import Any
 
 from ..config import WORKER_PERMISSIONS
 from ..prompts import build_retry_context, build_system_prompt, build_worker_prompt, get_prompt_version
-from ..status import BackendSessionState, BackendSessionStatusType, IssueStatus, parse_backend_session_status_type
+from ..status import BackendSessionStatusType, IssueStatus, parse_backend_session_status_type
 from ..utils import AgentIdentity, CompletionResult, generate_id
 from .completion import _exc_detail
 from .deps import deps
@@ -570,7 +570,7 @@ class LifecycleMixin:
                 agent.issue_id,
                 agent.agent_id,
                 "heartbeat_refreshed",
-                {"session_status": BackendSessionState.BUSY.value},
+                {"session_status": BackendSessionStatusType.BUSY.value},
             )
             return MonitorStep(signal=MonitorSignal.CONTINUE_MONITORING)
 
@@ -720,7 +720,7 @@ class LifecycleMixin:
                 agent.issue_id,
                 agent.agent_id,
                 "heartbeat_refreshed",
-                {"session_status": BackendSessionState.BUSY.value},
+                {"session_status": BackendSessionStatusType.BUSY.value},
             )
             return StalledSessionCheckResult.CONTINUE_MONITORING
 

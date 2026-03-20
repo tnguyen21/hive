@@ -4,7 +4,6 @@ from hive.status import (
     CLOSED_ISSUE_STATUSES,
     ISSUE_STATUS_ORDER,
     UNBLOCKING_ISSUE_STATUSES,
-    BackendSessionState,
     BackendSessionStatusType,
     IssueStatus,
     parse_backend_session_status_type,
@@ -41,7 +40,7 @@ class TestParseBackendSessionStatusType:
 
 class TestSessionStatusPayload:
     def test_structure(self):
-        result = session_status_payload("sess-1", BackendSessionState.IDLE)
+        result = session_status_payload("sess-1", BackendSessionStatusType.IDLE)
         assert result == {"sessionID": "sess-1", "status": {"type": "idle"}}
 
     def test_with_status_type(self):
@@ -49,7 +48,7 @@ class TestSessionStatusPayload:
         assert result == {"sessionID": "sess-2", "status": {"type": "error"}}
 
     def test_keys(self):
-        result = session_status_payload("s", BackendSessionState.BUSY)
+        result = session_status_payload("s", BackendSessionStatusType.BUSY)
         assert set(result.keys()) == {"sessionID", "status"}
         assert set(result["status"].keys()) == {"type"}
 

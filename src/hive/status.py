@@ -36,11 +36,6 @@ CLOSED_ISSUE_STATUSES = (
 )
 
 
-class BackendSessionState(StrEnum):
-    IDLE = "idle"
-    BUSY = "busy"
-
-
 class BackendSessionStatusType(StrEnum):
     IDLE = "idle"
     BUSY = "busy"
@@ -65,7 +60,7 @@ def parse_backend_session_status_type(value: Any) -> BackendSessionStatusType | 
 
 def session_status_payload(
     session_id: str,
-    status_type: BackendSessionState | BackendSessionStatusType,
+    status_type: BackendSessionStatusType,
 ) -> dict[str, object]:
     """Build the normalized session.status event payload."""
     return {"sessionID": session_id, "status": {"type": str(status_type)}}

@@ -37,7 +37,7 @@ import aiohttp
 import aiohttp.web
 
 from ..config import Config
-from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
+from ..status import BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
 from ..utils import generate_id
 from .base import HiveBackend, _first_text
 
@@ -54,7 +54,7 @@ class SessionState:
     process: asyncio.subprocess.Process | None = None
     ws: aiohttp.web.WebSocketResponse | None = None
     cli_session_id: str | None = None
-    status: BackendSessionState = BackendSessionState.IDLE
+    status: BackendSessionStatusType = BackendSessionStatusType.IDLE
     messages: list = field(default_factory=list)
     result: dict | None = None
     total_usage: dict = field(default_factory=dict)
@@ -209,7 +209,7 @@ class ClaudeWSBackend(HiveBackend):
                 "session_id": session.cli_session_id or "",
             },
         )
-        session.status = BackendSessionState.BUSY
+        session.status = BackendSessionStatusType.BUSY
         logger.info(
             f"Session {session_id} status transition {prev_status} -> busy "
             f"(message_sent={message_sent}, ws_connected={session.ws_connected.is_set()}, "
@@ -375,9 +375,9 @@ class ClaudeWSBackend(HiveBackend):
 
             case {"type": "assistant"}:
                 prev_status = session.status
-                session.status = BackendSessionState.BUSY
+                session.status = BackendSessionStatusType.BUSY
                 session.messages.append(msg)
-                if prev_status != BackendSessionState.BUSY:
+                if prev_status != BackendSessionStatusType.BUSY:
                     logger.info(f"Session {session_id} status transition {prev_status} -> busy (source=assistant)")
                 # Emit activity event for lease renewal
                 try:
@@ -388,7 +388,7 @@ class ClaudeWSBackend(HiveBackend):
 
             case {"type": "result"}:
                 prev_status = session.status
-                session.status = BackendSessionState.IDLE
+                session.status = BackendSessionStatusType.IDLE
                 session.result = msg
                 session.messages.append(msg)
                 session.total_usage = msg.get("usage", {})
