@@ -1,0 +1,95 @@
+Implement the following plan:
+
+# Plan: Centralize SQL into the DB layer
+
+## Context
+
+The CLI (`cli/core.py`, `cli/global_status.py`) and diagnostics (`diag.py`) bypass the Database class and run raw SQL via `self.db.conn.execute(...)`. This creates two problems:
+
+1. **Duplication**: The same queries appear in 2-3 places (status counts, running merge, escalated issues, merge queue joins)
+2. **Leaky abstraction**: The CLI knows about table schemas and JOIN patterns it shouldn't need to
+
+~180 lines of SQL in `cli/core.py` alone. Moving these into DB methods eliminates duplication, shrinks the largest file, and establishes a clean boundary: SQL lives in `db/`, callers get Python dicts.
+
+## Concrete duplications to eliminate
+
+| Query | Locations | Lines per copy |
+|---|---|---|
+| Issue status GROUP BY | cli/core.py:580, global_status.py:40, diag.py:113 | 5-8 |
+| Running merge (mq + issue JOIN) | cli/core.py:610, global_status.py:69 | 9 |
+| Escalated issues | cli/core.py:660ish, global_status.py:118 | 3 |
+| Review latest-merge subquery | cli/core.py:407 and :434 (two branches) | 23 each |
+| Merge queue with issue/agent JOIN | cli/core.py:558, (similar to db/core.py:603) | 6 |
+| Dependency blocking NOT EXISTS | db/issues.py:125 and :156 | 8 each |
+
+## New DB methods to add
+
+### On `DatabaseCore` (db/core.py) — general queries used by multiple callers
+
+1. **`get_issue_status_counts(project=None) -> dict[str, int]`** — replaces 3 copies of the GROUP BY
+2. **`get_running_merge(project) -> dict | None`** — replaces 2 copies of the running merge JOIN
+3. **`get_escalated_issues(project) -> list[dict]`** — replaces 2 copies
+4. **`list_merge_entries(project, status=None, limit=50) -> list[dict]`** — merge queue with issue/agent JOIN for display
+
+### On `IssuesMixin` (db/issues.py) — issue-specific queries
+
+5. **`list_issues(project, status, assignee, type, exclude_statuses, sort, reverse, limit) -> list[dict]`** — moves the dynamic query builder from cli/core.py:211-243
+6. **`get_review_queue(project, issue_id=None, limit=20) -> list[dict]`** — unifies the two review subquery branches
+7. **`get_dependencies(issue_id) -> list[dict]`** — 3-line query, currently inline in cli/core.py:251
+8. **`get_dependents(issue_id) -> list[dict]`** — same, cli/core.py:263
+9. **Extract `_DEPS_UNBLOCKED_SQL` fragment** — deduplicate the NOT EXISTS clause used by `get_ready_queue` and `claim_issue`
+
+### On `DatabaseCore` — agent queries currently in CLI
+
+10. **`list_agents(project, status=None) -> list[dict]`** — moves from cli/core.py:721-731
+
+## Migration plan (2 issues for the hive)
+
+### Issue 1: Add DB methods (pure additions)
+Add methods 1-10 above. Write tests for each. No callers changed yet — existing code continues to work. This is safe to merge independently.
+
+**Files modified**: `src/hive/db/core.py`, `src/hive/db/issues.py`, `tests/test_db.py`
+
+### Issue 2: Migrate callers (depends on issue 1)
+Replace every `self.db.conn.execute(...)` in CLI/diag with the new DB methods. After this:
+- `cli/core.py` drops ~150 lines of inline SQL
+- `cli/global_status.py` drops ~30 lines
+- `diag.py` drops ~5 lines
+- No file outside `db/` touches `db.conn` directly (tests excepted)
+
+**Files modified**: `src/hive/cli/core.py`, `src/hive/cli/global_status.py`, `src/hive/diag.py`
+
+## What NOT to change
+
+- **Schema DDL** (SCHEMA constant) — already clean
+- **`_query_events` helper** — already well-factored
+- **`_build_token_select` in metrics** — already well-factored
+- **Orchestrator SQL** (core.py, lifecycle.py) — mostly single-use lifecycle queries that are tightly coupled to orchestrator state machine logic; moving them to DB methods adds indirection without reducing duplication
+- **Test files** — tests legitimately use `db.conn.execute()` for fixture setup
+
+## Estimated LOC impact
+
+- Issue 1: +80 lines (new methods + tests)
+- Issue 2: -180 lines (remove inline SQL from CLI)
+- **Net: ~-100 lines**
+- `cli/core.py` drops from 926 to ~780 lines
+
+## Verification
+
+- `python -m pytest tests/ -v --timeout=30` — all 462 tests pass
+- `uvx ruff check && uvx ruff format --check` — clean
+- `grep -r "db\.conn\.execute" src/hive/cli/` — should return nothing after issue 2
+- `grep -r "db\.conn\.execute" src/hive/diag.py` — should return nothing after issue 2
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122.jsonl
+
+If this plan can be broken down into multiple independent tasks, consider using the TeamCreate tool to create a team and parallelize the work.
+
+---
+
+[Request interrupted by user]
+
+---
+
+keep going, this is a reasonable plan
