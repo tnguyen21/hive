@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
 
 
 class GitWorktreeError(Exception):
@@ -50,7 +49,7 @@ def create_worktree(project_path: str, agent_name: str, base_branch: str = "main
     # Retry with backoff — concurrent worktree creation can transiently fail
     # with "invalid reference: main" when git ref resolution hits contention.
     max_retries = 4
-    last_error: Optional[GitWorktreeError] = None
+    last_error: GitWorktreeError | None = None
     for attempt in range(max_retries):
         try:
             _run_git("worktree", "add", "-b", branch_name, str(worktree_dir), base_branch, cwd=str(root))
@@ -159,7 +158,7 @@ def run_command_in_worktree(worktree_path: str, cmd: str, timeout: int = 300) ->
         return (False, f"Command failed: {e}")
 
 
-def get_commit_hash(worktree_path: str) -> Optional[str]:
+def get_commit_hash(worktree_path: str) -> str | None:
     """Get the current commit hash in a worktree."""
     res = _run_git("rev-parse", "HEAD", cwd=str(worktree_path), check=False)
     return res or None

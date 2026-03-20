@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from string import Template
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .utils import CompletionResult
 
@@ -28,7 +28,7 @@ def get_prompt_version(template_name: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:12]
 
 
-def _parse_event_detail(event: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_event_detail(event: dict[str, Any]) -> dict[str, Any]:
     """Parse the detail field of an event into a dict.
 
     Returns the detail as-is if already a dict, attempts JSON parsing if a string,
@@ -43,9 +43,9 @@ def _parse_event_detail(event: Dict[str, Any]) -> Dict[str, Any]:
     return detail if isinstance(detail, dict) else {}
 
 
-def _artifacts_from_list(artifacts_list: Any) -> Dict[str, Any]:
+def _artifacts_from_list(artifacts_list: Any) -> dict[str, Any]:
     """Convert a result-file artifacts list into a simple dict."""
-    artifacts: Dict[str, Any] = {}
+    artifacts: dict[str, Any] = {}
     if isinstance(artifacts_list, list):
         for artifact in artifacts_list:
             if isinstance(artifact, dict):
@@ -56,7 +56,7 @@ def _artifacts_from_list(artifacts_list: Any) -> Dict[str, Any]:
     return artifacts
 
 
-def _read_first_jsonl(path: Path) -> Optional[Dict[str, Any]]:
+def _read_first_jsonl(path: Path) -> dict[str, Any] | None:
     """Read the first non-empty JSON line from *path*."""
     if not path.exists():
         return None
@@ -81,7 +81,7 @@ def _remove_file(path: Path) -> bool:
     return False
 
 
-def build_retry_context(db, issue_id: str) -> Optional[str]:
+def build_retry_context(db, issue_id: str) -> str | None:
     """Build retry context from prior failure events for an issue."""
     cursor = db.conn.execute(
         "SELECT MAX(id) FROM events WHERE issue_id = ? AND event_type = 'retry_reset'",
@@ -136,12 +136,12 @@ Address these specific failure reasons. Do not repeat the same mistakes."""
 
 def build_worker_prompt(
     agent_name: str,
-    issue: Dict[str, Any],
+    issue: dict[str, Any],
     worktree_path: str,
     branch_name: str,
     project: str,
-    notes: Optional[List[Dict[str, Any]]] = None,
-    retry_context: Optional[str] = None,
+    notes: list[dict[str, Any]] | None = None,
+    retry_context: str | None = None,
 ) -> str:
     """Build the worker prompt for an issue."""
     context_parts = [
@@ -178,7 +178,7 @@ def build_worker_prompt(
     )
 
 
-def _read_project_context(project_path: str) -> Optional[str]:
+def _read_project_context(project_path: str) -> str | None:
     """Read .hive/project-context.md from a project root if it exists."""
     context_file = Path(project_path) / PROJECT_CONTEXT_FILE
     if context_file.exists():
@@ -189,7 +189,7 @@ def _read_project_context(project_path: str) -> Optional[str]:
     return None
 
 
-def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[str] = None) -> str:
+def build_system_prompt(project: str, agent_name: str, worktree_path: str | None = None) -> str:
     """Build the system prompt for an agent session."""
     template_str = _load_template("system")
     base = Template(template_str).safe_substitute(
@@ -211,7 +211,7 @@ def build_system_prompt(project: str, agent_name: str, worktree_path: Optional[s
     return res
 
 
-def assess_completion(file_result: Optional[Dict[str, Any]] = None) -> CompletionResult:
+def assess_completion(file_result: dict[str, Any] | None = None) -> CompletionResult:
     """Assess completion from the parsed result file."""
     if file_result is not None:
         status = file_result.get("status", "unknown")
@@ -241,7 +241,7 @@ def assess_completion(file_result: Optional[Dict[str, Any]] = None) -> Completio
     )
 
 
-def read_result_file(worktree_path: str) -> Optional[Dict[str, Any]]:
+def read_result_file(worktree_path: str) -> dict[str, Any] | None:
     """Read and parse ``.hive-result.jsonl`` from a worktree."""
     return _read_first_jsonl(Path(worktree_path) / RESULT_FILE_NAME)
 
@@ -251,7 +251,7 @@ def remove_result_file(worktree_path: str) -> bool:
     return _remove_file(Path(worktree_path) / RESULT_FILE_NAME)
 
 
-def read_notes_file(worktree_path: str) -> List[Dict[str, Any]]:
+def read_notes_file(worktree_path: str) -> list[dict[str, Any]]:
     """Read .hive-notes.jsonl from a worktree. Returns list of note dicts, or empty list."""
     try:
         notes = _read_first_jsonl(Path(worktree_path) / NOTES_FILE_NAME)
@@ -297,9 +297,9 @@ def build_refinery_prompt(
     issue_id: str,
     branch_name: str,
     worktree_path: str,
-    agent_name: Optional[str] = None,
-    test_command: Optional[str] = None,
-    notes: Optional[List[Dict[str, Any]]] = None,
+    agent_name: str | None = None,
+    test_command: str | None = None,
+    notes: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the refinery prompt for merge processing."""
     if test_command:

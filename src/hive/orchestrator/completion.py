@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..status import IssueStatus
 from ..utils import AgentIdentity, CompletionResult
@@ -48,16 +48,16 @@ class CompletionDecision:
     """Decision payload from completion transition analysis."""
 
     transition: CompletionTransition
-    result: Optional[CompletionResult] = None
-    skip_reason: Optional[str] = None
-    failure_event_type: Optional[str] = None
-    failure_event_detail: Optional[Dict[str, Any]] = None
+    result: CompletionResult | None = None
+    skip_reason: str | None = None
+    failure_event_type: str | None = None
+    failure_event_detail: dict[str, Any] | None = None
 
 
 class CompletionMixin:
     """Mixin providing agent completion and failure handling."""
 
-    async def _decide_completion_transition(self, agent: AgentIdentity, file_result: Optional[Dict[str, Any]] = None) -> CompletionDecision:
+    async def _decide_completion_transition(self, agent: AgentIdentity, file_result: dict[str, Any] | None = None) -> CompletionDecision:
         """Decision phase for completion handling.
 
         Determines the next completion transition and any payload required by
@@ -165,7 +165,7 @@ class CompletionMixin:
         self,
         agent: AgentIdentity,
         decision: CompletionDecision,
-        file_result: Optional[Dict[str, Any]] = None,
+        file_result: dict[str, Any] | None = None,
     ) -> bool:
         """Apply success side effects. Returns True when teardown should remove the worktree."""
         if decision.result is None:
@@ -217,12 +217,12 @@ class CompletionMixin:
         )
         return False
 
-    async def handle_agent_complete(self, agent: AgentIdentity, file_result: Optional[Dict[str, Any]] = None):
+    async def handle_agent_complete(self, agent: AgentIdentity, file_result: dict[str, Any] | None = None):
         """Handle agent completion. If file_result is provided it is used directly, bypassing message parsing."""
         if not self._try_claim_agent_for_handling(agent, handler_name="completion handling"):
             return
 
-        decision: Optional[CompletionDecision] = None
+        decision: CompletionDecision | None = None
         remove_worktree_on_teardown = False
 
         try:
@@ -296,7 +296,7 @@ class CompletionMixin:
         agent: AgentIdentity,
         decision: EscalationDecision,
         reason: str,
-        model: Optional[str],
+        model: str | None,
     ) -> bool:
         """Apply retry/switch/escalate side effects for a failure decision."""
         if decision == EscalationDecision.ANOMALY_ESCALATE:

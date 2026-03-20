@@ -17,7 +17,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 from .config import Config
 
@@ -46,7 +45,7 @@ class HiveDaemon:
         # Crash log: small stderr sink, truncated per daemon start
         self._crash_log = self.log_dir / "daemon-crash.log"
 
-    def _read_pid(self) -> Optional[int]:
+    def _read_pid(self) -> int | None:
         """Read PID from PID file if it exists."""
         try:
             if self.pid_file.exists():

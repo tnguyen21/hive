@@ -4,8 +4,6 @@ Manages multiple backend instances keyed by type name (e.g., "claude", "codex").
 Tracks which backend owns each session for routing operations.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -26,7 +24,7 @@ class BackendPool:
         self.default = default
 
     @classmethod
-    def from_single(cls, backend: HiveBackend, name: str = "claude") -> BackendPool:
+    def from_single(cls, backend: HiveBackend, name: str = "claude") -> "BackendPool":
         """Create a pool containing a single backend (backward compat)."""
         pool = cls(default=name)
         pool.register(name, backend)

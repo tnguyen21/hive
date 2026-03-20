@@ -6,7 +6,7 @@ import sys
 import time
 from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from rich.console import Console
 
@@ -166,9 +166,9 @@ class HiveCLI(QueenMixin):
         description: str = "",
         priority: int = 2,
         issue_type: str = "task",
-        model: Optional[str] = None,
-        tags: Optional[str] = None,
-        depends_on: Optional[list] = None,
+        model: str | None = None,
+        tags: str | None = None,
+        depends_on: list | None = None,
     ):
         """Create a new issue."""
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
@@ -199,17 +199,17 @@ class HiveCLI(QueenMixin):
     @cli_command(formatter=_fmt_list_issues)
     def list_issues(
         self,
-        status: Optional[str] = None,
+        status: str | None = None,
         sort_by: str = "priority",
         reverse: bool = False,
-        issue_type: Optional[str] = None,
-        assignee: Optional[str] = None,
+        issue_type: str | None = None,
+        assignee: str | None = None,
         limit: int = 50,
         todo: bool = False,
     ):
         """List all issues."""
         query = "SELECT * FROM issues WHERE project = ?"
-        params: List[Any] = [self.project_name]
+        params: list[Any] = [self.project_name]
 
         if todo:
             placeholders = ",".join("?" for _ in self._DONE_STATUSES)
@@ -289,12 +289,12 @@ class HiveCLI(QueenMixin):
     def update(
         self,
         issue_id: str,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        priority: Optional[int] = None,
-        status: Optional[str] = None,
-        model: Optional[str] = None,
-        tags: Optional[str] = None,
+        title: str | None = None,
+        description: str | None = None,
+        priority: int | None = None,
+        status: str | None = None,
+        model: str | None = None,
+        tags: str | None = None,
     ):
         """Update an issue."""
         self._require_issue(issue_id)
@@ -553,7 +553,7 @@ class HiveCLI(QueenMixin):
         }
 
     @cli_command(formatter=_fmt_merges)
-    def merges(self, status: Optional[str] = None):
+    def merges(self, status: str | None = None):
         """List merge queue entries."""
         query = "SELECT mq.*, i.title as issue_title, a.name as agent_name FROM merge_queue mq JOIN issues i ON mq.issue_id = i.id LEFT JOIN agents a ON mq.agent_id = a.id WHERE i.project = ?"
         params = [self.project_name]
@@ -638,7 +638,7 @@ class HiveCLI(QueenMixin):
             "changes": [],
             "status": "clean",
         }
-        merge_blockers: List[Dict[str, Any]] = []
+        merge_blockers: list[dict[str, Any]] = []
         try:
             dirty, dirty_output = get_worktree_dirty_status(str(self.project_path))
             if dirty:
@@ -696,7 +696,7 @@ class HiveCLI(QueenMixin):
         }
 
     @cli_command(formatter=_fmt_list_agents)
-    def list_agents(self, agent_id: Optional[str] = None, status: Optional[str] = None):
+    def list_agents(self, agent_id: str | None = None, status: str | None = None):
         """List agents, or show details for a specific agent if agent_id is provided."""
         # If agent_id is provided, show that agent's details
         if agent_id:
@@ -742,7 +742,7 @@ class HiveCLI(QueenMixin):
     # ── Notes ─────────────────────────────────────────────────────────
 
     @cli_command(formatter=_fmt_add_note)
-    def add_note(self, content: str, issue_id: Optional[str] = None, category: str = "discovery"):
+    def add_note(self, content: str, issue_id: str | None = None, category: str = "discovery"):
         """Add a note to the knowledge base."""
         note_id = self.db.add_note(agent_id=None, issue_id=issue_id, content=content, category=category, project=self.project_name)
 
@@ -796,9 +796,9 @@ class HiveCLI(QueenMixin):
         self,
         follow: bool = False,
         n: int = 20,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        event_type: Optional[str] = None,
+        issue_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
         daemon: bool = False,
     ):
         """Show event log, optionally tailing for new events."""

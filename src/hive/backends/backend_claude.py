@@ -31,7 +31,7 @@ import signal
 import uuid
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 import aiohttp.web
@@ -48,15 +48,15 @@ logger = logging.getLogger(__name__)
 class SessionState:
     """Per-session state tracking for a Claude CLI process."""
 
-    directory: Optional[str] = None
-    title: Optional[str] = None
-    model: Optional[str] = None
-    process: Optional[asyncio.subprocess.Process] = None
-    ws: Optional[aiohttp.web.WebSocketResponse] = None
-    cli_session_id: Optional[str] = None
+    directory: str | None = None
+    title: str | None = None
+    model: str | None = None
+    process: asyncio.subprocess.Process | None = None
+    ws: aiohttp.web.WebSocketResponse | None = None
+    cli_session_id: str | None = None
     status: BackendSessionState = BackendSessionState.IDLE
     messages: list = field(default_factory=list)
-    result: Optional[dict] = None
+    result: dict | None = None
     total_usage: dict = field(default_factory=dict)
     ws_connected: asyncio.Event = field(default_factory=asyncio.Event)  # WS handshake done
     connected: asyncio.Event = field(default_factory=asyncio.Event)  # system/init received
@@ -78,7 +78,7 @@ class ClaudeWSBackend(HiveBackend):
         self.app.router.add_get("/agent/{session_id}", self._ws_handler)
 
         # Per-session state
-        self.sessions: Dict[str, SessionState] = {}
+        self.sessions: dict[str, SessionState] = {}
 
         # Concurrency limiter — MAX_AGENTS + 1 reserves a slot for the refinery
         # session so worker slots aren't reduced.
@@ -88,11 +88,11 @@ class ClaudeWSBackend(HiveBackend):
         # Server lifecycle
         self.running = False
         self.server_ready = asyncio.Event()
-        self._runner: Optional[aiohttp.web.AppRunner] = None
+        self._runner: aiohttp.web.AppRunner | None = None
 
     # ── Session management ────────────────────────────────────────────
 
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(self) -> list[dict[str, Any]]:
         """Return list of active sessions (for health checks/reconciliation)."""
         return [
             {"id": sid, "title": s.title, "directory": s.directory}
@@ -102,11 +102,11 @@ class ClaudeWSBackend(HiveBackend):
 
     async def create_session(
         self,
-        directory: Optional[str] = None,
-        title: Optional[str] = None,
-        permissions: Optional[List[Dict[str, str]]] = None,
-        model: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        directory: str | None = None,
+        title: str | None = None,
+        permissions: list[dict[str, str]] | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         """Spawn a claude CLI process. Returns session info dict."""
         await self.server_ready.wait()
 
@@ -180,11 +180,11 @@ class ClaudeWSBackend(HiveBackend):
     async def send_message_async(
         self,
         session_id: str,
-        parts: List[Dict[str, Any]],
+        parts: list[dict[str, Any]],
         agent: str = "build",
-        model: Optional[str] = None,
-        system: Optional[str] = None,
-        directory: Optional[str] = None,
+        model: str | None = None,
+        system: str | None = None,
+        directory: str | None = None,
     ):
         """Send a user message on the WebSocket. Fire-and-forget."""
         session = self.sessions.get(session_id)
@@ -229,7 +229,7 @@ class ClaudeWSBackend(HiveBackend):
                 logger.error(f"Timeout waiting for system/init from session {session_id}")
                 raise RuntimeError(f"CLI did not send system/init within 30s for session {session_id}")
 
-    async def get_session_status(self, session_id: str, directory: Optional[str] = None) -> Dict[str, Any]:
+    async def get_session_status(self, session_id: str, directory: str | None = None) -> dict[str, Any]:
         """Return tracked status from WS messages."""
         session = self.sessions.get(session_id)
         if not session:
@@ -243,7 +243,7 @@ class ClaudeWSBackend(HiveBackend):
 
         return {"type": session.status}
 
-    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         """Return collected messages, translated to standard format."""
         session = self.sessions.get(session_id)
         if not session:
@@ -253,7 +253,7 @@ class ClaudeWSBackend(HiveBackend):
             msgs = msgs[-limit:]
         return [self._translate_message(m) for m in msgs]
 
-    async def abort_session(self, session_id: str, directory: Optional[str] = None) -> bool:
+    async def abort_session(self, session_id: str, directory: str | None = None) -> bool:
         """Send interrupt control request."""
         session = self.sessions.get(session_id)
         if not session or not session.ws:
@@ -261,7 +261,7 @@ class ClaudeWSBackend(HiveBackend):
         await self._send_interrupt(session_id)
         return True
 
-    async def delete_session(self, session_id: str, directory: Optional[str] = None) -> bool:
+    async def delete_session(self, session_id: str, directory: str | None = None) -> bool:
         """Kill the CLI process and clean up."""
         session = self.sessions.pop(session_id, None)
         if not session:
@@ -285,18 +285,18 @@ class ClaudeWSBackend(HiveBackend):
             await session.ws.close()
         return True
 
-    async def cleanup_session(self, session_id: str, directory: Optional[str] = None):
+    async def cleanup_session(self, session_id: str, directory: str | None = None):
         """Abort + delete. Best-effort."""
         with suppress(Exception):
             await self.abort_session(session_id, directory)
         with suppress(Exception):
             await self.delete_session(session_id, directory)
 
-    async def get_pending_permissions(self, directory: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_pending_permissions(self, directory: str | None = None) -> list[dict[str, Any]]:
         """No-op — CLI runs with bypassPermissions."""
         return []
 
-    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
+    async def reply_permission(self, request_id: str, reply: str, message: str | None = None, directory: str | None = None):
         """No-op — CLI runs with bypassPermissions."""
         pass
 

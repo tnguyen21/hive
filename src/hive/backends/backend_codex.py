@@ -29,8 +29,6 @@ Internal contract details this file relies on:
     `turn/completed` means the turn ended, not necessarily that the issue succeeded.
 """
 
-from __future__ import annotations
-
 import asyncio
 from contextlib import suppress
 import json
@@ -40,7 +38,7 @@ import shlex
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import Config
 from ..status import BackendSessionState, BackendSessionStatusType, SESSION_STATUS_EVENT, session_status_payload
@@ -51,29 +49,29 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class ThreadState:
-    directory: Optional[str] = None
-    title: Optional[str] = None
+    directory: str | None = None
+    title: str | None = None
     status: BackendSessionState = BackendSessionState.IDLE
-    model: Optional[str] = None
-    approval_policy: Optional[str] = None
-    sandbox_mode: Optional[str] = None
+    model: str | None = None
+    approval_policy: str | None = None
+    sandbox_mode: str | None = None
     sandbox_policy_set: bool = False
-    sandbox_writable_roots: Optional[List[str]] = None
+    sandbox_writable_roots: list[str] | None = None
 
-    active_turn_id: Optional[str] = None
+    active_turn_id: str | None = None
     developer_instructions_set: bool = False
 
     # Minimal "message" list to satisfy Hive's token accounting + merge fencing.
-    messages: List[Dict[str, Any]] = field(default_factory=list)
-    token_usage_by_turn: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    token_usage_by_turn: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    heartbeat_task: Optional[asyncio.Task] = None
+    heartbeat_task: asyncio.Task | None = None
 
 
 class CodexAppServerBackend(HiveBackend):
     """Hive backend that drives Codex via `codex app-server` (stdio transport)."""
 
-    def __init__(self, cmd: Optional[List[str]] = None):
+    def __init__(self, cmd: list[str] | None = None):
         super().__init__()
         # Default command can be overridden via `HIVE_CODEX_CMD` / `.hive.toml`.
         #
@@ -111,16 +109,16 @@ class CodexAppServerBackend(HiveBackend):
                 "Set HIVE_CODEX_CMD to 'codex app-server --listen stdio://' (or set CODEX_CMD to the codex executable)."
             )
 
-        self._proc: Optional[asyncio.subprocess.Process] = None
-        self._stdout_task: Optional[asyncio.Task] = None
-        self._stderr_task: Optional[asyncio.Task] = None
-        self._stderr_tail: List[str] = []
+        self._proc: asyncio.subprocess.Process | None = None
+        self._stdout_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._stderr_tail: list[str] = []
 
         self._write_lock = asyncio.Lock()
         self._next_id = 1
-        self._pending: Dict[str, asyncio.Future] = {}
+        self._pending: dict[str, asyncio.Future] = {}
 
-        self.sessions: Dict[str, ThreadState] = {}
+        self.sessions: dict[str, ThreadState] = {}
 
         self.running = False
         self.server_ready = asyncio.Event()
@@ -128,7 +126,7 @@ class CodexAppServerBackend(HiveBackend):
     # ── Session management ────────────────────────────────────────────
 
     @staticmethod
-    def _compute_git_sandbox_writable_roots(worktree_dir: Optional[str]) -> List[str]:
+    def _compute_git_sandbox_writable_roots(worktree_dir: str | None) -> list[str]:
         """Compute extra writable roots needed for git to work in a worktree sandbox.
 
         Codex's `workspace-write` sandbox allows writing to the turn `cwd`, but git
@@ -178,14 +176,14 @@ class CodexAppServerBackend(HiveBackend):
         else:
             common_git_dir = gitdir_path.parent
 
-        roots: List[str] = []
+        roots: list[str] = []
         try:
             roots.append(str(common_git_dir.resolve()))
         except Exception:
             roots.append(str(common_git_dir))
 
         # Stable uniqueness while preserving order.
-        deduped: List[str] = []
+        deduped: list[str] = []
         seen: set[str] = set()
         for r in roots:
             if r and r not in seen:
@@ -193,22 +191,22 @@ class CodexAppServerBackend(HiveBackend):
                 deduped.append(r)
         return deduped
 
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(self) -> list[dict[str, Any]]:
         return [{"id": sid, "title": s.title, "directory": s.directory} for sid, s in self.sessions.items()]
 
     async def create_session(
         self,
-        directory: Optional[str] = None,
-        title: Optional[str] = None,
-        permissions: Optional[List[Dict[str, str]]] = None,
-    ) -> Dict[str, Any]:
+        directory: str | None = None,
+        title: str | None = None,
+        permissions: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         await self.server_ready.wait()
 
         approval_policy = getattr(Config, "CODEX_APPROVAL_POLICY", "never")
         sandbox_mode = getattr(Config, "CODEX_SANDBOX", "workspace-write")
         personality = getattr(Config, "CODEX_PERSONALITY", "pragmatic")
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "cwd": directory,
             "ephemeral": True,
             "approvalPolicy": approval_policy,
@@ -237,11 +235,11 @@ class CodexAppServerBackend(HiveBackend):
     async def send_message_async(
         self,
         session_id: str,
-        parts: List[Dict[str, Any]],
+        parts: list[dict[str, Any]],
         agent: str = "build",
-        model: Optional[str] = None,
-        system: Optional[str] = None,
-        directory: Optional[str] = None,
+        model: str | None = None,
+        system: str | None = None,
+        directory: str | None = None,
     ):
         await self.server_ready.wait()
 
@@ -257,7 +255,7 @@ class CodexAppServerBackend(HiveBackend):
         personality = getattr(Config, "CODEX_PERSONALITY", "pragmatic")
         sandbox_mode = getattr(Config, "CODEX_SANDBOX", state.sandbox_mode or "workspace-write")
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "threadId": session_id,
             "input": [{"type": "text", "text": text}],
             "approvalPolicy": approval_policy,
@@ -301,7 +299,7 @@ class CodexAppServerBackend(HiveBackend):
         # not after it completes. Completion is signaled via notifications.
         await self._request("turn/start", params)
 
-    async def abort_session(self, session_id: str, directory: Optional[str] = None) -> bool:
+    async def abort_session(self, session_id: str, directory: str | None = None) -> bool:
         await self.server_ready.wait()
         state = self.sessions.get(session_id)
         if not state:
@@ -314,27 +312,27 @@ class CodexAppServerBackend(HiveBackend):
         except Exception:
             return False
 
-    async def delete_session(self, session_id: str, directory: Optional[str] = None) -> bool:
+    async def delete_session(self, session_id: str, directory: str | None = None) -> bool:
         # Threads are started ephemeral; best-effort local cleanup is enough.
         state = self.sessions.pop(session_id, None)
         if state and state.heartbeat_task:
             state.heartbeat_task.cancel()
         return True
 
-    async def cleanup_session(self, session_id: str, directory: Optional[str] = None):
+    async def cleanup_session(self, session_id: str, directory: str | None = None):
         with suppress(Exception):
             await self.abort_session(session_id, directory=directory)
         with suppress(Exception):
             await self.delete_session(session_id, directory=directory)
 
-    async def get_session_status(self, session_id: str, directory: Optional[str] = None) -> Dict[str, Any]:
+    async def get_session_status(self, session_id: str, directory: str | None = None) -> dict[str, Any]:
         state = self.sessions.get(session_id)
         if not state:
             return {"type": BackendSessionStatusType.NOT_FOUND}
         status_type = BackendSessionStatusType.BUSY if state.status == BackendSessionState.BUSY else BackendSessionStatusType.IDLE
         return {"type": status_type}
 
-    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         state = self.sessions.get(session_id)
         if not state:
             return []
@@ -342,11 +340,11 @@ class CodexAppServerBackend(HiveBackend):
             return state.messages[-limit:]
         return state.messages
 
-    async def get_pending_permissions(self, directory: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_pending_permissions(self, directory: str | None = None) -> list[dict[str, Any]]:
         # Codex approvals are handled directly via JSON-RPC server->client requests.
         return []
 
-    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
+    async def reply_permission(self, request_id: str, reply: str, message: str | None = None, directory: str | None = None):
         # No-op: we auto-handle Codex approval requests.
         return
 
@@ -367,7 +365,7 @@ class CodexAppServerBackend(HiveBackend):
 
     # ── Context manager ───────────────────────────────────────────────
 
-    async def __aenter__(self) -> CodexAppServerBackend:
+    async def __aenter__(self) -> "CodexAppServerBackend":
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -496,7 +494,7 @@ class CodexAppServerBackend(HiveBackend):
                 self._stderr_tail = self._stderr_tail[-200:]
             logger.debug(f"[codex stderr] {text}")
 
-    async def _route_incoming(self, msg: Dict[str, Any]):
+    async def _route_incoming(self, msg: dict[str, Any]):
         # Response
         if "id" in msg and ("result" in msg or "error" in msg):
             fut = self._pending.pop(str(msg["id"]), None)
@@ -515,7 +513,7 @@ class CodexAppServerBackend(HiveBackend):
         if method:
             await self._handle_notification(method, params)
 
-    async def _handle_server_request(self, msg: Dict[str, Any]):
+    async def _handle_server_request(self, msg: dict[str, Any]):
         req_id = msg.get("id")
         method = msg.get("method")
         params = msg.get("params") or {}
@@ -530,7 +528,7 @@ class CodexAppServerBackend(HiveBackend):
 
         if method == "item/tool/requestUserInput":
             # Avoid stalling: pick first option if present, else empty string.
-            answers: Dict[str, Dict[str, List[str]]] = {}
+            answers: dict[str, dict[str, list[str]]] = {}
             for q in params.get("questions", []) or []:
                 qid = q.get("id")
                 if not qid:
@@ -546,7 +544,7 @@ class CodexAppServerBackend(HiveBackend):
         # If we don't know how to handle a request, return an error response.
         await self._respond_error(req_id, code=-32601, message=f"Unsupported server request: {method}")
 
-    async def _handle_notification(self, method: str, params: Dict[str, Any]):
+    async def _handle_notification(self, method: str, params: dict[str, Any]):
         # Primary lifecycle mapping for Hive.
         if method == "turn/started":
             thread_id = params.get("threadId")
@@ -605,7 +603,7 @@ class CodexAppServerBackend(HiveBackend):
 
         # Ignore everything else (item deltas, plan deltas, etc).
 
-    async def _write_line(self, obj: Dict[str, Any]):
+    async def _write_line(self, obj: dict[str, Any]):
         if not self._proc or not self._proc.stdin:
             raise RuntimeError("Codex app-server is not running")
         data = (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
@@ -613,7 +611,7 @@ class CodexAppServerBackend(HiveBackend):
             self._proc.stdin.write(data)
             await self._proc.stdin.drain()
 
-    async def _request(self, method: str, params: Optional[Dict[str, Any]], *, timeout: int = 30) -> Dict[str, Any]:
+    async def _request(self, method: str, params: dict[str, Any] | None, *, timeout: int = 30) -> dict[str, Any]:
         req_id = str(self._next_id)
         self._next_id += 1
 
@@ -621,7 +619,7 @@ class CodexAppServerBackend(HiveBackend):
         fut: asyncio.Future = loop.create_future()
         self._pending[req_id] = fut
 
-        payload: Dict[str, Any] = {"id": req_id, "method": method}
+        payload: dict[str, Any] = {"id": req_id, "method": method}
         if params is not None:
             payload["params"] = params
         await self._write_line(payload)
@@ -631,17 +629,17 @@ class CodexAppServerBackend(HiveBackend):
             raise RuntimeError(resp["error"])
         return resp.get("result") or {}
 
-    async def _notify(self, method: str, params: Optional[Dict[str, Any]]):
-        payload: Dict[str, Any] = {"method": method}
+    async def _notify(self, method: str, params: dict[str, Any] | None):
+        payload: dict[str, Any] = {"method": method}
         if params is not None:
             payload["params"] = params
         await self._write_line(payload)
 
-    async def _respond(self, req_id: Any, result: Dict[str, Any]):
+    async def _respond(self, req_id: Any, result: dict[str, Any]):
         await self._write_line({"id": req_id, "result": result})
 
     async def _respond_error(self, req_id: Any, *, code: int, message: str, data: Any = None):
-        err: Dict[str, Any] = {"code": int(code), "message": str(message)}
+        err: dict[str, Any] = {"code": int(code), "message": str(message)}
         if data is not None:
             err["data"] = data
         await self._write_line({"id": req_id, "error": err})

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import WORKER_PERMISSIONS
 from ..prompts import build_retry_context, build_system_prompt, build_worker_prompt, get_prompt_version
@@ -57,8 +57,8 @@ class MonitorStep:
     """A single monitor loop outcome."""
 
     signal: MonitorSignal
-    detection_via: Optional[str] = None
-    file_result: Optional[Dict[str, Any]] = None
+    detection_via: str | None = None
+    file_result: dict[str, Any] | None = None
 
 
 @dataclass
@@ -66,16 +66,16 @@ class AgentLivenessProbe:
     """Result of reading completion truth plus backend session state."""
 
     state: AgentLivenessState
-    file_result: Optional[Dict[str, Any]] = None
-    session_status: Optional[str] = None
-    error: Optional[str] = None
+    file_result: dict[str, Any] | None = None
+    session_status: str | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
 class SpawnContext:
     """Resolved spawn inputs for a single worker launch."""
 
-    issue: Dict[str, Any]
+    issue: dict[str, Any]
     issue_id: str
     issue_project: str
     agent_name: str
@@ -88,14 +88,14 @@ class SpawnResources:
     """Resources allocated while spawning a worker."""
 
     agent_id: str
-    worktree: Optional[str] = None
-    session_id: Optional[str] = None
+    worktree: str | None = None
+    session_id: str | None = None
 
 
 class LifecycleMixin:
     """Mixin providing worker spawn, monitor, and stall handling."""
 
-    async def spawn_worker(self, issue: Dict[str, str]):
+    async def spawn_worker(self, issue: dict[str, str]):
         """Spawn a new worker agent to handle an issue."""
         issue_id = issue["id"]
         self._spawning_issues.add(issue_id)
@@ -104,7 +104,7 @@ class LifecycleMixin:
         finally:
             self._spawning_issues.discard(issue_id)
 
-    async def _spawn_worker_inner(self, issue: Dict[str, str]):
+    async def _spawn_worker_inner(self, issue: dict[str, str]):
         """Inner spawn logic, wrapped by spawn_worker's TOCTOU guard."""
         ctx = self._prepare_spawn(issue)
         resources = await self._create_spawn_resources(ctx)
@@ -116,7 +116,7 @@ class LifecycleMixin:
 
         await self._activate_spawn(ctx, resources)
 
-    def _prepare_spawn(self, issue: Dict[str, Any]) -> SpawnContext:
+    def _prepare_spawn(self, issue: dict[str, Any]) -> SpawnContext:
         """Resolve the immutable inputs for a worker spawn."""
         issue_id = issue["id"]
         issue_project = issue["project"]
@@ -138,7 +138,7 @@ class LifecycleMixin:
             project_path=project_path,
         )
 
-    async def _create_spawn_resources(self, ctx: SpawnContext) -> Optional[SpawnResources]:
+    async def _create_spawn_resources(self, ctx: SpawnContext) -> SpawnResources | None:
         """Create the DB agent row and worktree needed before issue claim."""
         agent_id = self.db.create_agent(
             name=ctx.agent_name,
@@ -175,7 +175,7 @@ class LifecycleMixin:
         )
         return False
 
-    async def _activate_spawn(self, ctx: SpawnContext, resources: SpawnResources) -> Optional[AgentIdentity]:
+    async def _activate_spawn(self, ctx: SpawnContext, resources: SpawnResources) -> AgentIdentity | None:
         """Create the backend session, register the agent, and dispatch work."""
         assert resources.worktree is not None
 
@@ -253,10 +253,10 @@ class LifecycleMixin:
             self.db.log_event(ctx.issue_id, resources.agent_id, "escalated", {"reason": "Spawn failure"})
             return None
 
-    def _gather_notes_for_worker(self, issue_id: str, project: str) -> Optional[List[Dict[str, Any]]]:
+    def _gather_notes_for_worker(self, issue_id: str, project: str) -> list[dict[str, Any]] | None:
         """Gather project-wide notes for a worker prompt. Returns None if none found (so caller skips the section)."""
         seen_ids: set = set()
-        notes: List[Dict[str, Any]] = []
+        notes: list[dict[str, Any]] = []
 
         # Get recent project-wide notes
         for note in self.db.get_notes(project=project, limit=10):
@@ -277,10 +277,10 @@ class LifecycleMixin:
         self,
         *,
         agent: AgentIdentity,
-        issue: Dict[str, Any],
+        issue: dict[str, Any],
         model: str,
         started_event_type: str,
-        started_event_detail: Dict[str, Any],
+        started_event_detail: dict[str, Any],
     ):
         """Shared prompt + dispatch flow for worker spawning."""
         issue_id = issue["id"]
@@ -359,7 +359,7 @@ class LifecycleMixin:
             # SSE/poll idle are only hints that completion may now be available.
             check_interval = min(30, deps.Config.LEASE_DURATION // 4)
             completion_detected_via = "unknown"
-            file_result: Optional[Dict[str, Any]] = None
+            file_result: dict[str, Any] | None = None
             idle_hint_seen = False
             logger.info(
                 f"Starting monitor for session {my_session_id} "
@@ -430,7 +430,7 @@ class LifecycleMixin:
                 del self.session_status_events[my_session_id]
             self._session_last_activity.pop(my_session_id, None)
 
-    def _read_monitor_completion_truth(self, agent: AgentIdentity) -> Optional[MonitorStep]:
+    def _read_monitor_completion_truth(self, agent: AgentIdentity) -> MonitorStep | None:
         """Return structured completion truth when the result file is present."""
         file_result = deps.read_result_file(agent.worktree)
         if file_result is None:
@@ -441,7 +441,7 @@ class LifecycleMixin:
             file_result=file_result,
         )
 
-    async def _probe_agent_liveness(self, agent: AgentIdentity, *, session_id: Optional[str] = None) -> AgentLivenessProbe:
+    async def _probe_agent_liveness(self, agent: AgentIdentity, *, session_id: str | None = None) -> AgentLivenessProbe:
         """Read result-file truth first, then one backend session-status snapshot."""
         completion_truth = self._read_monitor_completion_truth(agent)
         if completion_truth is not None:
@@ -679,7 +679,7 @@ class LifecycleMixin:
         self,
         agent: AgentIdentity,
         *,
-        session_id_override: Optional[str] = None,
+        session_id_override: str | None = None,
     ) -> StalledSessionCheckResult:
         """Handle stalled agent with backend session status verification.
 

@@ -2,7 +2,6 @@
 
 import logging
 
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -10,11 +9,11 @@ logger = logging.getLogger(__name__)
 class NotesMixin:
     def add_note(
         self,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
+        issue_id: str | None = None,
+        agent_id: str | None = None,
         content: str = "",
         category: str = "discovery",
-        project: Optional[str] = None,
+        project: str | None = None,
         must_read: bool = False,
     ) -> int:
         """Insert a note and return its row ID."""
@@ -28,9 +27,7 @@ class NotesMixin:
         self.conn.commit()
         return cursor.lastrowid
 
-    def get_notes(
-        self, issue_id: Optional[str] = None, category: Optional[str] = None, project: Optional[str] = None, limit: int = 20
-    ) -> List[Dict]:
+    def get_notes(self, issue_id: str | None = None, category: str | None = None, project: str | None = None, limit: int = 20) -> list[dict]:
         """Retrieve notes newest-first. NULL-project notes match any project query (backward compat)."""
         if not self.conn:
             raise RuntimeError("Database not connected")

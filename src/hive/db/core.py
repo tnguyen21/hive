@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partialmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..utils import generate_id, _normalize_project_name
 
@@ -277,7 +277,7 @@ class DatabaseCore:
         from ..config import Config
 
         self.db_path = db_path or Config.DB_PATH
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: sqlite3.Connection | None = None
 
     def connect(self):
         """Open database connection and initialize schema."""
@@ -469,11 +469,11 @@ class DatabaseCore:
         self,
         *,
         issue_id: str,
-        agent_id: Optional[str],
+        agent_id: str | None,
         project: str,
         worktree: str,
         branch_name: str,
-        test_command: Optional[str] = None,
+        test_command: str | None = None,
     ) -> bool:
         """Enqueue an issue for merge processing. Returns True if inserted, False if already existed."""
         with self.transaction() as conn:
@@ -486,7 +486,7 @@ class DatabaseCore:
             )
             return cursor.rowcount == 1
 
-    def try_transition_merge_queue_status(self, queue_id: int, *, from_status: str, to_status: str, completed_at: Optional[str] = None) -> bool:
+    def try_transition_merge_queue_status(self, queue_id: int, *, from_status: str, to_status: str, completed_at: str | None = None) -> bool:
         """CAS-style merge_queue status transition. Returns True if updated."""
         with self.transaction() as conn:
             cursor = conn.execute(
@@ -501,10 +501,10 @@ class DatabaseCore:
 
     def log_event(
         self,
-        issue_id: Optional[str],
-        agent_id: Optional[str],
+        issue_id: str | None,
+        agent_id: str | None,
         event_type: str,
-        detail: Optional[Dict[str, Any]] = None,
+        detail: dict[str, Any] | None = None,
         commit: bool = True,
     ):
         """Log an event to the audit trail."""
@@ -529,8 +529,8 @@ class DatabaseCore:
         self,
         name: str,
         model: str = "claude-sonnet-4-5-20250929",
-        metadata: Optional[Dict[str, Any]] = None,
-        project: Optional[str] = None,
+        metadata: dict[str, Any] | None = None,
+        project: str | None = None,
     ) -> str:
         """Create a new agent identity. Returns the generated agent ID."""
         agent_id = generate_id("agent")
@@ -547,7 +547,7 @@ class DatabaseCore:
 
         return agent_id
 
-    def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
+    def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         """Get agent by ID."""
         cursor = self.conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
         return self._one(cursor)
@@ -581,7 +581,7 @@ class DatabaseCore:
             )
             return cursor.rowcount == 1
 
-    def get_active_agents(self, project: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_active_agents(self, project: str | None = None) -> list[dict[str, Any]]:
         """Get all currently active (working) agents, optionally filtered by project."""
         query = "SELECT * FROM agents WHERE status = 'working'"
         params = []
@@ -597,7 +597,7 @@ class DatabaseCore:
 
     # --- Merge Queue Methods ---
 
-    def get_queued_merges(self, project: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_queued_merges(self, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         """Get queued merge entries oldest-first, joined with issue/agent info."""
         query = """
             SELECT mq.*, i.title as issue_title, a.name as agent_name
@@ -626,7 +626,7 @@ class DatabaseCore:
         ).fetchone()
         return row is not None
 
-    def get_merge_queue_stats(self, project: Optional[str] = None) -> Dict[str, int]:
+    def get_merge_queue_stats(self, project: str | None = None) -> dict[str, int]:
         """Get merge queue counts by status, e.g. {"queued": 3, "merged": 10}."""
         if project:
             cursor = self.conn.execute(
@@ -644,12 +644,12 @@ class DatabaseCore:
         self,
         *,
         after_id: int = 0,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        event_type: Optional[str] = None,
-        limit: Optional[int] = None,
+        issue_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+        limit: int | None = None,
         order: str = "DESC",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Private helper for querying events with optional filtering and ordering."""
         conditions = []
         params = []
@@ -675,21 +675,21 @@ class DatabaseCore:
 
     def get_events(
         self,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        event_type: Optional[str] = None,
+        issue_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get events filtered by issue, agent, or type."""
         return self._query_events(issue_id=issue_id, agent_id=agent_id, event_type=event_type, limit=limit, order="DESC")
 
     def get_events_since(
         self,
         after_id: int = 0,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        event_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        issue_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Get events with id > after_id, ordered ascending (oldest first)."""
         return self._query_events(after_id=after_id, issue_id=issue_id, agent_id=agent_id, event_type=event_type, order="ASC")
 
@@ -701,10 +701,10 @@ class DatabaseCore:
     def get_recent_events(
         self,
         n: int = 20,
-        issue_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        event_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        issue_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Get the most recent n events, returned oldest-first."""
         results = self._query_events(issue_id=issue_id, agent_id=agent_id, event_type=event_type, limit=n, order="DESC")
         return list(reversed(results))
@@ -739,7 +739,7 @@ class DatabaseCore:
             cursor = conn.execute("DELETE FROM projects WHERE name = ?", (name,))
             return cursor.rowcount > 0
 
-    def get_project_path(self, name: str) -> Optional[str]:
+    def get_project_path(self, name: str) -> str | None:
         """Return the disk path for a project by name, or None if not found."""
         row = self._one(self.conn.execute("SELECT path FROM projects WHERE name = ?", (name,)))
         return row["path"] if row else None

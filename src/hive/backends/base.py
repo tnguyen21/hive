@@ -10,68 +10,68 @@ Both the Claude and Codex backends combine these into a single class.
 import inspect
 from types import TracebackType
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Self
+from typing import Any, Callable, Self
 
 
 class HiveBackend(ABC):
     """Interface that all Hive backends must implement."""
 
     def __init__(self):
-        self._handlers: Dict[str, Callable] = {}
+        self._handlers: dict[str, Callable] = {}
 
     # ── Session management ────────────────────────────────────────────
 
     @abstractmethod
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(self) -> list[dict[str, Any]]:
         """List active sessions. Used for health checks and reconciliation."""
 
     @abstractmethod
     async def create_session(
         self,
-        directory: Optional[str] = None,
-        title: Optional[str] = None,
-        permissions: Optional[List[Dict[str, str]]] = None,
-    ) -> Dict[str, Any]:
+        directory: str | None = None,
+        title: str | None = None,
+        permissions: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         """Create a new session. Returns dict with at least {"id": ...}."""
 
     @abstractmethod
     async def send_message_async(
         self,
         session_id: str,
-        parts: List[Dict[str, Any]],
+        parts: list[dict[str, Any]],
         agent: str = "build",
-        model: Optional[str] = None,
-        system: Optional[str] = None,
-        directory: Optional[str] = None,
+        model: str | None = None,
+        system: str | None = None,
+        directory: str | None = None,
     ):
         """Send a message to a session (fire-and-forget)."""
 
     @abstractmethod
-    async def abort_session(self, session_id: str, directory: Optional[str] = None) -> bool:
+    async def abort_session(self, session_id: str, directory: str | None = None) -> bool:
         """Abort a running session. Returns True if successful."""
 
     @abstractmethod
-    async def delete_session(self, session_id: str, directory: Optional[str] = None) -> bool:
+    async def delete_session(self, session_id: str, directory: str | None = None) -> bool:
         """Delete a session. Returns True if successful."""
 
     @abstractmethod
-    async def cleanup_session(self, session_id: str, directory: Optional[str] = None):
+    async def cleanup_session(self, session_id: str, directory: str | None = None):
         """Abort + delete a session. Best-effort, exceptions swallowed."""
 
     @abstractmethod
-    async def get_session_status(self, session_id: str, directory: Optional[str] = None) -> Dict[str, Any]:
+    async def get_session_status(self, session_id: str, directory: str | None = None) -> dict[str, Any]:
         """Get session status. Returns dict with {"type": "idle"|"busy"|"error"|"not_found"}."""
 
     @abstractmethod
-    async def get_messages(self, session_id: str, directory: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_messages(self, session_id: str, directory: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         """Get messages from a session."""
 
     @abstractmethod
-    async def get_pending_permissions(self, directory: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_pending_permissions(self, directory: str | None = None) -> list[dict[str, Any]]:
         """Get pending permission requests."""
 
     @abstractmethod
-    async def reply_permission(self, request_id: str, reply: str, message: Optional[str] = None, directory: Optional[str] = None):
+    async def reply_permission(self, request_id: str, reply: str, message: str | None = None, directory: str | None = None):
         """Reply to a permission request."""
 
     # ── Event streaming ───────────────────────────────────────────────
@@ -115,7 +115,7 @@ class HiveBackend(ABC):
     async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None: ...
 
 
-def _first_text(parts: List[Dict[str, Any]]) -> str:
+def _first_text(parts: list[dict[str, Any]]) -> str:
     """Return the first text part from a backend message payload."""
     for part in parts:
         if part.get("type") == "text":

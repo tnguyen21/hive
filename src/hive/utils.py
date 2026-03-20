@@ -7,7 +7,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 # --- Logging ---
@@ -79,10 +79,10 @@ class CompletionResult:
     success: bool
     reason: str
     summary: str
-    artifacts: Dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def git_commit(self) -> Optional[str]:
+    def git_commit(self) -> str | None:
         """Get git commit hash from artifacts."""
         return self.artifacts.get("git_commit")
 

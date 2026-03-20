@@ -9,7 +9,7 @@ import asyncio
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .config import Config, WORKER_PERMISSIONS
 from .db import Database
@@ -50,12 +50,12 @@ class MergeProcessor:
         self.backend = backend
         self.project_path = str(Path(project_path).resolve())
         self.project_name = project_name
-        self.refinery_session_id: Optional[str] = None
-        self._refinery_system_prompt: Optional[str] = None
+        self.refinery_session_id: str | None = None
+        self._refinery_system_prompt: str | None = None
         self._refinery_message_count: int = 0
         self._refinery_token_estimate: int = 0
         self._main_dirty_blocked: bool = False
-        self._main_dirty_snapshot: Optional[str] = None
+        self._main_dirty_snapshot: str | None = None
 
     async def shutdown(self):
         """Clean up the refinery session on shutdown."""
@@ -194,7 +194,7 @@ class MergeProcessor:
             )
             await self._cleanup_merge_resources(entry)
 
-    async def _send_to_refinery(self, entry: Dict[str, Any]):
+    async def _send_to_refinery(self, entry: dict[str, Any]):
         """Hand a merge to the Refinery LLM. Retries once on RefinerySessionDied; a second death escalates to needs_human."""
         queue_id = entry["id"]
         issue_id = entry["issue_id"]
@@ -326,7 +326,7 @@ class MergeProcessor:
         # Check if refinery session should be cycled due to token usage
         await self._maybe_cycle_refinery_session()
 
-    async def _send_to_refinery_inner(self, entry: Dict[str, Any], worktree_path: str) -> Dict[str, Any]:
+    async def _send_to_refinery_inner(self, entry: dict[str, Any], worktree_path: str) -> dict[str, Any]:
         """Send a merge to the refinery and wait for a parsed result. Raises RefinerySessionDied if session dies."""
         session_id = await self._ensure_refinery_session()
 
@@ -378,8 +378,8 @@ class MergeProcessor:
         return res
 
     async def _wait_for_refinery(
-        self, session_id: str, worktree_path: str, timeout: Optional[int] = None, min_message_count: int = 0
-    ) -> Dict[str, Any]:
+        self, session_id: str, worktree_path: str, timeout: int | None = None, min_message_count: int = 0
+    ) -> dict[str, Any]:
         """Wait for the refinery session to become idle, then read the result from the worktree file."""
         timeout_seconds = Config.LEASE_DURATION if timeout is None else timeout
 
@@ -450,7 +450,7 @@ class MergeProcessor:
                 "conflicts_resolved": 0,
             }
 
-    async def _finalize_issue(self, entry: Dict[str, Any]):
+    async def _finalize_issue(self, entry: dict[str, Any]):
         """Mark an issue as finalized and clean up merge resources."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -474,7 +474,7 @@ class MergeProcessor:
         # Tear down worktree, session, and agent
         await self._teardown_after_finalize(entry)
 
-    async def _cleanup_merge_resources(self, entry: Dict[str, Any]):
+    async def _cleanup_merge_resources(self, entry: dict[str, Any]):
         """Best-effort cleanup of worktree, branch, session, and agent row after finalization or failure."""
 
         # Clean up the backend session if one exists for the agent
@@ -501,7 +501,7 @@ class MergeProcessor:
             with self.db.transaction() as conn:
                 conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
 
-    async def _teardown_after_finalize(self, entry: Dict[str, Any]):
+    async def _teardown_after_finalize(self, entry: dict[str, Any]):
         """Clean up worktree, session, and agent state after finalization."""
         await self._cleanup_merge_resources(entry)
 

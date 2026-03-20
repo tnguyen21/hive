@@ -3,7 +3,7 @@
 import json
 import logging
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..status import CLOSED_ISSUE_STATUSES, IssueStatus, UNBLOCKING_ISSUE_STATUSES
 from ..utils import generate_id
@@ -19,7 +19,7 @@ class IssuesMixin:
         *,
         from_status: IssueStatus | str,
         to_status: IssueStatus | str,
-        expected_assignee: Optional[str] = None,
+        expected_assignee: str | None = None,
     ) -> bool:
         """CAS-style issue status transition. For transitions to 'open', clears assignee (INV-2)."""
         from_status_value = str(from_status)
@@ -72,11 +72,11 @@ class IssuesMixin:
         priority: int = 2,
         issue_type: str = "task",
         project: str = "",
-        parent_id: Optional[str] = None,
-        model: Optional[str] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        depends_on: Optional[list[str]] = None,
+        parent_id: str | None = None,
+        model: str | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        depends_on: list[str] | None = None,
     ) -> str:
         """Create a new issue. Dependencies are wired in the same transaction so the issue is never visible to get_ready_queue without its deps."""
         issue_id = generate_id("w")
@@ -119,7 +119,7 @@ class IssuesMixin:
 
         return issue_id
 
-    def get_ready_queue(self, project: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_ready_queue(self, project: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         """Return open, unassigned issues with all blocking deps resolved, ordered by priority then creation time."""
         unblocking_placeholders = ", ".join("?" for _ in UNBLOCKING_ISSUE_STATUSES)
         query = f"""
@@ -136,7 +136,7 @@ class IssuesMixin:
               )
         """
 
-        params: List[Any] = [IssueStatus.OPEN, *UNBLOCKING_ISSUE_STATUSES]
+        params: list[Any] = [IssueStatus.OPEN, *UNBLOCKING_ISSUE_STATUSES]
         if project is not None:
             query += " AND i.project = ?"
             params.append(project)
@@ -195,7 +195,7 @@ class IssuesMixin:
 
             return success
 
-    def get_issue(self, issue_id: str) -> Optional[Dict[str, Any]]:
+    def get_issue(self, issue_id: str) -> dict[str, Any] | None:
         """Get issue by ID."""
         cursor = self.conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,))
         return self._one(cursor)

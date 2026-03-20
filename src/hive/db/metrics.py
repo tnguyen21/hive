@@ -2,7 +2,7 @@
 
 import logging
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class MetricsMixin:
         cursor = self.conn.execute(query, params)
         return cursor.fetchall()
 
-    def get_token_usage(self, issue_id: Optional[str] = None, agent_id: Optional[str] = None, project: Optional[str] = None) -> Dict[str, Any]:
+    def get_token_usage(self, issue_id: str | None = None, agent_id: str | None = None, project: str | None = None) -> dict[str, Any]:
         """Get aggregated token usage from 'tokens_used' events."""
         if not self.conn:
             raise RuntimeError("Database not connected")
@@ -117,7 +117,7 @@ class MetricsMixin:
             "model_breakdown": model_breakdown,
         }
 
-    def get_model_performance(self, model: Optional[str] = None, tag: Optional[str] = None, group_by: str = "tag") -> List[Dict[str, Any]]:
+    def get_model_performance(self, model: str | None = None, tag: str | None = None, group_by: str = "tag") -> list[dict[str, Any]]:
         """Get model performance stats. group_by "tag" (default) groups by model×tag; "type" by model×type."""
         if group_by == "tag":
             group_col = "COALESCE(jt.value, 'untagged')"
@@ -162,11 +162,11 @@ class MetricsMixin:
 
     def get_metrics(
         self,
-        model: Optional[str] = None,
-        tag: Optional[str] = None,
-        issue_type: Optional[str] = None,
-        project: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        model: str | None = None,
+        tag: str | None = None,
+        issue_type: str | None = None,
+        project: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Get aggregated metrics from agent_runs view, grouped by model."""
         if not self.conn:
             raise RuntimeError("Database not connected")

@@ -1,7 +1,5 @@
 """Rich renderers for CLI output."""
 
-from __future__ import annotations
-
 import json
 
 from rich import box
