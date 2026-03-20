@@ -273,6 +273,11 @@ class CompletionMixin:
                 "completion_error",
                 {"error": str(e), "transition": transition},
             )
+            # If the merge was never enqueued, nothing else will clean up
+            # the worktree — force removal on teardown.
+            if not remove_worktree_on_teardown:
+                if not self.db.has_pending_merge(agent.issue_id):
+                    remove_worktree_on_teardown = True
         finally:
             await self._cleanup_agent(agent, remove_worktree=remove_worktree_on_teardown)
 

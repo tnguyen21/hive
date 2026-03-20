@@ -667,6 +667,14 @@ class DatabaseCore:
         cursor = self.conn.execute(query, params)
         return self._all(cursor)
 
+    def has_pending_merge(self, issue_id: str) -> bool:
+        """Check whether an issue has an active (queued or running) merge queue entry."""
+        row = self.conn.execute(
+            "SELECT 1 FROM merge_queue WHERE issue_id = ? AND status IN ('queued', 'running')",
+            (issue_id,),
+        ).fetchone()
+        return row is not None
+
     def get_merge_queue_stats(self, project: Optional[str] = None) -> Dict[str, int]:
         """
         Get merge queue statistics by status.

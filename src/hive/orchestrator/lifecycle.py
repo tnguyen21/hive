@@ -431,8 +431,10 @@ class LifecycleMixin:
                 "monitor_error",
                 {"error": str(e)},
             )
-            # Tear down the agent so it doesn't leak in active_agents
-            await self._cleanup_agent(agent)
+            # Tear down the agent so it doesn't leak in active_agents.
+            # remove_worktree=True: no other path will clean it up since
+            # the agent is about to be unregistered and marked failed.
+            await self._cleanup_agent(agent, remove_worktree=True)
         finally:
             # Clean up using the snapshotted session_id, not agent.session_id.
             logger.debug(
