@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "9b4167f6f33d",
+  "strategy": "manual-commit",
+  "branch": "refactor/inline-thin-wrappers",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/hive/daemon.py",
+    "src/hive/merge.py",
+    "src/hive/orchestrator/completion.py",
+    "src/hive/orchestrator/core.py",
+    "src/hive/orchestrator/deps.py",
+    "src/hive/orchestrator/lifecycle.py",
+    "src/hive/utils.py",
+    "tests/test_merge.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9b/4167f6f33d/0/metadata.json",
+      "transcript": "/9b/4167f6f33d/0/full.jsonl",
+      "context": "/9b/4167f6f33d/0/context.md",
+      "content_hash": "/9b/4167f6f33d/0/content_hash.txt",
+      "prompt": "/9b/4167f6f33d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
