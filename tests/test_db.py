@@ -429,34 +429,41 @@ def db_with_merge_queue(temp_db):
     return db, agent_id, [id1, id2, id3]
 
 
-def test_get_queued_merges(db_with_merge_queue):
-    """Test retrieving queued merge entries."""
+def test_list_merge_entries_queued_filter(db_with_merge_queue):
+    """list_merge_entries(status='queued') returns only queued rows with joined fields."""
     db, agent_id, issue_ids = db_with_merge_queue
 
-    merges = db.get_queued_merges()
+    merges = db.list_merge_entries("test", status="queued")
     assert len(merges) == 2  # Only 'queued', not 'merged'
 
     # Should have joined fields
-    assert merges[0]["issue_title"] == "Feature A"
-    assert merges[0]["branch_name"] == "agent/worker-1"
-    assert merges[0]["agent_name"] == "worker-abc"
+    titles = {m["issue_title"] for m in merges}
+    assert "Feature A" in titles
+    assert "Feature C" not in titles  # 'merged' status excluded
 
-    # Should be ordered by enqueued_at
+
+def test_list_merge_entries_ascending_order(db_with_merge_queue):
+    """ascending=True returns oldest-first (FIFO for merge processing)."""
+    db, _, issue_ids = db_with_merge_queue
+
+    merges = db.list_merge_entries("test", status="queued", ascending=True)
+    assert len(merges) == 2
     assert merges[0]["issue_id"] == issue_ids[0]
     assert merges[1]["issue_id"] == issue_ids[1]
 
 
-def test_get_queued_merges_with_limit(db_with_merge_queue):
-    """Test limit parameter on get_queued_merges."""
+def test_list_merge_entries_limit(db_with_merge_queue):
+    """limit parameter restricts result count."""
     db, _, _ = db_with_merge_queue
 
-    merges = db.get_queued_merges(limit=1)
+    merges = db.list_merge_entries("test", status="queued", limit=1)
     assert len(merges) == 1
 
 
-def test_get_queued_merges_empty(temp_db):
-    """Test get_queued_merges with empty queue."""
-    merges = temp_db.get_queued_merges()
+def test_list_merge_entries_empty(temp_db):
+    """list_merge_entries returns empty list when queue is empty."""
+    temp_db.create_issue("dummy", project="test")  # project must exist for i.project join
+    merges = temp_db.list_merge_entries("test", status="queued")
     assert merges == []
 
 
@@ -1301,17 +1308,15 @@ def test_get_ready_queue_filter_by_project(db_with_projects):
     assert len([i for i in beta_ids if i in ids["alpha_issues"]]) == 0
 
 
-def test_get_queued_merges_filter_by_project(db_with_projects):
-    """Test get_queued_merges filters by project."""
+def test_list_merge_entries_filter_by_project(db_with_projects):
+    """list_merge_entries filters entries by project."""
     db, ids = db_with_projects
 
-    # Get alpha merges
-    alpha_merges = db.get_queued_merges(project="alpha")
+    alpha_merges = db.list_merge_entries("alpha", status="queued")
     assert len(alpha_merges) == 1
     assert alpha_merges[0]["issue_id"] == ids["alpha_issues"][0]
 
-    # Get beta merges
-    beta_merges = db.get_queued_merges(project="beta")
+    beta_merges = db.list_merge_entries("beta", status="queued")
     assert len(beta_merges) == 1
     assert beta_merges[0]["issue_id"] == ids["beta_issues"][0]
 

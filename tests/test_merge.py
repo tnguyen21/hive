@@ -1442,20 +1442,20 @@ class TestMergeProcessorPool:
 
         queried_projects = []
 
-        original_get_queued_merges = temp_db.get_queued_merges
+        original_list_merge_entries = temp_db.list_merge_entries
 
-        def spy_get_queued_merges(project=None, limit=10):
+        def spy_list_merge_entries(project, status=None, limit=50, ascending=False):
             queried_projects.append(project)
             return []
 
-        temp_db.get_queued_merges = spy_get_queued_merges
+        temp_db.list_merge_entries = spy_list_merge_entries
 
         # Give each processor a valid path so the dirty-check doesn't error
         with patch("hive.merge.get_worktree_dirty_status_async", new_callable=AsyncMock, return_value=(False, "")):
             await pool.get("proj-x", "/tmp/proj-x").process_queue_once()
             await pool.get("proj-y", "/tmp/proj-y").process_queue_once()
 
-        temp_db.get_queued_merges = original_get_queued_merges
+        temp_db.list_merge_entries = original_list_merge_entries
 
         assert "proj-x" in queried_projects
         assert "proj-y" in queried_projects

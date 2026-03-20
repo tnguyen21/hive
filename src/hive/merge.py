@@ -130,7 +130,7 @@ class MergeProcessor:
 
     async def process_queue_once(self):
         """Process the next item in the merge queue. One at a time, sequential."""
-        entries = self.db.get_queued_merges(project=self.project_name, limit=1)
+        entries = self.db.list_merge_entries(self.project_name, status="queued", limit=1, ascending=True)
         if not entries:
             return
 

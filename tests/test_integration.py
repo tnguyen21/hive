@@ -112,7 +112,7 @@ async def test_happy_path_direct_completion(integration_orchestrator, fake_backe
     assert orch.db.get_issue(issue_id)["status"] == "done"
     assert agent_id not in orch.active_agents
 
-    merges = orch.db.get_queued_merges()
+    merges = orch.db.list_merge_entries("test-project", status="queued")
     assert any(m["issue_id"] == issue_id for m in merges)
 
     events = orch.db.get_events(issue_id=issue_id)
@@ -163,7 +163,7 @@ async def test_happy_path_via_sse(integration_orchestrator, fake_backend, temp_g
     await inject_task
 
     # Verify merge queue entry
-    merges = orch.db.get_queued_merges()
+    merges = orch.db.list_merge_entries("test-project", status="queued")
     assert any(m["issue_id"] == issue_id for m in merges)
 
     # Verify full event trail

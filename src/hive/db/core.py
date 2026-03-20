@@ -597,27 +597,6 @@ class DatabaseCore:
 
     # --- Merge Queue Methods ---
 
-    def get_queued_merges(self, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        """Get queued merge entries oldest-first, joined with issue/agent info."""
-        query = """
-            SELECT mq.*, i.title as issue_title, a.name as agent_name
-            FROM merge_queue mq
-            JOIN issues i ON mq.issue_id = i.id
-            LEFT JOIN agents a ON mq.agent_id = a.id
-            WHERE mq.status = 'queued'
-        """
-
-        params = []
-        if project is not None:
-            query += " AND mq.project = ?"
-            params.append(project)
-
-        query += " ORDER BY mq.enqueued_at ASC LIMIT ?"
-        params.append(limit)
-
-        cursor = self.conn.execute(query, params)
-        return self._all(cursor)
-
     def has_pending_merge(self, issue_id: str) -> bool:
         """Check whether an issue has an active (queued or running) merge queue entry."""
         row = self.conn.execute(
@@ -779,8 +758,12 @@ class DatabaseCore:
         )
         return self._all(cursor)
 
-    def list_merge_entries(self, project: str, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-        """Return merge queue entries joined with issue/agent info for display."""
+    def list_merge_entries(self, project: str, status: str | None = None, limit: int = 50, ascending: bool = False) -> list[dict[str, Any]]:
+        """Return merge queue entries joined with issue/agent info for display.
+
+        ascending=True returns oldest-first (FIFO processing order);
+        ascending=False (default) returns newest-first (display order).
+        """
         query = """
             SELECT mq.*, i.title as issue_title, a.name as agent_name
             FROM merge_queue mq
@@ -792,7 +775,8 @@ class DatabaseCore:
         if status:
             query += " AND mq.status = ?"
             params.append(status)
-        query += " ORDER BY mq.enqueued_at DESC LIMIT ?"
+        order = "ASC" if ascending else "DESC"
+        query += f" ORDER BY mq.enqueued_at {order} LIMIT ?"
         params.append(limit)
         cursor = self.conn.execute(query, params)
         return self._all(cursor)
