@@ -1641,3 +1641,137 @@ def test_register_project_nonblocking_when_write_locked(tmp_path):
     writer.conn.rollback()
     writer.close()
     reader.close()
+
+
+# ── Tests for centralized query methods ──────────────────────────────
+
+
+def test_get_issue_status_counts(temp_db):
+    temp_db.create_issue("A", project="p1")
+    temp_db.create_issue("B", project="p1")
+    temp_db.create_issue("C", project="p2")
+    temp_db.update_issue_status(temp_db.create_issue("D", project="p1"), "done")
+
+    counts = temp_db.get_issue_status_counts(project="p1")
+    assert counts["open"] == 2
+    assert counts["done"] == 1
+
+    all_counts = temp_db.get_issue_status_counts()
+    assert sum(all_counts.values()) == 4
+
+
+def test_get_running_merge(temp_db):
+    iid = temp_db.create_issue("merge me", project="proj")
+    assert temp_db.get_running_merge(project="proj") is None
+
+    temp_db.enqueue_merge(issue_id=iid, agent_id=None, project="proj", worktree="/w", branch_name="b")
+    # Still queued, not running
+    assert temp_db.get_running_merge(project="proj") is None
+
+    temp_db.try_transition_merge_queue_status(1, from_status="queued", to_status="running")
+    result = temp_db.get_running_merge(project="proj")
+    assert result is not None
+    assert result["issue_id"] == iid
+    assert result["issue_title"] == "merge me"
+
+
+def test_get_escalated_issues(temp_db):
+    temp_db.create_issue("ok", project="proj")
+    i2 = temp_db.create_issue("bad", project="proj")
+    temp_db.update_issue_status(i2, "escalated")
+
+    esc = temp_db.get_escalated_issues(project="proj")
+    assert len(esc) == 1
+    assert esc[0]["id"] == i2
+    assert esc[0]["status"] == "escalated"
+
+    # Different project returns empty
+    assert temp_db.get_escalated_issues(project="other") == []
+
+
+def test_list_merge_entries(temp_db):
+    i1 = temp_db.create_issue("issue1", project="proj")
+    i2 = temp_db.create_issue("issue2", project="proj")
+    temp_db.enqueue_merge(issue_id=i1, agent_id=None, project="proj", worktree="/w1", branch_name="b1")
+    temp_db.enqueue_merge(issue_id=i2, agent_id=None, project="proj", worktree="/w2", branch_name="b2")
+
+    entries = temp_db.list_merge_entries(project="proj")
+    assert len(entries) == 2
+    assert {e["issue_title"] for e in entries} == {"issue1", "issue2"}
+
+    # Filter by status
+    temp_db.try_transition_merge_queue_status(1, from_status="queued", to_status="running")
+    queued = temp_db.list_merge_entries(project="proj", status="queued")
+    assert len(queued) == 1
+
+
+def test_list_agents(temp_db):
+    temp_db.create_agent("worker-1", project="proj")
+    temp_db.create_agent("worker-2", project="proj")
+    temp_db.create_agent("worker-3", project="other")
+
+    agents = temp_db.list_agents(project="proj")
+    assert len(agents) == 2
+
+    # Filter by status (all idle by default)
+    idle = temp_db.list_agents(project="proj", status="idle")
+    assert len(idle) == 2
+    working = temp_db.list_agents(project="proj", status="working")
+    assert len(working) == 0
+
+
+def test_list_issues_method(temp_db):
+    temp_db.create_issue("A", priority=1, project="proj", issue_type="bug")
+    temp_db.create_issue("B", priority=2, project="proj", issue_type="task")
+    i3 = temp_db.create_issue("C", priority=3, project="proj", issue_type="task")
+    temp_db.update_issue_status(i3, "done")
+
+    # Basic listing
+    all_issues = temp_db.list_issues(project="proj")
+    assert len(all_issues) == 3
+
+    # Filter by type
+    bugs = temp_db.list_issues(project="proj", issue_type="bug")
+    assert len(bugs) == 1
+
+    # Exclude statuses
+    active = temp_db.list_issues(project="proj", exclude_statuses=("done", "finalized", "canceled"))
+    assert len(active) == 2
+
+    # Sort reverse
+    rev = temp_db.list_issues(project="proj", sort="priority", reverse=True)
+    assert rev[0]["priority"] >= rev[-1]["priority"]
+
+
+def test_get_review_queue(temp_db):
+    i1 = temp_db.create_issue("done1", project="proj")
+    i2 = temp_db.create_issue("open1", project="proj")
+    temp_db.update_issue_status(i1, "done")
+
+    # Without issue_id — only done issues
+    rows = temp_db.get_review_queue(project="proj")
+    assert len(rows) == 1
+    assert rows[0]["id"] == i1
+
+    # With issue_id — returns that specific issue regardless of status
+    rows = temp_db.get_review_queue(project="proj", issue_id=i2)
+    assert len(rows) == 1
+    assert rows[0]["id"] == i2
+
+
+def test_get_dependencies_and_dependents(temp_db):
+    i1 = temp_db.create_issue("blocker", project="proj")
+    i2 = temp_db.create_issue("blocked", project="proj")
+    temp_db.add_dependency(i2, i1)
+
+    deps = temp_db.get_dependencies(i2)
+    assert len(deps) == 1
+    assert deps[0]["id"] == i1
+
+    dependents = temp_db.get_dependents(i1)
+    assert len(dependents) == 1
+    assert dependents[0]["id"] == i2
+
+    # No deps
+    assert temp_db.get_dependencies(i1) == []
+    assert temp_db.get_dependents(i2) == []
