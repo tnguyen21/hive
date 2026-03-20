@@ -136,7 +136,6 @@ def has_diff_from_main(worktree_path: str, main_branch: str = "main") -> bool:
 
 create_worktree_async = _async_wrapper(create_worktree)
 remove_worktree_async = _async_wrapper(remove_worktree)
-rebase_onto_main_async = _async_wrapper(rebase_onto_main)
 merge_to_main_async = _async_wrapper(merge_to_main)
 get_worktree_dirty_status_async = _async_wrapper(get_worktree_dirty_status)
 delete_branch_async = _async_wrapper(delete_branch)
