@@ -1462,18 +1462,3 @@ class TestMergeProcessorPool:
         # Each processor queries only its own project
         assert queried_projects.count("proj-x") == 1
         assert queried_projects.count("proj-y") == 1
-
-    @pytest.mark.asyncio
-    async def test_cleanup_idle_removes_inactive_processors(self, temp_db, mock_backend):
-        """cleanup_idle() removes processors for projects not in active_projects."""
-        pool = MergeProcessorPool(db=temp_db, backend=mock_backend)
-        pool.get("proj-a", "/tmp/proj-a")
-        pool.get("proj-b", "/tmp/proj-b")
-        pool.get("proj-c", "/tmp/proj-c")
-
-        with patch.object(MergeProcessor, "shutdown", new_callable=AsyncMock):
-            await pool.cleanup_idle(active_projects={"proj-b"})
-
-        assert "proj-b" in pool._processors
-        assert "proj-a" not in pool._processors
-        assert "proj-c" not in pool._processors

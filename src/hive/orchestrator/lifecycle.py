@@ -574,7 +574,9 @@ class LifecycleMixin:
                 f"(agent={agent.agent_id}, issue={agent.issue_id}, status={probe.session_status})"
             )
 
-        if not self._monitor_lease_expired(session_id, lease_duration):
+        last_activity = self._session_last_activity.get(session_id, datetime.now())
+        elapsed = (datetime.now() - last_activity).total_seconds()
+        if elapsed <= lease_duration:
             return MonitorStep(signal=MonitorSignal.CONTINUE_MONITORING)
 
         if probe.state == AgentLivenessState.SESSION_BUSY:
@@ -599,12 +601,6 @@ class LifecycleMixin:
             return MonitorStep(signal=MonitorSignal.CONTINUE_MONITORING)
 
         return MonitorStep(signal=MonitorSignal.STOP_MONITORING)
-
-    def _monitor_lease_expired(self, session_id: str, lease_duration: int) -> bool:
-        """Return whether the monitor's last observed activity exceeds the lease."""
-        last_activity = self._session_last_activity.get(session_id, datetime.now())
-        elapsed = (datetime.now() - last_activity).total_seconds()
-        return elapsed > lease_duration
 
     async def cancel_agent_for_issue(self, issue_id: str):
         """Cancel the active agent working on an issue.

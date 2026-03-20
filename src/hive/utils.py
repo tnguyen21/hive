@@ -37,7 +37,9 @@ def configure_logging() -> None:
     console_handler.setLevel(level)
     logger.addHandler(console_handler)
 
-    if not _is_cli_context():
+    # Skip file logging in CLI context (unless explicitly opted in)
+    is_cli = os.environ.get("HIVE_ENABLE_FILE_LOGGING") != "1" and os.environ.get("HIVE_CLI_CONTEXT") == "1"
+    if not is_cli:
         log_dir = Path.home() / ".hive" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -50,13 +52,6 @@ def configure_logging() -> None:
         file_handler.setFormatter(formatter)
         file_handler.setLevel(level)
         logger.addHandler(file_handler)
-
-
-def _is_cli_context() -> bool:
-    """Check if we're running in a CLI context where file logging should be disabled."""
-    if os.environ.get("HIVE_ENABLE_FILE_LOGGING") == "1":
-        return False
-    return os.environ.get("HIVE_CLI_CONTEXT") == "1"
 
 
 # --- ID generation ---

@@ -124,14 +124,6 @@ class CompletionMixin:
     # - SKIP     -> log agent_complete_skipped
     # - FAIL     -> optionally log a failure event + _handle_agent_failure
     # - SUCCESS  -> update done + enqueue merge + log completed
-    def _log_completion_skip(self, agent: AgentIdentity, reason: str):
-        """Log a completion-path skip reason."""
-        self.db.log_event(
-            agent.issue_id,
-            agent.agent_id,
-            "agent_complete_skipped",
-            {"reason": reason},
-        )
 
     def _harvest_worker_notes(self, agent: AgentIdentity):
         """Best-effort note harvesting from the worker worktree."""
@@ -189,9 +181,11 @@ class CompletionMixin:
             current_issue = self.db.get_issue(agent.issue_id)
             current_status = current_issue.get("status") if current_issue else None
             if current_status != IssueStatus.DONE:
-                self._log_completion_skip(
-                    agent,
-                    f"success result but issue is {current_status or 'missing'}, skipping merge enqueue",
+                self.db.log_event(
+                    agent.issue_id,
+                    agent.agent_id,
+                    "agent_complete_skipped",
+                    {"reason": f"success result but issue is {current_status or 'missing'}, skipping merge enqueue"},
                 )
                 return True
 
@@ -249,7 +243,12 @@ class CompletionMixin:
             match decision.transition:
                 case CompletionTransition.SKIP:
                     remove_worktree_on_teardown = True
-                    self._log_completion_skip(agent, decision.skip_reason or "completion skipped")
+                    self.db.log_event(
+                        agent.issue_id,
+                        agent.agent_id,
+                        "agent_complete_skipped",
+                        {"reason": decision.skip_reason or "completion skipped"},
+                    )
 
                 case CompletionTransition.FAIL:
                     remove_worktree_on_teardown = True

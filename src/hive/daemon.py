@@ -51,11 +51,6 @@ class HiveDaemon:
         # Crash log: small stderr sink, truncated per daemon start
         self._crash_log = self.log_dir / "daemon-crash.log"
 
-    def _ensure_dirs(self):
-        """Ensure PID and log directories exist."""
-        self.pid_dir.mkdir(parents=True, exist_ok=True)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-
     def _read_pid(self) -> Optional[int]:
         """Read PID from PID file if it exists."""
         try:
@@ -64,10 +59,6 @@ class HiveDaemon:
         except (ValueError, IOError):
             pass
         return None
-
-    def _write_pid(self, pid: int):
-        """Write PID to PID file."""
-        self.pid_file.write_text(str(pid))
 
     def _remove_pid(self):
         """Remove PID file."""
@@ -152,7 +143,8 @@ class HiveDaemon:
         Returns:
             True if started successfully, False if already running.
         """
-        self._ensure_dirs()
+        self.pid_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if already running via PID file
         existing_pid = self._read_pid()
@@ -198,7 +190,7 @@ class HiveDaemon:
         crash_fd.close()
 
         # Write child PID
-        self._write_pid(proc.pid)
+        self.pid_file.write_text(str(proc.pid))
 
         # Give it a moment to start and verify it's alive.
         # Use proc.poll() instead of os.kill(pid, 0) — the latter

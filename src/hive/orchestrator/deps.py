@@ -6,19 +6,14 @@ the package module so existing tests can keep patching `hive.orchestrator.*`.
 """
 
 from importlib import import_module
-from types import ModuleType
 from typing import Any
 
 
 class _OrchestratorDeps:
     """Resolve collaborators from the `hive.orchestrator` package lazily."""
 
-    @staticmethod
-    def _module() -> ModuleType:
-        return import_module("hive.orchestrator")
-
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._module(), name)
+        return getattr(import_module("hive.orchestrator"), name)
 
 
 deps = _OrchestratorDeps()

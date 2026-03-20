@@ -644,11 +644,6 @@ class OrchestratorCore:
             return False
         return True
 
-    def _delete_agent_row(self, agent_id: str):
-        """Delete agent row for early spawn-orphan cleanup paths."""
-        with self.db.transaction() as conn:
-            conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
-
     async def _cleanup_agent(
         self,
         agent: AgentIdentity,
@@ -708,4 +703,5 @@ class OrchestratorCore:
                 await deps.remove_worktree_async(worktree)
 
         if delete_agent_row:
-            self._delete_agent_row(agent_id)
+            with self.db.transaction() as conn:
+                conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))

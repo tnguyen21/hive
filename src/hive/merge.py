@@ -673,13 +673,3 @@ class MergeProcessorPool:
         """Run health checks on every known processor."""
         for processor in list(self._processors.values()):
             await processor.health_check()
-
-    async def cleanup_idle(self, active_projects: set[str]):
-        """Remove processors whose projects are no longer active."""
-        idle = [k for k in self._processors if k not in active_projects]
-        for k in idle:
-            proc = self._processors.pop(k)
-            try:
-                await proc.shutdown()
-            except Exception:
-                logger.warning("Error shutting down idle merge processor for project %s", k)
