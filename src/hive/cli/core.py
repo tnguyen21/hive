@@ -12,7 +12,6 @@ from rich.console import Console
 from ..daemon import HiveDaemon
 from ..db import Database, normalize_tags
 from ..status import IssueStatus, UNBLOCKING_ISSUE_STATUSES
-from ._helpers import _build_refinery_info, _check_merge_blockers
 from .formatters import (
     _fmt_add_note,
     _fmt_create,
@@ -29,7 +28,7 @@ from .formatters import (
     _fmt_status,
     _fmt_stop,
 )
-from .helpers import _enrich_agents_with_issues
+from .helpers import _build_refinery_info, _check_merge_blockers, _enrich_agents_with_issues
 from .queen import QueenMixin
 
 _CONSOLE = Console()

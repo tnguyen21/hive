@@ -1,4 +1,4 @@
-"""Tests for hive.cli._helpers — _build_refinery_info and _check_merge_blockers."""
+"""Tests for hive.cli.helpers — _build_refinery_info and _check_merge_blockers."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from hive.cli._helpers import _build_refinery_info, _check_merge_blockers
+from hive.cli.helpers import _build_refinery_info, _check_merge_blockers
 from hive.git import GitWorktreeError
 
 
@@ -136,7 +136,7 @@ class TestCheckMergeBlockers:
 
     def test_git_error_returns_error_status(self):
         """GitWorktreeError in get_worktree_dirty_status → status=error, no blockers."""
-        with patch("hive.cli._helpers.get_worktree_dirty_status", side_effect=GitWorktreeError("oops")):
+        with patch("hive.cli.helpers.get_worktree_dirty_status", side_effect=GitWorktreeError("oops")):
             main_worktree, blockers = _check_merge_blockers("/nonexistent", {"queued": 1})
 
         assert main_worktree["status"] == "error"
