@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..daemon import HiveDaemon
 from ..db import Database
-from ..git import GitWorktreeError, get_worktree_dirty_status
+from ._helpers import _build_refinery_info, _check_merge_blockers
 from .helpers import _enrich_agents_with_issues
 
 
@@ -49,44 +49,14 @@ def get_global_status(db: Database) -> dict:
         entry["workers"] = workers
 
         # Refinery status
-        try:
-            running_merge = db.get_running_merge(project=name)
-            entry["refinery"] = {
-                "active": running_merge is not None,
-                "issue_id": running_merge["issue_id"] if running_merge else None,
-                "issue_title": running_merge["issue_title"] if running_merge else None,
-            }
-        except Exception:
-            entry["refinery"] = {"active": False, "issue_id": None, "issue_title": None}
+        entry["refinery"] = _build_refinery_info(db, name)
 
         # Merge queue stats
         merge_stats = db.get_merge_queue_stats(project=name)
         entry["merge_queue"] = merge_stats
 
         # Merge blockers / worktree check
-        merge_blockers: list[dict] = []
-        if merge_stats.get("queued", 0) > 0 or merge_stats.get("running", 0) > 0:
-            try:
-                dirty, dirty_output = get_worktree_dirty_status(path)
-                main_worktree = {
-                    "dirty": dirty,
-                    "changes": dirty_output.splitlines()[:20] if dirty else [],
-                    "status": "dirty" if dirty else "clean",
-                }
-                if dirty:
-                    merge_blockers.append(
-                        {
-                            "type": "dirty_main_worktree",
-                            "message": "Merges paused: main worktree has uncommitted tracked changes",
-                            "changes": main_worktree["changes"],
-                        }
-                    )
-            except GitWorktreeError as e:
-                main_worktree = {"dirty": False, "changes": [], "status": "error", "error": str(e)}
-        else:
-            main_worktree = {"dirty": False, "changes": [], "status": "unchecked"}
-        entry["main_worktree"] = main_worktree
-        entry["merge_blockers"] = merge_blockers
+        entry["main_worktree"], entry["merge_blockers"] = _check_merge_blockers(path, merge_stats)
 
         # Escalated issues
         entry["attention_issues"] = db.get_escalated_issues(project=name)

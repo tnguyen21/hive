@@ -6,14 +6,13 @@ import sys
 import time
 from functools import wraps
 from pathlib import Path
-from typing import Any
 
 from rich.console import Console
 
 from ..daemon import HiveDaemon
 from ..db import Database, normalize_tags
-from ..git import GitWorktreeError, get_worktree_dirty_status
 from ..status import IssueStatus, UNBLOCKING_ISSUE_STATUSES
+from ._helpers import _build_refinery_info, _check_merge_blockers
 from .formatters import (
     _fmt_add_note,
     _fmt_create,
@@ -470,15 +469,7 @@ class HiveCLI(QueenMixin):
         workers_detail = _enrich_agents_with_issues(self.db, active_agents)
 
         # Get running merge entry (refinery status proxy)
-        try:
-            running_merge = self.db.get_running_merge(project=self.project_name)
-            refinery_info = {
-                "active": running_merge is not None,
-                "issue_id": running_merge["issue_id"] if running_merge else None,
-                "issue_title": running_merge["issue_title"] if running_merge else None,
-            }
-        except Exception:
-            refinery_info = {"active": False, "issue_id": None, "issue_title": None}
+        refinery_info = _build_refinery_info(self.db, self.project_name)
 
         # Get ready queue
         ready = self.db.get_ready_queue(limit=10)
@@ -487,36 +478,7 @@ class HiveCLI(QueenMixin):
         merge_stats = self.db.get_merge_queue_stats(project=self.project_name)
 
         # Merge preflight visibility: report when dirty main worktree blocks merges.
-        main_worktree = {
-            "dirty": False,
-            "changes": [],
-            "status": "clean",
-        }
-        merge_blockers: list[dict[str, Any]] = []
-        try:
-            dirty, dirty_output = get_worktree_dirty_status(str(self.project_path))
-            if dirty:
-                changes = dirty_output.splitlines()
-                main_worktree = {
-                    "dirty": True,
-                    "changes": changes[:20],
-                    "status": "dirty",
-                }
-                if merge_stats.get("queued", 0) > 0 or merge_stats.get("running", 0) > 0:
-                    merge_blockers.append(
-                        {
-                            "type": "dirty_main_worktree",
-                            "message": "Merges are paused: main worktree has uncommitted tracked changes",
-                            "changes": changes[:20],
-                        }
-                    )
-        except GitWorktreeError as e:
-            main_worktree = {
-                "dirty": False,
-                "changes": [],
-                "status": "error",
-                "error": str(e),
-            }
+        main_worktree, merge_blockers = _check_merge_blockers(str(self.project_path), merge_stats)
 
         # Get daemon status
         daemon = self._make_daemon()
