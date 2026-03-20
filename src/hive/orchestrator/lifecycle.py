@@ -157,7 +157,7 @@ class LifecycleMixin:
                 "worktree_error",
                 {"error": _exc_detail(e)},
             )
-            await self._cleanup_spawn_orphan(agent_id=resources.agent_id)
+            await self._cleanup_agent(agent_id=resources.agent_id, delete_agent_row=True)
             return None
 
         return resources
@@ -168,10 +168,11 @@ class LifecycleMixin:
         if claimed:
             return True
 
-        await self._cleanup_spawn_orphan(
+        await self._cleanup_agent(
             agent_id=resources.agent_id,
             worktree=resources.worktree,
             remove_worktree=True,
+            delete_agent_row=True,
         )
         return False
 
@@ -234,7 +235,7 @@ class LifecycleMixin:
                 "spawn_error",
                 {"error": _exc_detail(e)},
             )
-            await self._cleanup_spawn_orphan(
+            await self._cleanup_agent(
                 agent_id=resources.agent_id,
                 worktree=resources.worktree,
                 session_id=resources.session_id,
@@ -418,7 +419,7 @@ class LifecycleMixin:
             # Tear down the agent so it doesn't leak in active_agents.
             # remove_worktree=True: no other path will clean it up since
             # the agent is about to be unregistered and marked failed.
-            await self._cleanup_agent(agent, remove_worktree=True)
+            await self._cleanup_agent(agent, cleanup_session=True, unregister_agent=True, mark_failed=True, remove_worktree=True)
         finally:
             # Clean up using the snapshotted session_id, not agent.session_id.
             logger.debug(
@@ -621,7 +622,7 @@ class LifecycleMixin:
             {"reason": "issue canceled by user, session aborted"},
         )
 
-        await self._cleanup_agent(agent, remove_worktree=True)
+        await self._cleanup_agent(agent, cleanup_session=True, unregister_agent=True, mark_failed=True, remove_worktree=True)
 
     async def handle_stalled_agent(self, agent: AgentIdentity):
         """Handle a stalled agent (lease expired). Routes through the retry escalation chain so repeatedly stalling issues eventually get escalated."""
@@ -654,7 +655,7 @@ class LifecycleMixin:
                 await self._handle_agent_failure(agent, stall_result)
         finally:
             logger.debug(f"Stall transition for {agent.name}: {stalled_transition.value}")
-            await self._cleanup_agent(agent, remove_worktree=True)
+            await self._cleanup_agent(agent, cleanup_session=True, unregister_agent=True, mark_failed=True, remove_worktree=True)
 
     async def check_stalled_agents(self):
         """Check stalled agents owned by THIS daemon. Only checks self.active_agents (in-memory) to avoid interfering with stale DB rows from a previous daemon run."""

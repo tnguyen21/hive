@@ -2250,3 +2250,86 @@ async def test_handle_agent_failure_escalate_skip_logged(temp_db, tmp_path):
 
     skip_events = temp_db.get_events(issue_id=issue_id, event_type="escalate_skipped")
     assert len(skip_events) == 1
+
+
+# ── _cleanup_agent unified method tests ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_via_identity_calls_backend_cleanup(temp_db, tmp_path):
+    """_cleanup_agent with AgentIdentity calls backend cleanup_session when cleanup_session=True."""
+    mock_backend = AsyncMock(spec=HiveBackend)
+    mock_backend.cleanup_session = AsyncMock()
+    orch = Orchestrator(db=temp_db, backend=mock_backend)
+
+    agent_id = temp_db.create_agent("w", model="claude-sonnet-4-5")
+    agent = AgentIdentity(agent_id=agent_id, name="w", issue_id="i1", worktree=str(tmp_path), session_id="sess-1")
+    orch.backend_pool.track_session("sess-1", mock_backend)
+    orch._register_active_agent(agent)
+
+    await orch._cleanup_agent(agent, cleanup_session=True, unregister_agent=True, mark_failed=True)
+
+    mock_backend.cleanup_session.assert_called_once_with("sess-1", directory=str(tmp_path))
+    assert agent_id not in orch.active_agents
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_via_raw_params_deletes_row(temp_db, tmp_path):
+    """_cleanup_agent with raw params and delete_agent_row=True removes the DB agent row."""
+    mock_backend = AsyncMock(spec=HiveBackend)
+    orch = Orchestrator(db=temp_db, backend=mock_backend)
+
+    agent_id = temp_db.create_agent("orphan", model="claude-sonnet-4-5")
+    row_before = temp_db.conn.execute("SELECT id FROM agents WHERE id = ?", (agent_id,)).fetchone()
+    assert row_before is not None
+
+    await orch._cleanup_agent(agent_id=agent_id, delete_agent_row=True)
+
+    row_after = temp_db.conn.execute("SELECT id FROM agents WHERE id = ?", (agent_id,)).fetchone()
+    assert row_after is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_delete_agent_row_false_preserves_row(temp_db, tmp_path):
+    """_cleanup_agent with delete_agent_row=False (default) does not remove the DB agent row."""
+    mock_backend = AsyncMock(spec=HiveBackend)
+    orch = Orchestrator(db=temp_db, backend=mock_backend)
+
+    agent_id = temp_db.create_agent("keeper", model="claude-sonnet-4-5")
+
+    await orch._cleanup_agent(agent_id=agent_id, delete_agent_row=False)
+
+    row = temp_db.conn.execute("SELECT id FROM agents WHERE id = ?", (agent_id,)).fetchone()
+    assert row is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_skips_session_when_no_session_id(temp_db, tmp_path):
+    """_cleanup_agent with cleanup_session=True but no session_id skips backend call."""
+    mock_backend = AsyncMock(spec=HiveBackend)
+    mock_backend.cleanup_session = AsyncMock()
+    orch = Orchestrator(db=temp_db, backend=mock_backend)
+
+    agent_id = temp_db.create_agent("w", model="claude-sonnet-4-5")
+
+    await orch._cleanup_agent(agent_id=agent_id, session_id=None, cleanup_session=True)
+
+    mock_backend.cleanup_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_agent_suppresses_backend_exception(temp_db, tmp_path):
+    """_cleanup_agent suppresses exceptions from cleanup_session so other steps still run."""
+    mock_backend = AsyncMock(spec=HiveBackend)
+    mock_backend.cleanup_session = AsyncMock(side_effect=RuntimeError("backend down"))
+    orch = Orchestrator(db=temp_db, backend=mock_backend)
+
+    agent_id = temp_db.create_agent("w", model="claude-sonnet-4-5")
+    agent = AgentIdentity(agent_id=agent_id, name="w", issue_id="i1", worktree=str(tmp_path), session_id="sess-x")
+    orch.backend_pool.track_session("sess-x", mock_backend)
+
+    # Should not raise; mark_failed should still run
+    await orch._cleanup_agent(agent, cleanup_session=True, mark_failed=True)
+
+    db_agent = temp_db.conn.execute("SELECT status FROM agents WHERE id = ?", (agent_id,)).fetchone()
+    assert db_agent["status"] == "failed"

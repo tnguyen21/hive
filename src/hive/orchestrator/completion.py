@@ -281,7 +281,9 @@ class CompletionMixin:
                 if not self.db.has_pending_merge(agent.issue_id):
                     remove_worktree_on_teardown = True
         finally:
-            await self._cleanup_agent(agent, remove_worktree=remove_worktree_on_teardown)
+            await self._cleanup_agent(
+                agent, cleanup_session=True, unregister_agent=True, mark_failed=True, remove_worktree=remove_worktree_on_teardown
+            )
 
     def _choose_escalation(self, issue_id: str, *, include_anomaly: bool = True) -> tuple[EscalationDecision, EscalationCounts]:
         """Decide retry/switch/escalate tier for an issue.

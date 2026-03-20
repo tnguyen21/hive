@@ -606,47 +606,33 @@ class OrchestratorCore:
 
     async def _cleanup_agent(
         self,
-        agent: AgentIdentity,
+        agent: Optional[AgentIdentity] = None,
         *,
-        cleanup_session: bool = True,
-        unregister_agent: bool = True,
-        mark_failed: bool = True,
-        remove_worktree: bool = False,
-    ):
-        """Execute best-effort cleanup for an active or recently-active agent."""
-        if cleanup_session:
-            logger.info(f"Cleaning up session {agent.session_id} (agent={agent.agent_id}, issue={agent.issue_id}, worktree={agent.worktree})")
-            with suppress(Exception):
-                backend = self._backend_for_session(agent.session_id)
-                await backend.cleanup_session(agent.session_id, directory=agent.worktree)
-                self.backend_pool.untrack_session(agent.session_id)
-
-        if unregister_agent and agent.agent_id in self.active_agents:
-            self._unregister_agent(agent.agent_id)
-
-        # Mark agent as terminal in DB — prevents ghost 'working' rows from
-        # accumulating when agents are retried / agent-switched.
-        if mark_failed:
-            self._mark_agent_failed(agent.agent_id)
-
-        if remove_worktree and agent.worktree:
-            with suppress(Exception):
-                await deps.remove_worktree_async(agent.worktree)
-
-    async def _cleanup_spawn_orphan(
-        self,
-        *,
-        agent_id: str,
+        agent_id: Optional[str] = None,
         worktree: Optional[str] = None,
         session_id: Optional[str] = None,
         cleanup_session: bool = False,
         unregister_agent: bool = False,
         mark_failed: bool = False,
         remove_worktree: bool = False,
-        delete_agent_row: bool = True,
+        delete_agent_row: bool = False,
     ):
-        """Clean up an agent that failed before normal lifecycle ownership began."""
-        if cleanup_session and session_id and worktree:
+        """Execute best-effort cleanup for an agent.
+
+        Accepts either an AgentIdentity (positional) or raw keyword params.
+        When an AgentIdentity is provided, its fields populate agent_id / session_id /
+        worktree unless those params are already explicitly supplied.
+        """
+        if agent is not None:
+            if agent_id is None:
+                agent_id = agent.agent_id
+            if session_id is None:
+                session_id = agent.session_id
+            if worktree is None:
+                worktree = agent.worktree
+
+        if cleanup_session and session_id:
+            logger.info(f"Cleaning up session {session_id} (agent={agent_id}, worktree={worktree})")
             with suppress(Exception):
                 backend = self._backend_for_session(session_id)
                 await backend.cleanup_session(session_id, directory=worktree)
@@ -655,13 +641,15 @@ class OrchestratorCore:
         if unregister_agent and agent_id in self.active_agents:
             self._unregister_agent(agent_id)
 
-        if mark_failed:
+        # Mark agent as terminal in DB — prevents ghost 'working' rows from
+        # accumulating when agents are retried / agent-switched.
+        if mark_failed and agent_id:
             self._mark_agent_failed(agent_id)
 
         if remove_worktree and worktree:
             with suppress(Exception):
                 await deps.remove_worktree_async(worktree)
 
-        if delete_agent_row:
+        if delete_agent_row and agent_id:
             with self.db.transaction() as conn:
                 conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
