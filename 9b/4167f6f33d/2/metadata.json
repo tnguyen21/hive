@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "9b4167f6f33d",
+  "session_id": "829821f6-1853-4bf8-aa16-4462a7a7d122",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T05:42:29.234165Z",
+  "branch": "refactor/inline-thin-wrappers",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/hive/daemon.py",
+    "src/hive/merge.py",
+    "src/hive/orchestrator/completion.py",
+    "src/hive/orchestrator/core.py",
+    "src/hive/orchestrator/deps.py",
+    "src/hive/orchestrator/lifecycle.py",
+    "src/hive/utils.py",
+    "tests/test_merge.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2b0b8d7c0fbf",
+  "token_usage": {
+    "input_tokens": 99,
+    "cache_creation_tokens": 203127,
+    "cache_read_tokens": 4425468,
+    "output_tokens": 24243,
+    "api_call_count": 74
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T05:42:26.992303Z",
+    "agent_lines": 20,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 4,
+    "total_committed": 20,
+    "agent_percentage": 100
+  }
+}
