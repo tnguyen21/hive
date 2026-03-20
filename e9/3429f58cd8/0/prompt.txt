@@ -1,0 +1,341 @@
+Implement the following plan:
+
+# Plan: Centralize SQL into the DB layer
+
+## Context
+
+The CLI (`cli/core.py`, `cli/global_status.py`) and diagnostics (`diag.py`) bypass the Database class and run raw SQL via `self.db.conn.execute(...)`. This creates two problems:
+
+1. **Duplication**: The same queries appear in 2-3 places (status counts, running merge, escalated issues, merge queue joins)
+2. **Leaky abstraction**: The CLI knows about table schemas and JOIN patterns it shouldn't need to
+
+~180 lines of SQL in `cli/core.py` alone. Moving these into DB methods eliminates duplication, shrinks the largest file, and establishes a clean boundary: SQL lives in `db/`, callers get Python dicts.
+
+## Concrete duplications to eliminate
+
+| Query | Locations | Lines per copy |
+|---|---|---|
+| Issue status GROUP BY | cli/core.py:580, global_status.py:40, diag.py:113 | 5-8 |
+| Running merge (mq + issue JOIN) | cli/core.py:610, global_status.py:69 | 9 |
+| Escalated issues | cli/core.py:660ish, global_status.py:118 | 3 |
+| Review latest-merge subquery | cli/core.py:407 and :434 (two branches) | 23 each |
+| Merge queue with issue/agent JOIN | cli/core.py:558, (similar to db/core.py:603) | 6 |
+| Dependency blocking NOT EXISTS | db/issues.py:125 and :156 | 8 each |
+
+## New DB methods to add
+
+### On `DatabaseCore` (db/core.py) — general queries used by multiple callers
+
+1. **`get_issue_status_counts(project=None) -> dict[str, int]`** — replaces 3 copies of the GROUP BY
+2. **`get_running_merge(project) -> dict | None`** — replaces 2 copies of the running merge JOIN
+3. **`get_escalated_issues(project) -> list[dict]`** — replaces 2 copies
+4. **`list_merge_entries(project, status=None, limit=50) -> list[dict]`** — merge queue with issue/agent JOIN for display
+
+### On `IssuesMixin` (db/issues.py) — issue-specific queries
+
+5. **`list_issues(project, status, assignee, type, exclude_statuses, sort, reverse, limit) -> list[dict]`** — moves the dynamic query builder from cli/core.py:211-243
+6. **`get_review_queue(project, issue_id=None, limit=20) -> list[dict]`** — unifies the two review subquery branches
+7. **`get_dependencies(issue_id) -> list[dict]`** — 3-line query, currently inline in cli/core.py:251
+8. **`get_dependents(issue_id) -> list[dict]`** — same, cli/core.py:263
+9. **Extract `_DEPS_UNBLOCKED_SQL` fragment** — deduplicate the NOT EXISTS clause used by `get_ready_queue` and `claim_issue`
+
+### On `DatabaseCore` — agent queries currently in CLI
+
+10. **`list_agents(project, status=None) -> list[dict]`** — moves from cli/core.py:721-731
+
+## Migration plan (2 issues for the hive)
+
+### Issue 1: Add DB methods (pure additions)
+Add methods 1-10 above. Write tests for each. No callers changed yet — existing code continues to work. This is safe to merge independently.
+
+**Files modified**: `src/hive/db/core.py`, `src/hive/db/issues.py`, `tests/test_db.py`
+
+### Issue 2: Migrate callers (depends on issue 1)
+Replace every `self.db.conn.execute(...)` in CLI/diag with the new DB methods. After this:
+- `cli/core.py` drops ~150 lines of inline SQL
+- `cli/global_status.py` drops ~30 lines
+- `diag.py` drops ~5 lines
+- No file outside `db/` touches `db.conn` directly (tests excepted)
+
+**Files modified**: `src/hive/cli/core.py`, `src/hive/cli/global_status.py`, `src/hive/diag.py`
+
+## What NOT to change
+
+- **Schema DDL** (SCHEMA constant) — already clean
+- **`_query_events` helper** — already well-factored
+- **`_build_token_select` in metrics** — already well-factored
+- **Orchestrator SQL** (core.py, lifecycle.py) — mostly single-use lifecycle queries that are tightly coupled to orchestrator state machine logic; moving them to DB methods adds indirection without reducing duplication
+- **Test files** — tests legitimately use `db.conn.execute()` for fixture setup
+
+## Estimated LOC impact
+
+- Issue 1: +80 lines (new methods + tests)
+- Issue 2: -180 lines (remove inline SQL from CLI)
+- **Net: ~-100 lines**
+- `cli/core.py` drops from 926 to ~780 lines
+
+## Verification
+
+- `python -m pytest tests/ -v --timeout=30` — all 462 tests pass
+- `uvx ruff check && uvx ruff format --check` — clean
+- `grep -r "db\.conn\.execute" src/hive/cli/` — should return nothing after issue 2
+- `grep -r "db\.conn\.execute" src/hive/diag.py` — should return nothing after issue 2
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/829821f6-1853-4bf8-aa16-4462a7a7d122.jsonl
+
+If this plan can be broken down into multiple independent tasks, consider using the TeamCreate tool to create a team and parallelize the work.
+
+---
+
+[Request interrupted by user]
+
+---
+
+keep going, this is a reasonable plan
+
+---
+
+wait do tests pasts? shouldn't users across orchestrator/cli/etc now call these fns
+
+---
+
+would you merge this work? we save 2 lines. cleaning up the sql is good but hrm
+
+---
+
+eh whatever this is fine as is; merge into main
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to implement a plan to centralize SQL queries out of the CLI layer (`cli/core.py`, `cli/global_status.py`) and diagnostics (`diag.py`) into the DB layer (`db/core.py`, `db/issues.py`). The goals were: eliminate duplicated SQL queries that appeared in 2-3 places, establish a clean abstraction boundary (SQL lives in `db/`, callers get Python dicts), and shrink the largest file (`cli/core.py`). The plan was broken into two logical steps: (1) add new DB methods as pure additions, (2) migrate callers to use them. The user ultimately decided to merge despite modest net LOC savings.
+
+2. Key Technical Concepts:
+   - SQLite database abstraction layer with mixin pattern (`DatabaseCore`, `IssuesMixin`)
+   - CAS-style (compare-and-swap) status transitions
+   - SQL fragment extraction (`_DEPS_UNBLOCKED_SQL`) for deduplicating NOT EXISTS clauses
+   - `transaction()` context manager for atomic DB operations
+   - CLI command decorator pattern (`@cli_command(formatter=...)`) separating data-gathering from output formatting
+   - `_one()`, `_all()`, `_scalar()` static helpers for materializing sqlite3.Row results as dicts
+   - Pre-commit hooks (ruff, ruff-format, ty, integration-tests)
+   - pytest with pytest-xdist for parallel test execution
+
+3. Files and Code Sections:
+   - **`src/hive/db/core.py`** — Core database class. Added 5 new query methods at the end of `DatabaseCore`:
+     - `get_issue_status_counts(project=None) -> dict[str, int]` — replaces 3 copies of GROUP BY query
+     - `get_running_merge(project) -> dict | None` — replaces 2 copies of running merge JOIN
+     - `get_escalated_issues(project) -> list[dict]` — replaces 2 copies
+     - `list_merge_entries(project, status=None, limit=50) -> list[dict]` — merge queue with issue/agent JOIN
+     - `list_agents(project, status=None) -> list[dict]` — agents filtered by project/status
+   
+   - **`src/hive/db/issues.py`** — Issues mixin. Added module-level `_DEPS_UNBLOCKED_SQL` fragment and 6 new methods on `IssuesMixin`:
+     - `_DEPS_UNBLOCKED_SQL` — extracted NOT EXISTS clause used by `get_ready_queue` and `claim_issue`
+     - `list_issues(project, status, assignee, issue_type, exclude_statuses, sort, reverse, limit) -> list[dict]`
+     - `get_review_queue(project, issue_id=None, limit=20) -> list[dict]`
+     - `get_dependencies(issue_id) -> list[dict]`
+     - `get_dependents(issue_id) -> list[dict]`
+     - Refactored `get_ready_queue` and `claim_issue` to use `_DEPS_UNBLOCKED_SQL`
+
+   - **`src/hive/cli/core.py`** — Main CLI class. Migrated all inline SQL to DB method calls:
+     - `list_issues` → uses `self.db.list_issues()`
+     - `show` → uses `self.db.get_dependencies()` and `self.db.get_dependents()`
+     - `review` → uses `self.db.get_review_queue()`
+     - `merges` → uses `self.db.list_merge_entries()`
+     - `status` → uses `self.db.get_issue_status_counts()`, `self.db.get_running_merge()`, `self.db.get_escalated_issues()`
+     - `list_agents` → uses `self.db.list_agents()` and `self.db.get_agent()`
+     - `retry` → uses `self.db.update_issue_status()` instead of raw SQL
+     - `update` → uses `self.db.transaction()` instead of raw `conn.execute`+`commit`
+     - `finalize` → uses `self.db.transaction()` instead of raw `conn.execute`+`commit`
+     - `dep_remove` → uses `self.db.transaction()` instead of raw `conn.execute`+`commit`
+
+   - **`src/hive/cli/global_status.py`** — Global status view. Replaced 3 inline queries:
+     - Issue counts → `db.get_issue_status_counts(project=name)`
+     - Running merge → `db.get_running_merge(project=name)`
+     - Escalated issues → `db.get_escalated_issues(project=name)`
+
+   - **`src/hive/diag.py`** — Diagnostics. Replaced issue status breakdown query with `db.get_issue_status_counts()`
+
+   - **`tests/test_db.py`** — Added 8 new unit tests for the new DB methods:
+     - `test_get_issue_status_counts`
+     - `test_get_running_merge`
+     - `test_get_escalated_issues`
+     - `test_list_merge_entries`
+     - `test_list_agents`
+     - `test_list_issues_method`
+     - `test_get_review_queue`
+     - `test_get_dependencies_and_dependents`
+
+4. Errors and fixes:
+   - **`python` command not found**: Used `python -m pytest` but the env needed `uv run python -m pytest`. Fixed by prefixing with `uv run`.
+   - **test_list_merge_entries ordering assertion**: Asserted `entries[0]["issue_title"] == "issue2"` expecting DESC ordering, but both entries were enqueued in the same second so order was non-deterministic. Fixed by asserting set equality: `{e["issue_title"] for e in entries} == {"issue1", "issue2"}`.
+   - **Ruff lint F841 unused variable**: `i1 = temp_db.create_issue("ok", ...)` in `test_get_escalated_issues` was never used. Fixed by removing the variable assignment: `temp_db.create_issue("ok", ...)`.
+   - **User feedback on test coverage**: User questioned "shouldn't users across orchestrator/cli/etc now call these fns" — pointing out that the new DB methods lacked direct unit tests. Added 8 dedicated tests in response.
+
+5. Problem Solving:
+   - Successfully centralized ~180 lines of inline SQL from CLI/diag into DB layer methods
+   - Preserved all existing behavior (462 original tests pass)
+   - Added 8 new tests (total 470 passing)
+   - Verified no domain SQL remains in cli/ or diag.py (remaining `db.conn.execute` calls are PRAGMA infrastructure and diagnostic table introspection — legitimate uses)
+   - Addressed user's concern about test coverage by adding direct unit tests for every new DB method
+   - Honest assessment when user questioned the merge: acknowledged single-caller wrappers add indirection without dedup benefit, but genuine dedup exists for 3-caller queries
+
+6. All user messages:
+   - "keep going, this is a reasonable plan" (after plan was presented and initially interrupted)
+   - "wait do tests pasts? shouldn't users across orchestrator/cli/etc now call these fns" (questioning test coverage of new methods)
+   - "would you merge this work? we save 2 lines. cleaning up the sql is good but hrm" (questioning whether the change is worth merging given minimal net LOC savings)
+   - "eh whatever this is fine as is; merge into main" (deciding to merge)
+
+7. Pending Tasks:
+   - None. All work is complete and merged to main.
+
+8. Current Work:
+   The work is fully complete. The branch `centralize-sql-into-db-layer` was merged into `main` via fast-forward. Three commits landed:
+   1. `3274109` — Add DB methods to centralize SQL out of CLI layer (+183/-15)
+   2. `ddeefc0` — Migrate CLI and diagnostics to new DB methods (+44/-214)
+   3. `8e92a7a` — Add unit tests for new centralized DB query methods (+134)
+   
+   Total: 6 files changed, 361 insertions, 229 deletions. 470 tests passing.
+
+9. Optional Next Step:
+   None. The task is complete and merged. The user has not requested any further work.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/3fd63e3e-2f83-4194-92b7-4c32b0cde9a3.jsonl
+
+---
+
+can you sweep through src with some agents and see if we have any opportunities to reduce complexity/LOC
+
+things we might be able to consolidate or simplify?
+
+---
+
+can you do all tier 1 changes; dispatch them to the hive. draft issues first and let me review
+
+---
+
+approve; dispatch to hive
+
+---
+
+can you run tests and see if all of these got merged in reasonable
+
+---
+
+okay there are some moderate effort things you pointed out
+
+  │                                    Opportunity                                     │               Where                │  ~LOC saved   │
+  ├────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┼───────────────┤
+  │ CLI worker enrichment loop (identical agent→issue_title loop in 4 places)          │ cli/core.py, global_status.py      │ ~40           │
+  ├────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┼───────────────┤
+  │ CLI refinery/merge-blocker building (identical try/except blocks in 2 places each) │ cli/core.py, global_status.py      │ ~55           │
+  ├────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┼───────────────┤
+  │ Orchestrator cleanup unification (_cleanup_agent ≈ _cleanup_spawn_orphan)          │ orchestrator/core.py:607-667       │ ~25           │
+  ├────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┼───────────────┤
+  │ Orchestrator event count re-queries (_choose_escalation computes counts,           │ orchestrator/completion.py:275-391 │ ~15 (perf win │
+  │ _apply_failure_disposition re-queries same)                                        │                                    │  too)         │
+  ├────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┼───────────────┤
+  │ Heartbeat refresh duplication (identical in 2 lifecycle methods)                   │ orchestrator/lifecycle.py          │ ~10           │
+  ├────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────┼───────────────┤
+  │ Inline _parse_repo_name into its only caller                                       │ utils.py:105-121                   │ ~15
+
+which of these do you think we should do; i'm leaning towards all of them
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   The user asked for a comprehensive complexity/LOC reduction sweep of the `src/hive/` codebase. The workflow was:
+   - First: sweep the codebase with agents to identify consolidation opportunities
+   - Second: execute all Tier 1 (quick win) changes by dispatching them as hive issues to be worked by autonomous agents
+   - Third: verify Tier 1 changes merged correctly and tests pass
+   - Fourth: discuss and execute Tier 2 (moderate effort) changes the same way
+   
+   The user approved all recommendations with minimal modification and wanted everything dispatched to the hive (autonomous agent system) rather than done manually.
+
+2. Key Technical Concepts:
+   - **Hive system**: Autonomous agent orchestration — issues are created, daemon dispatches workers (Claude agents in worktrees), workers complete code changes, refinery merges them to main
+   - **Mixin pattern**: `DatabaseCore` + `IssuesMixin` + `MetricsMixin` compose the `Database` class
+   - **CAS-style transitions**: `try_transition_issue_status` uses compare-and-swap WHERE clauses for safe concurrent status changes
+   - **`_DEPS_UNBLOCKED_SQL` fragment**: Shared SQL NOT EXISTS clause for dependency checking
+   - **`_async_wrapper` pattern**: In `git.py`, creates async versions of sync git functions via `asyncio.to_thread`
+   - **Backend abstraction**: `HiveBackend` base class with `ClaudeBackend` and `CodexBackend` implementations
+   - **Process termination pattern**: SIGTERM → wait(timeout) → SIGKILL → proc.kill()
+   - **CLI architecture**: Typer app with `@cli_command` decorator, `cli/core.py` as the main command class, `global_status.py` for multi-project view
+   - **Refinery**: Automated merge review system that rebases worker branches onto main, resolves conflicts, and runs tests
+
+3. Files and Code Sections:
+   - **`src/hive/db/issues.py`** — Issues mixin with SQL query methods. Key methods: `try_transition_issue_status`, `update_issue_status` (now unified), `create_issue`, `get_ready_queue`, `claim_issue`, `list_issues`, `get_review_queue`, `get_dependencies`, `get_dependents`. The `_DEPS_UNBLOCKED_SQL` module-level fragment deduplicates the blocking-deps NOT EXISTS clause.
+   - **`src/hive/db/core.py`** — Core database class with methods like `get_issue_status_counts`, `get_running_merge`, `get_escalated_issues`, `list_merge_entries` (absorbed `get_queued_merges`), `list_agents`.
+   - **`src/hive/db/metrics.py`** — Event counting methods consolidated from 4 (`count_events_by_type`, `count_events_by_type_since_reset`, `count_events_in_window_after_reset`, `count_events_since_minutes`) into single `count_events()`.
+   - **`src/hive/cli/core.py`** — Main CLI class (~775 lines). Contains command handlers, worker enrichment loops, refinery info building, merge-blocker checking. Target for Tier 2 extractions.
+   - **`src/hive/cli/global_status.py`** — Multi-project status view. Duplicates patterns from cli/core.py for worker enrichment, refinery info, merge-blockers.
+   - **`src/hive/diag.py`** — Diagnostic report with section gatherers and formatters.
+   - **`src/hive/git.py`** — Git operations. Dead functions removed: `abort_rebase`, `run_command_in_worktree`, `get_commit_hash` and their async wrappers.
+   - **`src/hive/status.py`** — Status enums. `BackendSessionState` removed (redundant subset of `BackendSessionStatusType`).
+   - **`src/hive/backends/base.py`** — Backend base class. Gained `cleanup_session`, `get_pending_permissions`, `reply_permission` default implementations, plus `_terminate_process_group` helper.
+   - **`src/hive/backends/backend_claude.py`** and **`backend_codex.py`** — Removed duplicated cleanup/permission/termination code.
+   - **`src/hive/orchestrator/core.py`** — Orchestrator with `_cleanup_agent` and `_cleanup_spawn_orphan` (Tier 2 target for unification).
+   - **`src/hive/orchestrator/completion.py`** — Failure disposition logic with duplicated event count queries (Tier 2 target).
+   - **`src/hive/orchestrator/lifecycle.py`** — Agent lifecycle monitoring with duplicated heartbeat refresh (Tier 2 target).
+   - **`src/hive/utils.py`** — Utility functions including `_parse_repo_name` (Tier 2 target for inlining).
+   - **`tests/test_terminate_process_group.py`** — New test file (130 lines) added by workers for the extracted helper.
+
+4. Errors and fixes:
+   - **`hive create --description` NoSuchOption error**: Attempted `hive --json create "title" --description "desc"` but `--description` is not a flag — description is a positional argument. Fixed by using `hive --json create "title" "description"` syntax. Verified with `hive create --help`.
+
+5. Problem Solving:
+   - **Codebase sweep**: Launched 5 parallel Explore agents covering db/, cli/, orchestrator/, top-level modules, and backends/. Each returned detailed findings with line numbers, duplication counts, and recommended fixes.
+   - **Prioritization**: Organized findings into 3 tiers by impact/effort ratio. Tier 1 targeted zero-risk dead code removal and clear deduplication. Tier 2 targeted moderate-effort structural improvements.
+   - **Tier 1 execution**: All 7 issues dispatched, completed by workers, merged by refinery. 473 tests pass. Net -45 lines (22 files changed, +388/-433). Workers also added 130 lines of new tests for the process termination helper.
+   - **Tier 2 dispatch**: All 6 issues created and dispatched. Flagged cleanup unification (`w-1aa3c49a7dc4`) as requiring careful review since it touches error-handling paths.
+
+6. All user messages:
+   - "can you sweep through src with some agents and see if we have any opportunities to reduce complexity/LOC things we might be able to consolidate or simplify?"
+   - "can you do all tier 1 changes; dispatch them to the hive. draft issues first and let me review"
+   - "approve; dispatch to hive"
+   - "can you run tests and see if all of these got merged in reasonable"
+   - "okay there are some moderate effort things you pointed out [table of Tier 2 items] which of these do you think we should do; i'm leaning towards all of them"
+
+7. Pending Tasks:
+   - **6 Tier 2 issues are dispatched and being worked by hive agents** — need to verify they merge cleanly and tests pass:
+     - `w-7643a16d9431` — Extract shared worker enrichment helper in CLI
+     - `w-0f5a490f2e96` — Extract shared refinery info and merge-blocker helpers in CLI
+     - `w-1aa3c49a7dc4` — Unify `_cleanup_agent` and `_cleanup_spawn_orphan` in orchestrator
+     - `w-5534dc7bfa49` — Pass escalation counts through to avoid re-querying in completion.py
+     - `w-cf336bb0471a` — Extract `_refresh_agent_heartbeat` helper in lifecycle.py
+     - `w-5012b2951012` — Inline `_parse_repo_name` into its only caller
+   - Review `w-1aa3c49a7dc4` (cleanup unification) carefully when it merges
+
+8. Current Work:
+   Just finished creating and dispatching all 6 Tier 2 issues to the hive. The daemon is running (PID 39450) and workers are picking up the issues. The last action was creating the final issue (`w-5012b2951012` — Inline `_parse_repo_name`) and confirming all 6 were queued. I noted that `w-1aa3c49a7dc4` (cleanup unification) should be reviewed most carefully.
+
+9. Optional Next Step:
+   Wait for the 6 Tier 2 issues to complete, then run tests and verify the merges — same pattern as Tier 1. The user will likely ask "can you run tests and see if all of these got merged in reasonable" as they did for Tier 1. The cleanup unification issue (`w-1aa3c49a7dc4`) deserves particular scrutiny. Check with `hive status` first, then `uv run python -m pytest tests/ -v --timeout=30`, then `git log --oneline` and `git diff --stat` for the new commits.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/tau/.claude/projects/-Users-tau-projects-hive/3fd63e3e-2f83-4194-92b7-4c32b0cde9a3.jsonl
+
+---
+
+watch the hive more carefully; we didn't give as much detail in these issue descriptions so we should be careful in reviewing their diffs even after the refinery merges them
+
+---
+
+yeah just do it here rather than delegate to the hive
+
+---
+
+commit please
+
+---
+
+can we use vulture and see if it sniffs out any other dead code too?
+
+---
+
+commit
