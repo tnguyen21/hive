@@ -68,12 +68,12 @@ class HiveCLI(QueenMixin):
         self.project_path = Path(project_path).resolve()
         self.project_name = self.project_path.name
 
-    def _handle_command_error(self, exc: Exception, *, json_mode: bool = False):
-        """Print a CLI-friendly error and exit."""
+    def _error(self, msg: str, *, json_mode: bool = False):
+        """Print error and exit."""
         if json_mode:
-            print(json.dumps({"error": str(exc)}))
+            print(json.dumps({"error": msg}))
         else:
-            print(f"Error: {exc}", file=sys.stderr)
+            print(f"Error: {msg}", file=sys.stderr)
         sys.exit(1)
 
     @classmethod
@@ -119,15 +119,7 @@ class HiveCLI(QueenMixin):
             result = self.invoke_raw(command_name, *args, json_mode=json_mode, **kwargs)
             return self.render_result(command_name, result, json_mode=json_mode, formatter=formatter)
         except Exception as exc:
-            self._handle_command_error(exc, json_mode=json_mode)
-
-    def _error(self, msg: str, *, json_mode: bool = False):
-        """Print error and exit."""
-        if json_mode:
-            print(json.dumps({"error": msg}))
-        else:
-            print(f"Error: {msg}", file=sys.stderr)
-        sys.exit(1)
+            self._error(str(exc), json_mode=json_mode)
 
     def _parse_tags(self, issue_dict: dict) -> dict:
         """Parse tags JSON string into a list in-place."""
