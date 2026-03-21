@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "e650a444de38",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/hive/cli/global_status.py",
+    "src/hive/cli/helpers.py",
+    "src/hive/cli/rich_views.py",
+    "src/hive/daemon.py",
+    "src/hive/db/metrics.py",
+    "src/hive/git.py",
+    "src/hive/prompts.py",
+    "src/hive/utils.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e6/50a444de38/0/metadata.json",
+      "transcript": "/e6/50a444de38/0/full.jsonl",
+      "context": "/e6/50a444de38/0/context.md",
+      "content_hash": "/e6/50a444de38/0/content_hash.txt",
+      "prompt": "/e6/50a444de38/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 83969,
+    "cache_read_tokens": 1411481,
+    "output_tokens": 12022,
+    "api_call_count": 32
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "e650a444de38",
+  "session_id": "13b5047c-0a0a-418d-a50d-e2764c79938d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T14:54:17.806046Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/hive/cli/global_status.py",
+    "src/hive/cli/helpers.py",
+    "src/hive/cli/rich_views.py",
+    "src/hive/daemon.py",
+    "src/hive/db/metrics.py",
+    "src/hive/git.py",
+    "src/hive/prompts.py",
+    "src/hive/utils.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "14f3ad1718f1",
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 83969,
+    "cache_read_tokens": 1411481,
+    "output_tokens": 12022,
+    "api_call_count": 32
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T14:54:17.559237Z",
+    "agent_lines": 32,
+    "human_added": 2,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 39,
+    "agent_percentage": 82.05128205128204
+  }
+}
