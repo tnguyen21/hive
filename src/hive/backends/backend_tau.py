@@ -77,7 +77,7 @@ class TauBackend(HiveBackend):
 
     def __init__(self, cmd: list[str] | None = None):
         super().__init__()
-        cmd_str = os.environ.get("HIVE_TAU_CMD", "coding-agent serve")
+        cmd_str = os.environ.get("HIVE_TAU_CMD", "tau serve")
         self._base_cmd = cmd if cmd is not None else shlex.split(cmd_str)
         self.sessions: dict[str, TauSessionState] = {}
         self.running = False
