@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import WORKER_PERMISSIONS
-from ..prompts import build_retry_context, build_system_prompt, build_worker_prompt, get_prompt_version
+from ..prompts import build_retry_context, build_system_prompt, build_worker_prompt, get_prompt_version, remove_notes_file, remove_result_file
 from ..status import BackendSessionStatusType, IssueStatus, parse_backend_session_status_type
 from ..utils import AgentIdentity, CompletionResult, generate_id
 from .completion import _exc_detail
@@ -287,6 +287,15 @@ class LifecycleMixin:
         """Shared prompt + dispatch flow for worker spawning."""
         issue_id = issue["id"]
         issue_project = issue["project"]
+
+        # Purge stale result/notes files inherited from main (e.g. a worker
+        # or refinery accidentally committed .hive-result.jsonl). Without
+        # this the monitor reads the stale file on its first poll and
+        # short-circuits before the worker even starts.
+        if remove_result_file(agent.worktree):
+            logger.warning(f"Removed stale .hive-result.jsonl from worktree {agent.worktree} (issue={issue_id})")
+        if remove_notes_file(agent.worktree):
+            logger.debug(f"Removed stale .hive-notes.jsonl from worktree {agent.worktree} (issue={issue_id})")
 
         worker_notes = self._gather_notes_for_worker(issue_id, issue_project)
         if worker_notes:
