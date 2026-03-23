@@ -246,6 +246,7 @@ def test_merge_to_main_retries_transient_index_lock(tmp_path):
         ("merge", "--ff-only", "agent/test-agent"),
         ("checkout", "main"),
         ("merge", "--ff-only", "agent/test-agent"),
+        ("branch", "--set-upstream-to", "origin/main", "main"),
     ]
     mock_sleep.assert_called_once_with(1.0)
 

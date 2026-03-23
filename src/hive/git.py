@@ -116,6 +116,8 @@ def merge_to_main(project_path: str, branch_name: str, main_branch: str = "main"
         try:
             _run_git("checkout", main_branch, cwd=str(project_path))
             _run_git("merge", "--ff-only", branch_name, cwd=str(project_path))
+            # Re-establish upstream tracking in case a prior reset broke it
+            _run_git("branch", "--set-upstream-to", f"origin/{main_branch}", main_branch, cwd=str(project_path), check=False)
             return
         except GitWorktreeError as e:
             last_error = e
