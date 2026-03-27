@@ -530,6 +530,15 @@ def add_note(
 
 
 @app.command()
+def cleanup(
+    ctx: typer.Context,
+    dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="Show what would be removed without deleting")] = False,
+) -> None:
+    """Remove local .hive files, worktrees, and agent branches from a project."""
+    _run(ctx, "cleanup", dry_run=dry_run)
+
+
+@app.command()
 def debug(ctx: typer.Context) -> None:
     """Print diagnostic report for debugging."""
     _run(ctx, "debug")

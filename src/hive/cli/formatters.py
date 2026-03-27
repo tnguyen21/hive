@@ -2,6 +2,7 @@
 
 from .rich_views import (
     render_add_note as _fmt_add_note,
+    render_cleanup as _fmt_cleanup,
     render_create as _fmt_create,
     render_debug as _fmt_debug,
     render_issue_list as _fmt_list_issues,
@@ -19,6 +20,7 @@ from .rich_views import (
 
 __all__ = [
     "_fmt_add_note",
+    "_fmt_cleanup",
     "_fmt_create",
     "_fmt_debug",
     "_fmt_list_agents",

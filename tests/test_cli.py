@@ -1327,3 +1327,106 @@ def test_cli_command_decorator_does_not_print_json_in_human_mode(temp_db, tmp_pa
         assert False, "Output was parseable JSON — decorator double-printed"
     except (json.JSONDecodeError, ValueError):
         pass  # expected: not JSON
+
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def git_project(tmp_path):
+    """Create a minimal git repo suitable for cleanup tests."""
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    return tmp_path
+
+
+def test_cleanup_removes_hive_dir(temp_db, git_project, capsys):
+    """cleanup should remove the .hive/ directory."""
+    hive_dir = git_project / ".hive"
+    hive_dir.mkdir()
+    (hive_dir / "project-context.md").write_text("ctx")
+    (hive_dir / "queen-context.md").write_text("queen")
+
+    cli = HiveCLI(temp_db, str(git_project))
+    cli.cleanup(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert not hive_dir.exists()
+    assert any(".hive" in r for r in data["removed"])
+    assert data["dry_run"] is False
+
+
+def test_cleanup_removes_hive_toml(temp_db, git_project, capsys):
+    """cleanup should remove .hive.toml."""
+    toml = git_project / ".hive.toml"
+    toml.write_text('[hive]\nbackend = "claude"\n')
+
+    cli = HiveCLI(temp_db, str(git_project))
+    cli.cleanup(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert not toml.exists()
+    assert any(".hive.toml" in r for r in data["removed"])
+
+
+def test_cleanup_removes_worktrees(temp_db, git_project, capsys):
+    """cleanup should remove .worktrees/ and prune git metadata."""
+    worktrees = git_project / ".worktrees"
+    worktrees.mkdir()
+    (worktrees / "worker-abc").mkdir()
+    (worktrees / "worker-abc" / "file.txt").write_text("wip")
+
+    cli = HiveCLI(temp_db, str(git_project))
+    cli.cleanup(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert not worktrees.exists()
+    assert any(".worktrees" in r for r in data["removed"])
+
+
+def test_cleanup_removes_agent_branches(temp_db, git_project, capsys):
+    """cleanup should delete agent/* branches."""
+    subprocess.run(["git", "branch", "agent/worker-1"], cwd=str(git_project), capture_output=True, check=True)
+    subprocess.run(["git", "branch", "agent/worker-2"], cwd=str(git_project), capture_output=True, check=True)
+
+    cli = HiveCLI(temp_db, str(git_project))
+    cli.cleanup(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert len([r for r in data["removed"] if r.startswith("branch:")]) == 2
+
+    result = subprocess.run(["git", "branch", "--list", "agent/*"], cwd=str(git_project), capture_output=True, text=True)
+    assert result.stdout.strip() == ""
+
+
+def test_cleanup_dry_run(temp_db, git_project, capsys):
+    """--dry-run should report items without deleting them."""
+    (git_project / ".hive.toml").write_text("x")
+    hive_dir = git_project / ".hive"
+    hive_dir.mkdir()
+
+    cli = HiveCLI(temp_db, str(git_project))
+    cli.cleanup(dry_run=True, json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["dry_run"] is True
+    assert len(data["would_remove"]) >= 2
+    assert data["removed"] == []
+    # Files still exist
+    assert (git_project / ".hive.toml").exists()
+    assert hive_dir.exists()
+
+
+def test_cleanup_nothing_to_do(temp_db, git_project, capsys):
+    """cleanup on a clean project should report nothing removed."""
+    cli = HiveCLI(temp_db, str(git_project))
+    cli.cleanup(json_mode=True)
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["removed"] == []

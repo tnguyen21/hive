@@ -14,6 +14,7 @@ from ..db import Database, normalize_tags
 from ..status import IssueStatus, UNBLOCKING_ISSUE_STATUSES
 from .formatters import (
     _fmt_add_note,
+    _fmt_cleanup,
     _fmt_create,
     _fmt_debug,
     _fmt_list_agents,
@@ -712,3 +713,67 @@ class HiveCLI(QueenMixin):
         if stopped:
             return {"status": "stopped", "pid": pid}
         raise RuntimeError(f"Failed to stop daemon (PID {pid})")
+
+    # ── Cleanup ───────────────────────────────────────────────────────
+
+    @cli_command(formatter=_fmt_cleanup)
+    def cleanup(self, dry_run: bool = False):
+        """Remove local .hive files, worktrees, and agent branches from a project."""
+        import shutil
+        import subprocess
+
+        removed: list[str] = []
+        skipped: list[str] = []
+
+        hive_dir = self.project_path / ".hive"
+        hive_toml = self.project_path / ".hive.toml"
+        worktrees_dir = self.project_path / ".worktrees"
+
+        # 1. Remove .worktrees/ directory (and prune git worktree metadata)
+        if worktrees_dir.exists():
+            if dry_run:
+                skipped.append(str(worktrees_dir))
+            else:
+                shutil.rmtree(worktrees_dir, ignore_errors=True)
+                # Prune git's internal worktree tracking
+                subprocess.run(["git", "worktree", "prune"], cwd=str(self.project_path), capture_output=True)
+                removed.append(str(worktrees_dir))
+
+        # 2. Remove agent/* branches
+        result = subprocess.run(
+            ["git", "branch", "--list", "agent/*"],
+            cwd=str(self.project_path),
+            capture_output=True,
+            text=True,
+        )
+        agent_branches = [b.strip() for b in result.stdout.splitlines() if b.strip()]
+        for branch in agent_branches:
+            if dry_run:
+                skipped.append(f"branch:{branch}")
+            else:
+                subprocess.run(["git", "branch", "-D", branch], cwd=str(self.project_path), capture_output=True)
+                removed.append(f"branch:{branch}")
+
+        # 3. Remove .hive/ directory
+        if hive_dir.exists():
+            if dry_run:
+                skipped.append(str(hive_dir))
+            else:
+                shutil.rmtree(hive_dir, ignore_errors=True)
+                removed.append(str(hive_dir))
+
+        # 4. Remove .hive.toml
+        if hive_toml.exists():
+            if dry_run:
+                skipped.append(str(hive_toml))
+            else:
+                hive_toml.unlink()
+                removed.append(str(hive_toml))
+
+        return {
+            "project": self.project_name,
+            "dry_run": dry_run,
+            "removed": removed,
+            "would_remove": skipped,
+            "message": f"Cleaned up {len(removed)} items" if not dry_run else f"Would remove {len(skipped)} items (dry run)",
+        }

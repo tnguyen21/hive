@@ -588,6 +588,20 @@ def render_stop(result: dict):
     return None
 
 
+def render_cleanup(result: dict):
+    dry_run = result.get("dry_run", False)
+    items = result.get("would_remove" if dry_run else "removed", [])
+    if not items:
+        return Text("Nothing to clean up.", style="dim")
+
+    label = "Would remove" if dry_run else "Removed"
+    parts = [Text(f"{label} ({len(items)}):", style="bold")]
+    for item in items:
+        prefix = "  [-] " if dry_run else "  [x] "
+        parts.append(Text(f"{prefix}{item}", style="yellow" if dry_run else "green"))
+    return Group(*parts)
+
+
 def render_error(message: str):
     return Text(f"Error: {message}", style="bold red")
 
