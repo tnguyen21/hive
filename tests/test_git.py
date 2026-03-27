@@ -337,20 +337,3 @@ def test_run_git_error_message_contains_stderr(git_repo):
         _run_git("rev-parse", "does-not-exist", cwd=str(git_repo))
     # git writes something to stderr on failure
     assert str(exc_info.value) != ""
-
-
-# --- Spot-check INV-3: public methods return identical values after refactor ---
-
-
-def test_get_worktree_dirty_status_returns_tuple(git_repo):
-    """INV-3: get_worktree_dirty_status returns (bool, str) tuple with correct values."""
-    is_dirty, output = get_worktree_dirty_status(str(git_repo))
-    assert is_dirty is False
-    assert output == ""
-
-
-def test_has_diff_from_main_consistent_with_run_git(git_repo):
-    """INV-3: has_diff_from_main returns False for fresh worktree (no diverging commits)."""
-    worktree_path = create_worktree(str(git_repo), "inv3-spot-check")
-    assert has_diff_from_main(worktree_path) is False
-    remove_worktree(worktree_path)

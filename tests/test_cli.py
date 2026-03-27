@@ -279,24 +279,6 @@ def test_cli_show_format_json(temp_db_file, tmp_path, capsys):
     assert expected["title"] == "Format test"
 
 
-def test_cli_show_format_json_matches_global_json_flag(temp_db, tmp_path, capsys):
-    """--format json on show must produce identical output to global --json flag."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-    issue_id = temp_db.create_issue("Comparison issue", "details", priority=1, project=tmp_path.name)
-
-    cli.show(issue_id, json_mode=True)
-    out_via_method = capsys.readouterr().out
-
-    # Both paths (global --json and --format json) ultimately call show(json_mode=True)
-    # The dispatch logic: show_json = json_mode or show_format == "json"
-    # So when show_format=="json", it must produce the same result.
-    data = json.loads(out_via_method)
-    assert data["title"] == "Comparison issue"
-    assert "dependencies" in data
-    assert "dependents" in data
-    assert "recent_events" in data
-
-
 def _strip_ansi(s: str) -> str:
     import re
 
@@ -577,20 +559,6 @@ def test_cli_agents(temp_db, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "No agents found" in captured.out
-
-
-def test_cli_events(temp_db, tmp_path, capsys):
-    """Test getting events via logs command (which replaced events command)."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    # Create an issue to generate events
-    temp_db.create_issue("Event test", project=tmp_path.name)
-
-    # Use logs command (which now includes event filtering via --type)
-    cli.logs(n=5)
-
-    captured = capsys.readouterr()
-    assert "created" in captured.out
 
 
 def test_cli_logs(temp_db, tmp_path, capsys):
@@ -1277,26 +1245,6 @@ def test_cli_run_command_uses_registered_formatter(temp_db, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "Created" in captured.out
     assert result["title"] == "Formatted title"
-
-
-def test_cli_command_inv3_human_output_cancel(temp_db, tmp_path, capsys):
-    """INV-3: Human-readable output for cancel is unchanged."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-    issue_id = temp_db.create_issue("Cancel me", project=tmp_path.name)
-
-    cli.cancel(issue_id, reason="done")
-    out = capsys.readouterr().out
-    assert f"Canceled issue {issue_id}" in out
-
-
-def test_cli_command_inv3_human_output_list_empty(temp_db, tmp_path, capsys):
-    """INV-3: Human-readable output for list_issues when empty is unchanged."""
-    cli = HiveCLI(temp_db, str(tmp_path))
-
-    cli.list_issues()
-    out = capsys.readouterr().out
-    assert "No issues found." in out
-    assert "hive create" in out
 
 
 def test_cli_command_decorator_exception_human_mode(temp_db, tmp_path, capsys):

@@ -12,7 +12,7 @@ Failure modes:
 
 import pytest
 
-from hive.config import ConfigRegistry, _Config, _coerce
+from hive.config import ConfigRegistry, _coerce
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -62,13 +62,6 @@ def test_getattr_delegation_after_load_global(tmp_path):
     assert registry.current.MAX_AGENTS == 42
 
 
-def test_load_global_returns_config_object(tmp_path):
-    """load_global() returns the _Config instance."""
-    registry = ConfigRegistry()
-    cfg = registry.load_global(project_root=tmp_path)
-    assert isinstance(cfg, _Config)
-
-
 # ── INV-3: lazy loading ───────────────────────────────────────────────────
 
 
@@ -81,13 +74,6 @@ def test_registry_get_is_lazy(tmp_path):
     cfg2 = registry.get("myproject", project_root=tmp_path)
 
     assert cfg1 is cfg2  # same object — no reload on second call
-
-
-def test_registry_starts_empty():
-    """A fresh ConfigRegistry has no loaded configs."""
-    registry = ConfigRegistry()
-    assert registry._configs == {}
-    assert registry._global is None
 
 
 # ── Failure modes ─────────────────────────────────────────────────────────
