@@ -1,8 +1,0 @@
-[hive]
-backend = "claude"
-# backend = "codex"
-# codex_sandbox = "danger-full-access"
-# default_model = "gpt-5.2-codex"
-# worker_model = "gpt-5.2-codex"
-# refinery_model = "gpt-5.2-codex"
-max_tokens_per_issue = 500000
