@@ -71,7 +71,7 @@ class QueenMixin:
 
         self._ensure_daemon_running()
 
-        effective = backend or Config.BACKEND
+        effective = backend or Config.QUEEN_BACKEND or Config.BACKEND
         if effective == "codex":
             self._queen_codex(headless=headless, prompt=prompt, mode=mode)
         else:

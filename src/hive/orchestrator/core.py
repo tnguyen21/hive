@@ -86,6 +86,16 @@ class OrchestratorCore:
             return self.backend
         return self.backend_pool.for_project(project_name, project_path)
 
+    def _backend_for_role(self, role: str, project_name: str) -> HiveBackend:
+        """Resolve the backend for a specific role in a project."""
+        if not project_name:
+            return self.backend
+        try:
+            project_path = self._resolve_project_path(project_name)
+        except ValueError:
+            return self.backend
+        return self.backend_pool.for_role(role, project_name, project_path)
+
     def _backend_for_session(self, session_id: str) -> HiveBackend:
         """Resolve the backend that owns a session."""
         return self.backend_pool.for_session(session_id)

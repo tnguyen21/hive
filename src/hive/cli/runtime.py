@@ -25,7 +25,11 @@ def do_setup(project_path: Path, project_name: str, *, json_mode: bool = False):
             print(f"{target} already exists.")
         return
     target.write_text(
-        f'[project]\nname = "{project_name}"\n\n[hive]\nbackend = "claude"  # options: claude, codex, tau\nmerge_queue_enabled = false\n'
+        f'[project]\nname = "{project_name}"\n\n[hive]\nbackend = "claude"  # options: claude, codex, tau\n'
+        f'# queen_backend = "claude"    # override backend for queen\n'
+        f'# worker_backend = "codex"    # override backend for workers\n'
+        f'# refinery_backend = "claude" # override backend for refinery\n'
+        f"merge_queue_enabled = false\n"
     )
     if json_mode:
         print(json.dumps({"config_created": str(target)}))

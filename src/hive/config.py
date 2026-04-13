@@ -46,6 +46,9 @@ _FIELDS: dict[str, FieldSpec] = {
     "anomaly_failure_threshold": FieldSpec("HIVE_ANOMALY_FAILURE_THRESHOLD", int, 3),
     # Backend selection
     "backend": FieldSpec("HIVE_BACKEND", str, "claude"),  # "claude" | "codex"
+    "queen_backend": FieldSpec("HIVE_QUEEN_BACKEND", str, None),
+    "worker_backend": FieldSpec("HIVE_WORKER_BACKEND", str, None),
+    "refinery_backend": FieldSpec("HIVE_REFINERY_BACKEND", str, None),
     # Claude WS backend settings
     "claude_ws_host": FieldSpec("HIVE_CLAUDE_WS_HOST", str, "127.0.0.1"),
     "claude_ws_port": FieldSpec("HIVE_CLAUDE_WS_PORT", int, 8765),

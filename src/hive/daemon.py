@@ -289,11 +289,19 @@ def run_daemon_foreground(db):
         # Determine which backend types are needed by scanning registered
         # projects. Always include the global default so new projects work.
         needed_backends: set[str] = {Config.BACKEND}
+        for role_attr in ("QUEEN_BACKEND", "WORKER_BACKEND", "REFINERY_BACKEND"):
+            val = getattr(Config, role_attr, None)
+            if val:
+                needed_backends.add(val)
         for project in db.list_projects():
             from .config import ConfigRegistry
 
             cfg = ConfigRegistry._load_config(project_root=Path(project["path"]))
             needed_backends.add(cfg.BACKEND)
+            for role_attr in ("QUEEN_BACKEND", "WORKER_BACKEND", "REFINERY_BACKEND"):
+                val = getattr(cfg, role_attr, None)
+                if val:
+                    needed_backends.add(val)
 
         pool = BackendPool(default=Config.BACKEND)
         if "claude" in needed_backends:

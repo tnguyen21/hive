@@ -56,6 +56,22 @@ class BackendPool:
             return self.default_backend
         return self.get(backend_name)
 
+    def for_role(self, role: str, project_name: str, project_root: Path | None = None) -> HiveBackend:
+        """Resolve backend for a role (queen/worker/refinery) in a project.
+
+        Falls back: role-specific config -> project backend -> pool default.
+        """
+        from ..config import Config
+
+        cfg = Config.get(project_name, project_root)
+        role_backend = getattr(cfg, f"{role.upper()}_BACKEND", None)
+        if role_backend and role_backend in self._backends:
+            return self.get(role_backend)
+        backend_name = cfg.BACKEND
+        if backend_name in self._backends:
+            return self.get(backend_name)
+        return self.default_backend
+
     def for_session(self, session_id: str) -> HiveBackend:
         """Resolve the backend that owns a session. Falls back to default if session is not tracked."""
         name = self._session_backend.get(session_id)

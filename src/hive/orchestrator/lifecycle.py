@@ -180,7 +180,7 @@ class LifecycleMixin:
         assert resources.worktree is not None
 
         try:
-            backend = self._backend_for_project(ctx.issue_project)
+            backend = self._backend_for_role("worker", ctx.issue_project)
             session = await backend.create_session(
                 directory=resources.worktree,
                 title=f"{ctx.agent_name}: {ctx.issue['title']}",

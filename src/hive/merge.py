@@ -605,7 +605,7 @@ class MergeProcessorPool:
     def _resolve_backend(self, project_name: str, project_path: str) -> HiveBackend:
         """Resolve the backend for a project."""
         if self._backend_pool is not None:
-            return self._backend_pool.for_project(project_name, Path(project_path))
+            return self._backend_pool.for_role("refinery", project_name, Path(project_path))
         if self._fallback_backend is not None:
             return self._fallback_backend
         raise ValueError("MergeProcessorPool has no backend configured")

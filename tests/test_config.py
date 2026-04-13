@@ -157,3 +157,36 @@ class TestCoerce:
 
     def test_int_passthrough(self):
         assert _coerce(7, int) == 7
+
+
+# ── Per-role backend config fields ──────────────────────────────────────
+
+
+def test_role_backend_defaults_to_none():
+    """Role-specific backend fields default to None (fall back to 'backend')."""
+    registry = ConfigRegistry()
+    registry.load_global()
+    for attr in ("QUEEN_BACKEND", "WORKER_BACKEND", "REFINERY_BACKEND"):
+        assert getattr(registry, attr) is None
+
+
+def test_role_backend_from_toml(tmp_path):
+    """Role-specific backends can be set via .hive.toml."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".hive.toml").write_text('[hive]\nworker_backend = "codex"\n')
+
+    registry = ConfigRegistry()
+    cfg = registry.get("proj", project_root=proj)
+    assert cfg.WORKER_BACKEND == "codex"
+    assert cfg.QUEEN_BACKEND is None
+    assert cfg.REFINERY_BACKEND is None
+
+
+def test_role_backend_from_env(tmp_path, monkeypatch):
+    """Role-specific backends can be set via environment variables."""
+    monkeypatch.setenv("HIVE_WORKER_BACKEND", "tau")
+
+    registry = ConfigRegistry()
+    registry.load_global(project_root=tmp_path)
+    assert registry.WORKER_BACKEND == "tau"
