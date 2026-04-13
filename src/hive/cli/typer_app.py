@@ -62,12 +62,21 @@ def _run(ctx: typer.Context, command_name: str, *args, json_mode: bool | None = 
     _run_cli_command(ctx.obj, command_name, *args, json_mode=json_mode, **kwargs)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from hive import get_version
+
+        print(get_version())
+        raise typer.Exit()
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
     db: Annotated[str | None, typer.Option("--db", help="Database path (default: ~/.hive/hive.db)")] = None,
     project: Annotated[str | None, typer.Option("--project", help="Project directory (auto-detected from git)")] = None,
     json_mode: Annotated[bool, typer.Option("--json", help="Output JSON (for programmatic use)")] = False,
+    version: Annotated[bool, typer.Option("--version", "-V", help="Show version and exit", callback=_version_callback, is_eager=True)] = False,
 ) -> None:
     """Hive multi-agent orchestrator."""
     ctx.obj = AppState(console=Console(), json_mode=json_mode, project=project, db_override=db)
