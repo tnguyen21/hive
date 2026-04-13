@@ -336,14 +336,29 @@ async def test_refinery_merge_lock_failure_escalates_issue(merge_entry_with_work
     assert entry is not None
     assert entry["status"] == "failed"
 
+    # Escalation preserves merge artifacts for manual recovery
+    assert Path(info["worktree_path"]).exists()
+    branch = subprocess.run(
+        ["git", "branch", "--list", info["branch_name"]],
+        cwd=info["git_repo"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert info["branch_name"] in branch.stdout
+
     events = temp_db.get_events(info["issue_id"])
     merge_failed = next(e for e in events if e["event_type"] == "merge_failed")
+    preserved = next(e for e in events if e["event_type"] == "merge_artifacts_preserved")
 
     import json
 
     detail = json.loads(merge_failed["detail"])
     assert detail["after_refinery"] is True
     assert detail["issue_escalated"] is True
+    preserved_detail = json.loads(preserved["detail"])
+    assert preserved_detail["worktree"] == info["worktree_path"]
+    assert preserved_detail["branch"] == info["branch_name"]
 
 
 @pytest.mark.asyncio
@@ -1455,6 +1470,12 @@ async def test_send_to_refinery_gives_up_after_two_deaths(tmp_path, temp_db, moc
     row = cursor.fetchone()
     assert row["status"] == "failed"
 
+    assert Path(worktree_path).exists()
+    preserved = next(e for e in events if e["event_type"] == "merge_artifacts_preserved")
+    detail = json.loads(preserved["detail"])
+    assert detail["worktree"] == worktree_path
+    assert detail["branch"] == "test-branch"
+
 
 @pytest.mark.asyncio
 async def test_send_to_refinery_unexpected_exception_escalates_issue(tmp_path, temp_db, mock_backend):
@@ -1495,14 +1516,19 @@ async def test_send_to_refinery_unexpected_exception_escalates_issue(tmp_path, t
     row = temp_db.conn.execute("SELECT status FROM merge_queue WHERE id = ?", (queue_id,)).fetchone()
     assert row is not None
     assert row["status"] == "failed"
+    assert Path(worktree_path).exists()
 
     events = temp_db.get_events(issue_id)
     refinery_error = next(e for e in events if e["event_type"] == "refinery_error")
+    preserved = next(e for e in events if e["event_type"] == "merge_artifacts_preserved")
 
     import json
 
     detail = json.loads(refinery_error["detail"])
     assert detail["issue_escalated"] is True
+    preserved_detail = json.loads(preserved["detail"])
+    assert preserved_detail["worktree"] == worktree_path
+    assert preserved_detail["branch"] == "test-branch"
 
 
 # ---------------------------------------------------------------------------

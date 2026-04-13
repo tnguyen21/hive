@@ -268,18 +268,19 @@ class MergeProcessor:
                 self.db.try_transition_issue_status(issue_id, from_status="done", to_status="escalated")
                 self.db.log_event(issue_id, agent_id, "refinery_error", {"error": str(e2), "issue_escalated": True})
                 await self._force_reset_refinery_session(f"Exception in retry: {e2}")
-                await self._cleanup_merge_resources(entry)
+                await self._cleanup_merge_resources(entry, preserve_artifacts=True)
                 return
         except Exception as e:
             self.db.try_transition_merge_queue_status(queue_id, from_status="running", to_status="failed")
             self.db.try_transition_issue_status(issue_id, from_status="done", to_status="escalated")
             self.db.log_event(issue_id, agent_id, "refinery_error", {"error": str(e), "issue_escalated": True})
             await self._force_reset_refinery_session(f"Exception in _send_to_refinery: {e}")
-            await self._cleanup_merge_resources(entry)
+            await self._cleanup_merge_resources(entry, preserve_artifacts=True)
             return
 
         # Process result
         needs_cleanup = False
+        preserve_artifacts = False
         match res.get("status"):
             case "merged":
                 branch_name = entry["branch_name"]
@@ -300,6 +301,7 @@ class MergeProcessor:
                         },
                     )
                     needs_cleanup = True
+                    preserve_artifacts = True
 
                 if not needs_cleanup:
                     await self._finalize_issue(entry)
@@ -331,6 +333,7 @@ class MergeProcessor:
                 self.db.try_transition_issue_status(issue_id, from_status="done", to_status="escalated")
                 self.db.log_event(issue_id, agent_id, "refinery_review_escalated", {"summary": res.get("summary", "")})
                 needs_cleanup = True
+                preserve_artifacts = True
 
         # Harvest notes from the worktree (refinery may have written .hive-notes.jsonl)
         try:
@@ -353,7 +356,7 @@ class MergeProcessor:
 
         # Clean up orphaned resources on non-success paths
         if needs_cleanup:
-            await self._cleanup_merge_resources(entry)
+            await self._cleanup_merge_resources(entry, preserve_artifacts=preserve_artifacts)
 
         # Check if refinery session should be cycled due to token usage
         await self._maybe_cycle_refinery_session()
@@ -516,8 +519,8 @@ class MergeProcessor:
         # Tear down worktree, session, and agent
         await self._teardown_after_finalize(entry)
 
-    async def _cleanup_merge_resources(self, entry: dict[str, Any]):
-        """Best-effort cleanup of worktree, branch, session, and agent row after finalization or failure."""
+    async def _cleanup_merge_resources(self, entry: dict[str, Any], *, preserve_artifacts: bool = False):
+        """Best-effort cleanup of merge resources after finalization or failure."""
 
         # Clean up the backend session if one exists for the agent
         agent_id = entry.get("agent_id")
@@ -530,15 +533,26 @@ class MergeProcessor:
                 except Exception:
                     logger.debug("Failed to cleanup session %s during merge cleanup", session_id, exc_info=True)
 
-        # Remove worktree (in executor to avoid blocking event loop)
-        if entry.get("worktree"):
-            with suppress(GitWorktreeError, FileNotFoundError, OSError):
-                await remove_worktree_async(entry["worktree"])
+        if preserve_artifacts:
+            self.db.log_event(
+                entry["issue_id"],
+                agent_id,
+                "merge_artifacts_preserved",
+                {
+                    "worktree": entry.get("worktree"),
+                    "branch": entry.get("branch_name"),
+                },
+            )
+        else:
+            # Remove worktree (in executor to avoid blocking event loop)
+            if entry.get("worktree"):
+                with suppress(GitWorktreeError, FileNotFoundError, OSError):
+                    await remove_worktree_async(entry["worktree"])
 
-        # Delete branch (in executor to avoid blocking event loop)
-        if entry.get("branch_name"):
-            with suppress(GitWorktreeError, FileNotFoundError, OSError):
-                await delete_branch_async(self.project_path, entry["branch_name"], force=True)
+            # Delete branch (in executor to avoid blocking event loop)
+            if entry.get("branch_name"):
+                with suppress(GitWorktreeError, FileNotFoundError, OSError):
+                    await delete_branch_async(self.project_path, entry["branch_name"], force=True)
 
         # Delete ephemeral agent (events/notes/merge_queue retain agent_id as correlation key)
         if agent_id:
